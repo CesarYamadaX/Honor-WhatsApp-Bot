@@ -199,6 +199,18 @@ async function atender(mensaje) {
     // fromMe evita responder a lo que el propio numero envia.
     if (!jid || mensaje.key?.fromMe) return;
 
+    // WhatsApp esta migrando a JIDs "@lid" (un identificador interno, sin
+    // relacion numerica con el telefono) en vez de "@s.whatsapp.net" para
+    // varios chats 1:1. normalizar_chat_id() del lado Python solo reconoce
+    // "@s.whatsapp.net", asi que un remoteJid en "@lid" nunca haria match
+    // contra WHATSAPP_ALLOWED_NUMBERS sin importar que numero se configure
+    // ahi. Baileys adjunta el numero real en key.senderPn cuando esto pasa
+    // (viene del atributo sender_pn del stanza); se usa ESE valor solo para
+    // la autorizacion/HTTP hacia Python, nunca para enviar: las respuestas
+    // deben ir al jid original (jid), que es el que WhatsApp realmente usa
+    // para enrutar el chat.
+    const idAutorizacion = mensaje.key?.senderPn ?? jid;
+
     // Grupos y difusiones se descartan ANTES de tocar nada: ni dedupe, ni
     // presencia, ni HTTP. Si el chip llega a agregarse a un grupo, el bot no
     // debe ni enterarse de que hay conversacion ahi -- la allowlist de
@@ -236,7 +248,7 @@ async function atender(mensaje) {
     // solo el tramo de envio de los fragmentos y archivos de la respuesta.
     // Se prefiere ese indicador reducido a arriesgar mostrarlo a un chat no
     // autorizado.
-    const resultado = await preguntar(AGENT_API_URL, jid, texto.trim());
+    const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
     // null = chat no autorizado: silencio total, ni acuse de recibo, ni
     // jamas se llego a mostrar "escribiendo".
     if (resultado === null) return;
