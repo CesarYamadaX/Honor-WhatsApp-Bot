@@ -9,15 +9,6 @@ class TestIndice:
             for objeto in base["objetos"]:
                 assert objeto["nombre"] in texto
 
-    def test_no_lleva_llaves(self):
-        # `create_sql_agent` hace prefix.format(dialect=..., top_k=...) sobre el
-        # system prompt donde se inyecta este indice. Una llave suelta en el
-        # catalogo tumbaria la construccion del agente, no una consulta: el
-        # bot no arrancaria. agent._create_agent las escapa, y esta prueba
-        # avisa si el catalogo regenerado empieza a traerlas.
-        assert "{" not in catalogo.indice()
-        assert "}" not in catalogo.indice()
-
 
 class TestDescribirObjeto:
     def _describir(self, nombre: str) -> str:

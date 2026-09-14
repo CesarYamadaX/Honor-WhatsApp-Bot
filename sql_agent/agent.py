@@ -12,6 +12,12 @@ from langchain.tools import tool
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    MessagesPlaceholder,
+)
 from langchain_openai import ChatOpenAI
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -448,12 +454,26 @@ class _ToolkitSoloLectura(SQLDatabaseToolkit):
 
 
 class SQLAgent:
-    """Un agente Text-to-SQL. Una instancia por conversacion de WhatsApp."""
+    """Un agente Text-to-SQL. Una instancia por conversacion de WhatsApp.
+
+    El historial vive en la instancia y no en un almacen aparte porque
+    `RegistroSesiones` ya crea un SQLAgent por chat_id y serializa sus
+    consultas con un lock por conversacion: no hay dos hilos tocando el mismo
+    historial, y cuando la sesion expira por TTL el historial se va con ella.
+    """
+
+    # Cuantos mensajes del historial se le repiten al modelo. El prompt ya
+    # carga el catalogo del servidor, y cada pregunta arrastra ademas sus
+    # llamadas a herramientas, asi que el historial no puede crecer sin tope.
+    # Diez mensajes son cinco preguntas con su respuesta: suficiente para
+    # sostener un "y de Elektra?" sin encarecer cada consulta.
+    MAX_MENSAJES_HISTORIAL = 10
 
     def __init__(self, engine: Engine | None = None):
         self.engine = engine if engine is not None else self._crear_engine()
         self.db = SQLDatabase(self.engine)
         self.llm = self._init_llm()
+        self.historial: list[BaseMessage] = []
         self.agent_executor = self._create_agent()
 
     @staticmethod
@@ -482,13 +502,7 @@ class SQLAgent:
         )
 
     def _create_agent(self) -> Any:
-        # `create_sql_agent` hace `prefix.format(dialect=..., top_k=...)` sobre
-        # el prefijo (langchain_community/agent_toolkits/sql/base.py), asi que
-        # una llave suelta en el texto del catalogo reventaria el arranque del
-        # agente. El catalogo es un archivo de datos regenerable, no un literal
-        # de este modulo, asi que se escapan sus llaves en vez de confiar en
-        # que nunca aparezca una.
-        catalogo = indice().replace("{", "{{").replace("}", "}}")
+        catalogo = indice()
 
         system_prefix = f"""
         Eres un experto analista de datos que responde por WhatsApp. Tu trabajo es
@@ -530,7 +544,30 @@ class SQLAgent:
         9. Varias tablas superan los 30 millones de filas. Agrega siempre con
            GROUP BY o acota con WHERE y TOP; nunca pidas todas las filas de una
            tabla grande.
+        10. Es una conversacion: el usuario escribe desde el telefono y
+           acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
+           "ahora por region", "el mismo dato pero de 2023"), resuelvela contra
+           lo que ya se hablo en vez de pedirle que la repita completa.
         """
+
+        # Prompt propio en vez del que arma create_sql_agent: el suyo es
+        # System / Human / AI / scratchpad, sin hueco para el historial, y
+        # ademas cierra con un mensaje que instruye "look at the tables in the
+        # database... query the schema of the most relevant tables", que es
+        # justo el flujo que aqui no existe (esas dos herramientas se
+        # excluyeron; el esquema sale del catalogo).
+        #
+        # El historial va entre el prompt de sistema y la pregunta actual, que
+        # es donde el modelo espera encontrarlo: asi la pregunta nueva queda
+        # como el ultimo turno y no sepultada entre mensajes viejos.
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=system_prefix),
+                MessagesPlaceholder(variable_name="chat_history"),
+                HumanMessagePromptTemplate.from_template("{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ]
+        )
 
         # No se usa `db=self.db`: eso arma el toolkit estandar completo, que
         # incluye `sql_db_query` (QuerySQLDataBaseTool), una herramienta que
@@ -550,13 +587,28 @@ class SQLAgent:
             # acepta este string directamente (Literal["openai-tools"]).
             agent_type="openai-tools",
             verbose=False,
-            prefix=system_prefix,
+            prompt=prompt,
             extra_tools=[consultar_sql, describir_objeto],
         )
 
     def responder(self, pregunta: str) -> tuple[str, list[str]]:
         """Responde una pregunta y devuelve (texto, rutas de archivos generados)."""
         with contexto_peticion(self.engine) as ctx:
-            respuesta = self.agent_executor.invoke({"input": pregunta})
+            respuesta = self.agent_executor.invoke(
+                {"input": pregunta, "chat_history": list(self.historial)}
+            )
             texto = respuesta.get("output", "No se obtuvo respuesta.")
+            self._recordar(pregunta, texto)
             return texto, list(ctx.archivos)
+
+    def _recordar(self, pregunta: str, respuesta: str) -> None:
+        """Agrega el turno al historial y descarta los mas viejos.
+
+        Se guarda la respuesta final, no las llamadas a herramientas ni las
+        filas que devolvieron: al modelo le sirve saber que ya se hablo de
+        Coppel, no volver a cargar el SQL ni la tabla de resultados, que es de
+        lejos lo mas caro del turno.
+        """
+        self.historial.append(HumanMessage(content=pregunta))
+        self.historial.append(AIMessage(content=respuesta))
+        del self.historial[: -self.MAX_MENSAJES_HISTORIAL]

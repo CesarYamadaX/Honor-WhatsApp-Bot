@@ -542,3 +542,95 @@ class TestToolkitDelAgente:
         agente = SQLAgent(engine=engine)
         nombres = {herramienta.name for herramienta in agente.agent_executor.tools}
         assert nombres == {"consultar_sql", "describir_objeto"}
+
+
+class _EjecutorEspia:
+    """Reemplaza al agent_executor: registra lo invocado sin llamar al LLM."""
+
+    def __init__(self, respuesta: str = "listo"):
+        self.respuesta = respuesta
+        self.invocaciones: list[dict] = []
+
+    def invoke(self, payload: dict) -> dict:
+        # Copia: `responder` pasa una lista nueva, pero el historial que
+        # contiene se sigue mutando turno a turno.
+        self.invocaciones.append(
+            {"input": payload["input"], "chat_history": list(payload["chat_history"])}
+        )
+        return {"output": self.respuesta}
+
+
+def _agente_espiado(engine, monkeypatch, respuesta: str = "listo"):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+    agente = SQLAgent(engine=engine)
+    agente.agent_executor = _EjecutorEspia(respuesta)
+    return agente
+
+
+class TestMemoriaConversacional:
+    def test_el_prompt_tiene_hueco_para_el_historial(self, engine, monkeypatch):
+        from langchain_core.prompts import ChatPromptTemplate
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+        agente = SQLAgent(engine=engine)
+        prompts = [
+            paso
+            for paso in agente.agent_executor.agent.runnable.steps
+            if isinstance(paso, ChatPromptTemplate)
+        ]
+        assert len(prompts) == 1
+        assert "chat_history" in prompts[0].input_variables
+
+    def test_la_primera_pregunta_va_sin_historial(self, engine, monkeypatch):
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.responder("cuantos carriers maneja Coppel?")
+        assert agente.agent_executor.invocaciones[0]["chat_history"] == []
+
+    def test_la_segunda_pregunta_lleva_la_primera(self, engine, monkeypatch):
+        # El caso que justifica la memoria: "y de Elektra?" no se puede
+        # resolver sin saber que la pregunta anterior era sobre carriers.
+        agente = _agente_espiado(engine, monkeypatch, respuesta="Coppel maneja 4.")
+        agente.responder("cuantos carriers maneja Coppel?")
+        agente.responder("y de Elektra?")
+
+        historial = agente.agent_executor.invocaciones[1]["chat_history"]
+        assert [m.content for m in historial] == [
+            "cuantos carriers maneja Coppel?",
+            "Coppel maneja 4.",
+        ]
+
+    def test_el_historial_se_recorta_conservando_lo_reciente(self, engine, monkeypatch):
+        # Sin tope, cada turno agranda un prompt que ya carga el catalogo
+        # entero. Se descartan los turnos viejos, nunca los ultimos.
+        agente = _agente_espiado(engine, monkeypatch)
+        for i in range(12):
+            agente.responder(f"pregunta {i}")
+
+        assert len(agente.historial) == SQLAgent.MAX_MENSAJES_HISTORIAL
+        assert agente.historial[0].content == "pregunta 7"
+        assert agente.historial[-1].content == "listo"
+
+    def test_cada_conversacion_tiene_su_propio_historial(self, engine, monkeypatch):
+        # RegistroSesiones crea un SQLAgent por chat_id. Si el historial fuera
+        # de clase y no de instancia, un usuario veria las preguntas de otro.
+        uno = _agente_espiado(engine, monkeypatch)
+        otro = _agente_espiado(engine, monkeypatch)
+        uno.responder("ventas de Coppel")
+
+        assert len(uno.historial) == 2
+        assert otro.historial == []
+
+    def test_una_pregunta_fallida_no_entra_al_historial(self, engine, monkeypatch):
+        # api._ejecutar convierte la excepcion en un mensaje de error generico
+        # para el usuario. Guardar ese turno le ensenaria al modelo un
+        # intercambio que nunca ocurrio.
+        agente = _agente_espiado(engine, monkeypatch)
+
+        def explotar(payload):
+            raise RuntimeError("el proveedor del modelo esta saturado")
+
+        agente.agent_executor.invoke = explotar
+        with pytest.raises(RuntimeError):
+            agente.responder("ventas de Coppel")
+
+        assert agente.historial == []
