@@ -529,17 +529,16 @@ class TestConsultarSql:
 
 
 class TestToolkitDelAgente:
-    def test_sql_db_query_no_esta_registrada(self, engine, monkeypatch):
+    def test_solo_quedan_las_herramientas_propias(self, engine, monkeypatch):
         # Importante 4: create_sql_agent(db=...) arma ademas el toolkit
         # estandar, que trae sql_db_query -- una herramienta que ejecuta SQL
         # arbitrario sin pasar por es_select. Se construye el agente (sin
-        # invocarlo, no se toca el LLM) y se verifica que esa herramienta no
-        # quede disponible, mientras que las de exploracion de esquema si.
+        # invocarlo, no se toca el LLM) y se verifica que no quede ninguna
+        # herramienta del toolkit estandar: ni sql_db_query, ni las de
+        # exploracion de esquema, que reflejan `master` (la base del
+        # connection string) y por tanto no ven ningun dato de negocio. El
+        # esquema lo aporta `describir_objeto`, del modulo catalogo.
         monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
         agente = SQLAgent(engine=engine)
         nombres = {herramienta.name for herramienta in agente.agent_executor.tools}
-        assert "sql_db_query" not in nombres
-        assert "sql_db_query_checker" not in nombres
-        assert "consultar_sql" in nombres
-        assert "sql_db_list_tables" in nombres
-        assert "sql_db_schema" in nombres
+        assert nombres == {"consultar_sql", "describir_objeto"}

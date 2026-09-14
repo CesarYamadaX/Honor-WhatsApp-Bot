@@ -17,6 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
+from catalogo import describir_objeto, indice
 from excel_exporter import ExcelExporter
 from formatting import formatear_resultado
 
@@ -416,18 +417,31 @@ def consultar_sql(query: str) -> str:
 
 
 class _ToolkitSoloLectura(SQLDatabaseToolkit):
-    """El toolkit estandar de LangChain menos las herramientas que ejecutan SQL.
+    """El toolkit estandar de LangChain, sin ninguna de sus cuatro herramientas.
 
     `SQLDatabaseToolkit.get_tools()` trae `sql_db_query`, que corre cualquier
     SQL contra la base sin pasar por `es_select` (Importante 4 de la
     revision). Se excluye tambien `sql_db_query_checker`, que solo tiene
-    sentido junto a esa herramienta. Quedan `sql_db_list_tables` y
-    `sql_db_schema`: exploran el esquema, no ejecutan SQL arbitrario del
-    modelo (las filas de muestra que traen son consultas fijas de LangChain,
-    no texto libre).
+    sentido junto a esa herramienta.
+
+    `sql_db_list_tables` y `sql_db_schema` se excluyen por un motivo distinto:
+    reflejan la base del connection string, y DB_URI apunta a `master`, donde
+    no hay ni un solo dato de negocio. Devolverle al modelo el catalogo de
+    master no es util, es desinformacion -- invita a concluir que no hay nada
+    que consultar. El esquema real, que vive repartido en otras cinco bases del
+    servidor, se lo damos por el modulo `catalogo`: el indice va en el prompt y
+    las columnas exactas salen de `describir_objeto`.
+
+    El toolkit se sigue pasando a `create_sql_agent` porque de el sale
+    `toolkit.dialect` para el prompt, aunque ya no aporte herramientas.
     """
 
-    _EXCLUIDAS = {"sql_db_query", "sql_db_query_checker"}
+    _EXCLUIDAS = {
+        "sql_db_query",
+        "sql_db_query_checker",
+        "sql_db_list_tables",
+        "sql_db_schema",
+    }
 
     def get_tools(self) -> list:
         return [t for t in super().get_tools() if t.name not in self._EXCLUIDAS]
@@ -468,9 +482,24 @@ class SQLAgent:
         )
 
     def _create_agent(self) -> Any:
-        system_prefix = """
+        # `create_sql_agent` hace `prefix.format(dialect=..., top_k=...)` sobre
+        # el prefijo (langchain_community/agent_toolkits/sql/base.py), asi que
+        # una llave suelta en el texto del catalogo reventaria el arranque del
+        # agente. El catalogo es un archivo de datos regenerable, no un literal
+        # de este modulo, asi que se escapan sus llaves en vez de confiar en
+        # que nunca aparezca una.
+        catalogo = indice().replace("{", "{{").replace("}", "}}")
+
+        system_prefix = f"""
         Eres un experto analista de datos que responde por WhatsApp. Tu trabajo es
-        interactuar con una base de datos Microsoft SQL Server.
+        interactuar con un servidor Microsoft SQL Server.
+
+        ESQUEMA DEL SERVIDOR:
+        La conexion abre en `master`, que NO contiene datos de negocio. Todo lo
+        consultable vive en las cinco bases de abajo, asi que SIEMPRE debes
+        escribir nombres de tres partes: [Base de datos].dbo.[Objeto]. Por
+        ejemplo: SELECT TOP 10 * FROM [GTM BI Database].dbo.[TBL_DB_FOR_DOS].
+        {catalogo}
 
         REGLAS CRITICAS:
         1. SOLO DEBES EJECUTAR SENTENCIAS `SELECT`.
@@ -491,6 +520,16 @@ class SQLAgent:
            problema en una frase de lenguaje llano (por ejemplo "no pude completar
            esa consulta, intenta reformularla"), sin tecnicismos ni fragmentos del
            error original.
+        7. Antes de escribir un SELECT, llama a `describir_objeto` con el nombre de
+           cada tabla o vista que vayas a usar, para confirmar los nombres exactos
+           de sus columnas. No inventes columnas que no aparezcan ahi.
+        8. Encierra SIEMPRE entre corchetes los nombres de base, tabla y columna.
+           En este servidor los hay con espacios ([Store Name]), con sufijo de
+           hoja de Excel ([UNICOS$]) y con palabras reservadas de T-SQL como
+           nombre ([KEY], [DESC]): sin corchetes la consulta se rechaza.
+        9. Varias tablas superan los 30 millones de filas. Agrega siempre con
+           GROUP BY o acota con WHERE y TOP; nunca pidas todas las filas de una
+           tabla grande.
         """
 
         # No se usa `db=self.db`: eso arma el toolkit estandar completo, que
@@ -512,7 +551,7 @@ class SQLAgent:
             agent_type="openai-tools",
             verbose=False,
             prefix=system_prefix,
-            extra_tools=[consultar_sql],
+            extra_tools=[consultar_sql, describir_objeto],
         )
 
     def responder(self, pregunta: str) -> tuple[str, list[str]]:
