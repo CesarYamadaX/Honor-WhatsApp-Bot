@@ -9,6 +9,58 @@ class TestIndice:
             for objeto in base["objetos"]:
                 assert objeto["nombre"] in texto
 
+    def test_lleva_las_notas_de_negocio(self):
+        # Sin ellas el agente vuelve a confundir retailer con operador; ver
+        # TestNotasDeNegocio.
+        texto = catalogo.indice()
+        for nota in catalogo.NOTAS_GENERALES:
+            assert nota in texto
+
+
+class TestNotasDeNegocio:
+    """Cubre el falso negativo que reporto otra sesion.
+
+    A "cuantas ventas hubo en Elektra en marzo 2026" el agente contesto que no
+    habia ninguna, porque genero `WHERE [Carrier] = 'Elektra'` sobre EKT_B2B.
+    En esa tabla Carrier son operadores telefonicos (ABIERTA, AT&T, MOVISTAR,
+    TELCEL), asi que el filtro daba cero filas, y el cero se reporto como "no
+    hay ventas" en vez de como un filtro mal escrito. Las ventas existen: unas
+    144 mil unidades ese mes.
+
+    Estas pruebas no verifican que el modelo acierte -- eso depende del LLM --
+    sino que la informacion que lo evitaria le llegue al prompt.
+    """
+
+    def test_el_mapeo_de_tabla_a_retailer_esta_en_el_prompt(self):
+        texto = catalogo.indice()
+        assert "EKT_B2B=Elektra" in texto
+        assert "COPPEL_B2B" in texto
+
+    def test_se_advierte_que_carrier_no_es_el_retailer(self):
+        texto = catalogo.indice().casefold()
+        assert "carrier" in texto and "operador telefonico" in texto
+
+    def test_se_advierte_que_cero_filas_no_es_ausencia_de_datos(self):
+        assert "cero filas" in catalogo.indice()
+
+    def test_la_ficha_de_ekt_avisa_del_mes_en_texto(self):
+        # [Month] es nvarchar con 'Mar'/'Nov', no un numero: `[Month] = 3`
+        # revienta con un error de conversion en SQL Server.
+        ficha = catalogo.describir_objeto.invoke({"nombre": "EKT_B2B"})
+        assert "NOTA:" in ficha
+        assert "[Month]" in ficha
+
+    def test_la_ficha_del_consolidado_lo_ofrece_como_punto_de_entrada(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "ETL_Consolidado_B2B"})
+        assert "NOTA:" in ficha
+        assert "[Retail]" in ficha
+
+    def test_cada_objeto_anotado_existe_en_el_catalogo(self):
+        # Una nota sobre una tabla renombrada o borrada nunca se mostraria, y
+        # nadie se enteraria de que quedo muerta.
+        for nombre in catalogo.NOTAS_POR_OBJETO:
+            assert catalogo.buscar(nombre), f"{nombre} ya no existe en el catalogo"
+
 
 class TestDescribirObjeto:
     def _describir(self, nombre: str) -> str:

@@ -20,6 +20,61 @@ from langchain.tools import tool
 
 RUTA_CATALOGO = Path(__file__).with_name("catalogo.json")
 
+# Lo que el esquema NO dice y hace que el agente se equivoque con seguridad.
+#
+# Viven aqui y no en catalogo.json a proposito: el JSON es un volcado de
+# INFORMATION_SCHEMA que se regenera, y una regeneracion borraria cualquier
+# nota escrita a mano. Esto es conocimiento de negocio curado, y se revisa
+# como codigo.
+#
+# El caso que las motivo: a "cuantas ventas hubo en Elektra en marzo 2026" el
+# agente respondio "no se encontraron ventas" porque genero
+# `WHERE [Carrier] = 'Elektra'` sobre EKT_B2B. Ahi Carrier son operadores
+# telefonicos, no retailers, asi que el filtro daba cero filas -- y un cero
+# se reporto como "no hay ventas" en vez de como "mi filtro esta mal".
+NOTAS_GENERALES = [
+    "Las tablas de RAW_DATA_B2B son la descarga cruda de UN solo retailer cada "
+    "una, identificado por el nombre de la tabla y no por una columna: "
+    "EKT_B2B=Elektra, COPPEL_B2B y Coppel_IOT=Coppel, TELCEL_B2B=Telcel, "
+    "ATT_B2B=AT&T, LIVERPOOL_B2B$ y Liverpool_IOT=Liverpool, MVS_B2B=Movistar, "
+    "SEARS_B2B=Sears. Salvo SEARS_B2B, ninguna tiene columna [Retail]: filtrar "
+    "por el nombre del retailer dentro de ellas siempre da cero filas.",
+    "[Carrier] es el operador telefonico (TELCEL, AT&T, MOVISTAR, ABIERTA), "
+    "NUNCA el retailer. Para filtrar por retailer se usa [Retail].",
+    "Para preguntas por retailer, el punto de entrada es la vista normalizada "
+    "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]: unifica a todos los retailers "
+    "con columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Es "
+    "preferible a las tablas crudas, que tienen cada una sus propias columnas.",
+    "Los nombres de retailer no son uniformes ni una sola etiqueta por cadena: "
+    "Elektra aparece como 'ELEKTRA' en mayusculas, y Telcel esta repartido en "
+    "'TELCEL CAC', 'TELCEL RETAIL', 'TELCEL DISTR. ASOC.', 'TELCEL WEB', "
+    "'TELCEL CORPO.' y 'TELCEL VENTA EMP.'. Filtra con LIKE, o consulta antes "
+    "los valores distintos de la columna.",
+    "Si una consulta devuelve cero filas, NO concluyas que no hay datos: casi "
+    "siempre el filtro esta mal. Comprueba los valores distintos de la columna "
+    "que filtraste antes de responderle al usuario que no hay informacion.",
+]
+
+# Notas de un objeto concreto, que salen cuando el agente lo consulta.
+NOTAS_POR_OBJETO = {
+    "EKT_B2B": (
+        "Solo ventas de Elektra; no tiene columna [Retail]. OJO con las fechas: "
+        "[Month] es texto con la abreviatura inglesa del mes ('Mar', 'Nov'), "
+        "no un numero, asi que `[Month] = 3` falla al convertir. Para acotar un "
+        "mes usa el rango de [Day], que si es datetime."
+    ),
+    "ETL_Consolidado_B2B": (
+        "Vista normalizada con TODOS los retailers: el mejor punto de partida "
+        "para comparar entre cadenas o para una pregunta de un retailer cuya "
+        "tabla cruda no conoces. [Year], [Month] y [Day] son enteros."
+    ),
+    "TBL_DB_FOR_DOS": (
+        "Su columna [Retail] solo contiene 'Coppel', 'Liverpool Offline' y "
+        "'TELCEL CAC'. No incluye Elektra ni el resto de cadenas: para esas hay "
+        "que ir a RAW_DATA_B2B."
+    ),
+}
+
 
 @lru_cache(maxsize=1)
 def cargar_catalogo() -> dict:
@@ -61,7 +116,9 @@ def indice() -> str:
     catalogo completo son demasiado para repetirlas en cada mensaje, y para
     eso esta la herramienta `describir_objeto`.
     """
-    lineas = []
+    lineas = ["COMO LEER ESTE SERVIDOR:"]
+    lineas += [f"- {nota}" for nota in NOTAS_GENERALES]
+
     for base in cargar_catalogo()["bases"]:
         tablas = [o for o in base["objetos"] if o["tipo"] == "tabla"]
         vistas = [o for o in base["objetos"] if o["tipo"] == "vista"]
@@ -104,7 +161,13 @@ def _ficha(base: str, obj: dict) -> str:
     columnas = "\n".join(
         f"  {_corchetes(c['nombre'])} {c['tipo']}" for c in obj["columnas"]
     )
-    return f"{cabecera}\n{columnas}"
+    ficha = f"{cabecera}\n{columnas}"
+    nota = NOTAS_POR_OBJETO.get(obj["nombre"])
+    if nota:
+        # Despues de las columnas, no antes: es la ultima linea que el modelo
+        # lee antes de escribir el SELECT.
+        ficha += f"\nNOTA: {nota}"
+    return ficha
 
 
 @tool
