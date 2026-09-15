@@ -41,10 +41,16 @@ NOTAS_GENERALES = [
     "por el nombre del retailer dentro de ellas siempre da cero filas.",
     "[Carrier] es el operador telefonico (TELCEL, AT&T, MOVISTAR, ABIERTA), "
     "NUNCA el retailer. Para filtrar por retailer se usa [Retail].",
-    "Para preguntas por retailer, el punto de entrada es la vista normalizada "
-    "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]: unifica a todos los retailers "
-    "con columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Es "
-    "preferible a las tablas crudas, que tienen cada una sus propias columnas.",
+    "La vista [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] es la fuente OFICIAL de "
+    "venta B2B, la que usa el negocio: unifica a todos los retailers con "
+    "columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Usala por "
+    "defecto. Las tablas crudas son su insumo y no cuadran con ella (filtran "
+    "distinto y no estan agregadas); ve a ellas solo si te piden el dato "
+    "crudo, y entonces avisa que no es la cifra oficial.",
+    "En ETL_Consolidado_B2B cada fila es una combinacion de tienda, SKU, "
+    "carrier y dia ya sumada, no un movimiento suelto. Para unidades vendidas "
+    "usa SUM([QTY]); COUNT(*) responde otra pregunta y casi nunca es la que "
+    "te hicieron.",
     "Los nombres de retailer no son uniformes ni una sola etiqueta por cadena: "
     "Elektra aparece como 'ELEKTRA' en mayusculas, y Telcel esta repartido en "
     "'TELCEL CAC', 'TELCEL RETAIL', 'TELCEL DISTR. ASOC.', 'TELCEL WEB', "
@@ -64,15 +70,22 @@ NOTAS_POR_OBJETO = {
         "mes usa el rango de [Day], que si es datetime."
     ),
     "ETL_Consolidado_B2B": (
-        "Vista normalizada con TODOS los retailers: el mejor punto de partida "
-        "para comparar entre cadenas o para una pregunta de un retailer cuya "
-        "tabla cruda no conoces. [Year], [Month] y [Day] son enteros. OJO: "
-        "excluye las filas con QTY negativo (devoluciones/ajustes) que si "
-        "aparecen en las tablas crudas de RAW_DATA_B2B -- verificado en "
-        "EKT_B2B marzo 2026: cruda=144,190 (incluye -250 de 233 filas "
-        "negativas), ETL=144,440 (solo positivas). Si alguien pregunta por "
-        "que un total no cuadra con la tabla cruda, esta es la razon; no "
-        "significa que uno de los dos este mal."
+        "LA fuente oficial de venta B2B: es la que usa el negocio, asi que sus "
+        "numeros son los buenos. Union de las nueve vistas vw_ETL_*, una por "
+        "retailer, ya normalizadas. [Year], [Month] y [Day] son enteros. "
+        "Dos cosas que la separan de las tablas crudas: "
+        "(1) cada vw_ETL_* filtra la cantidad con `>= 1`, asi que quedan fuera "
+        "las devoluciones y ajustes (QTY negativo) y las filas en cero; "
+        "ademas vw_ETL_ATT_Postpaid se limita a ciertos canales y "
+        "vw_ETL_Movistar_CAC solo trae 'Propio MX'. "
+        "(2) viene AGREGADA con GROUP BY tienda/marca/SKU/carrier/dia y "
+        "SUM(cantidad), o sea una fila por combinacion y no una por "
+        "movimiento. Por eso COUNT(*) aqui NO es el numero de ventas: para "
+        "unidades siempre SUM([QTY]). "
+        "Reconciliacion verificada en Elektra marzo 2026: 134 049 filas "
+        "crudas en EKT_B2B, menos 246 que no pasan el `>= 1` (233 negativas y "
+        "13 en cero), menos 263 que el GROUP BY fusiona, dan las 133 540 de la "
+        "vista; en unidades, 144 190 crudas + 250 de las negativas = 144 440."
     ),
     "TBL_DB_FOR_DOS": (
         "Su columna [Retail] solo contiene 'Coppel', 'Liverpool Offline' y "
