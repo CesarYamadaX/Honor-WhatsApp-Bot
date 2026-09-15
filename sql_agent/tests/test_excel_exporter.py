@@ -180,6 +180,72 @@ class TestGrafica:
         assert libro[HOJA_DATOS].max_row == 3
 
 
+class TestAnchoDeColumnas:
+    def _ancho(self, libro, letra):
+        return libro[HOJA_DATOS].column_dimensions[letra].width
+
+    def test_la_columna_se_ancha_al_texto_mas_largo(self, tmp_path, monkeypatch):
+        libro = _exportar(
+            pd.DataFrame({"Modelo": ["X5", "HONOR Magic7 Pro 12/512"], "QTY": [1, 2]}),
+            tmp_path,
+            monkeypatch,
+        )
+        esperado = len("HONOR Magic7 Pro 12/512") + excel_exporter.MARGEN_COLUMNA
+        assert self._ancho(libro, "A") == esperado
+
+    def test_el_encabezado_cuenta_cuando_es_mas_largo_que_el_dato(
+        self, tmp_path, monkeypatch
+    ):
+        libro = _exportar(
+            pd.DataFrame({"Homologacion_modelo_final": ["X5"], "QTY": [1]}),
+            tmp_path,
+            monkeypatch,
+        )
+        esperado = len("Homologacion_modelo_final") + excel_exporter.MARGEN_COLUMNA
+        assert self._ancho(libro, "A") == esperado
+
+    def test_una_fecha_se_mide_por_lo_que_muestra_no_por_lo_que_guarda(
+        self, tmp_path, monkeypatch
+    ):
+        # La celda guarda "2026-03-01 08:30:00" (19) pero muestra "2026-03-01"
+        # (10). Medir el valor guardado daria una columna casi al doble de
+        # ancha que su contenido visible.
+        libro = _exportar(
+            pd.DataFrame(
+                {"Fe": pd.to_datetime(["2026-03-01 08:30", "2026-03-02 14:45"]), "QTY": [1, 2]}
+            ),
+            tmp_path,
+            monkeypatch,
+        )
+        esperado = len(excel_exporter.FORMATO_FECHA) + excel_exporter.MARGEN_COLUMNA
+        assert self._ancho(libro, "A") == esperado
+
+    def test_una_columna_diminuta_recibe_el_ancho_minimo(self, tmp_path, monkeypatch):
+        libro = _exportar(pd.DataFrame({"ID": ["A", "B"], "N": [1, 2]}), tmp_path, monkeypatch)
+        assert self._ancho(libro, "A") == excel_exporter.ANCHO_MINIMO
+
+    def test_un_texto_larguisimo_se_topa_y_se_ajusta_en_varias_lineas(
+        self, tmp_path, monkeypatch
+    ):
+        # Ensanchar la columna hasta el texto empujaria el resto de la tabla
+        # fuera de la pantalla; recortarla escondería datos. Se ajusta.
+        largo = "HONOR X9c 8/256 Verde Esmeralda " * 5
+        libro = _exportar(
+            pd.DataFrame({"Descripcion": [largo, "X5"], "QTY": [1, 2]}), tmp_path, monkeypatch
+        )
+        assert self._ancho(libro, "A") == excel_exporter.ANCHO_MAXIMO
+        assert libro[HOJA_DATOS]["A2"].alignment.wrap_text is True
+        # Y el texto sigue completo en la celda: el ajuste no recorta.
+        assert libro[HOJA_DATOS]["A2"].value == largo
+
+    def test_una_columna_normal_no_se_ajusta(self, tmp_path, monkeypatch):
+        # wrap_text en todo engorda las filas sin motivo.
+        libro = _exportar(
+            pd.DataFrame({"Modelo": ["HONOR 200", "X5"], "QTY": [1, 2]}), tmp_path, monkeypatch
+        )
+        assert not libro[HOJA_DATOS]["A2"].alignment.wrap_text
+
+
 class TestFormatoDeFechas:
     def test_una_fecha_sin_hora_pierde_el_00_00_00(self, tmp_path, monkeypatch):
         # Si no, cada marca del eje se parte en dos lineas con un 00:00:00

@@ -8,6 +8,8 @@ from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.axis import ChartLines
 from openpyxl.chart.shapes import GraphicalProperties
 from openpyxl.drawing.line import LineProperties
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger("sql_agent.excel_exporter")
 
@@ -29,6 +31,15 @@ COLOR_REJILLA = "E1E0D9"
 COLOR_EJE = "C3C2B7"
 
 FORMATO_FECHA = "yyyy-mm-dd"
+
+# Ancho de columna, en caracteres del tipo por defecto. El minimo evita que
+# una columna de numeros cortos quede ridicula junto a su encabezado; el
+# maximo evita que una descripcion de producto de 300 caracteres empuje el
+# resto de la tabla fuera de la pantalla del telefono. El margen es el aire
+# que Excel deja a los lados al autoajustar.
+ANCHO_MINIMO = 8
+ANCHO_MAXIMO = 50
+MARGEN_COLUMNA = 2
 
 # Ancho de linea en EMU (12700 = 1 pt). La rejilla y los ejes van de
 # hairline para que no compitan con los datos.
@@ -95,6 +106,42 @@ def _formatear_columnas_de_fecha(hoja, df: pd.DataFrame) -> None:
             continue
         for (celda,) in hoja.iter_rows(min_col=indice, max_col=indice, min_row=2):
             celda.number_format = FORMATO_FECHA
+
+
+def _ajustar_ancho_de_columnas(hoja, df: pd.DataFrame) -> None:
+    """Da a cada columna el ancho de su contenido, como el autoajuste de Excel.
+
+    openpyxl no tiene autoajuste: el "ajustar al contenido" de Excel lo calcula
+    Excel al abrir el archivo y solo si alguien lo pide a mano. Aqui se mide el
+    texto mas largo de cada columna y se fija el ancho, para que el reporte
+    llegue legible sin que el usuario toque nada.
+    """
+    for indice, nombre in enumerate(df.columns, start=1):
+        columna = df[nombre]
+        if pd.api.types.is_datetime64_any_dtype(columna):
+            # Se mide lo que se VE, no lo que se guarda: la celda conserva la
+            # hora pero se muestra como yyyy-mm-dd. En un formato de fecha
+            # numerico cada caracter del codigo rinde un caracter en pantalla,
+            # asi que su largo es el ancho mostrado.
+            ancho_del_dato = len(FORMATO_FECHA)
+        else:
+            textos = columna.dropna().astype(str)
+            ancho_del_dato = int(textos.str.len().max()) if not textos.empty else 0
+
+        ancho = max(len(str(nombre)), ancho_del_dato) + MARGEN_COLUMNA
+        hoja.column_dimensions[get_column_letter(indice)].width = min(
+            max(ancho, ANCHO_MINIMO), ANCHO_MAXIMO
+        )
+
+        if ancho > ANCHO_MAXIMO:
+            # La columna no cabe en el tope. Ensancharla hasta el texto mas
+            # largo (una descripcion de producto puede pasar de 90 caracteres)
+            # empujaria el resto de la tabla fuera de la pantalla del
+            # telefono, pero recortarla escondería datos. Se ajusta el texto:
+            # ocupa varias lineas y se ve completo. Excel calcula solo el alto
+            # de la fila mientras nadie lo fije a mano.
+            for (celda,) in hoja.iter_rows(min_col=indice, max_col=indice, min_row=2):
+                celda.alignment = Alignment(wrap_text=True, vertical="top")
 
 
 def _agregar_grafica(libro, df: pd.DataFrame) -> None:
@@ -233,6 +280,7 @@ class ExcelExporter:
             df.to_excel(escritor, index=False, sheet_name=HOJA_DATOS)
             try:
                 _formatear_columnas_de_fecha(escritor.book[HOJA_DATOS], df)
+                _ajustar_ancho_de_columnas(escritor.book[HOJA_DATOS], df)
                 _agregar_grafica(escritor.book, df)
             except Exception:
                 # Los datos son lo que el usuario pidio; la grafica es un
