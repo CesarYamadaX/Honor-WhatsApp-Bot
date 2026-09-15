@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -33,6 +34,14 @@ from formatting import formatear_resultado
 logger = logging.getLogger("sql_agent.agent")
 
 load_dotenv()
+
+
+def _leer_entero_de_entorno(clave: str, por_defecto: int) -> int:
+    crudo = os.getenv(clave)
+    try:
+        return int(crudo) if crudo and crudo.strip() else por_defecto
+    except ValueError:
+        return por_defecto
 
 # Lista BLANCA de palabras clave que una consulta de lectura puede usar de
 # verdad. Es la inversion deliberada de una lista negra: T-SQL no exige punto
@@ -357,6 +366,8 @@ class ContextoPeticion:
 
     engine: Engine
     archivos: list[str] = field(default_factory=list)
+    # Cuando empezo la peticion, para saber cuanto queda del presupuesto.
+    inicio: float = field(default_factory=time.monotonic)
     # Lo pone la API cuando llega un mensaje nuevo del mismo chat. No hay
     # forma de matar el hilo que corre el agente, asi que la cancelacion es
     # cooperativa: se revisa antes de cada herramienta y se aborta ahi.
@@ -420,6 +431,16 @@ def _contexto_actual() -> ContextoPeticion:
 
 # SQL Server dice que el nombre no existe, pero no dice donde SI existe.
 _OBJETO_INVALIDO = re.compile(r"Invalid object name '([^']+)'")
+
+# Lo que dice el driver cuando corta una consulta por tiempo. Reconocerlo por
+# el mensaje y no solo por el reloj: el corte puede llegar antes de que se
+# cumpla el presupuesto medido aqui (el driver cuenta desde que mandó la
+# consulta, no desde que se armo).
+_POR_TIEMPO = re.compile(r"timeout expired|HYT00|query timeout", re.IGNORECASE)
+
+
+def _es_por_tiempo(error: Exception) -> bool:
+    return bool(_POR_TIEMPO.search(str(error)))
 
 
 def _donde_vive_de_verdad(error: Exception) -> str:
@@ -538,6 +559,13 @@ def buscar_modelos(texto: str) -> str:
     )
     return "\n".join(lineas)
 
+
+# Debe coincidir con AGENT_TIMEOUT_SECONDS: es el presupuesto que la API le
+# da a la peticion completa. Aqui solo se usa para repartirlo, no para
+# imponerlo.
+TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 90)
+# Lo que se reserva para armar el Excel y la grafica y devolver la respuesta.
+MARGEN_DE_ENTREGA = 20
 
 MAX_VALORES = 50
 
@@ -731,9 +759,17 @@ def consultar_sql(query: str) -> str:
         )
 
     ctx = _contexto_actual()
+    # Lo que queda del presupuesto de la peticion, menos un margen para armar
+    # el Excel y la grafica. Sin esto una consulta pesada se lleva los 90
+    # segundos enteros y el usuario no recibe NADA: ni datos ni explicacion,
+    # solo silencio y un 504. Asi, en el peor caso el agente se entera a
+    # tiempo y puede decirle que acote la pregunta.
+    presupuesto = max(10, int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA))
+    comenzo = time.monotonic()
     try:
         with ctx.engine.connect() as conexion:
-            df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+            with _presupuesto_de_tiempo(conexion, presupuesto):
+                df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
     except ConsultaCancelada:
         raise
     except Exception as error:  # noqa: BLE001 - el mensaje (resumido) vuelve al modelo
@@ -742,9 +778,29 @@ def consultar_sql(query: str) -> str:
         # donde debe quedar (Importante de la revision final). Al modelo
         # solo le llega el texto de abajo, y el system_prefix de
         # _create_agent le prohibe citarlo tal cual al usuario.
-        logger.exception("Error al ejecutar SQL generado por el agente")
+        tardo = time.monotonic() - comenzo
+        logger.exception(
+            "Error al ejecutar SQL tras %.0fs (presupuesto %ss): %s",
+            tardo,
+            presupuesto,
+            " ".join(query.split())[:400],
+        )
+        if _es_por_tiempo(error) or tardo >= presupuesto:
+            # Se agoto el presupuesto, no es un error de sintaxis: decirselo
+            # tal cual para que acote en vez de reintentar lo mismo.
+            return (
+                f"La consulta tardo mas de {presupuesto}s y la cancele para no "
+                "dejar al usuario sin respuesta. Acotala: filtra por [Year] y "
+                "[Month], agrupa menos columnas, o usa TOP."
+            )
         return f"Error al ejecutar la consulta: {error}{_donde_vive_de_verdad(error)}"
 
+    logger.info(
+        "SQL ok en %.0fs, %d filas: %s",
+        time.monotonic() - comenzo,
+        len(df),
+        " ".join(query.split())[:400],
+    )
     resultado = formatear_resultado(df)
     if resultado.necesita_excel:
         try:

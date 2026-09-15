@@ -892,6 +892,45 @@ class TestValoresDistintos:
         assert motor.sql is None, "no debe consultar la base: hay valores precalculados"
         assert "Coppel" in respuesta and "ELEKTRA" in respuesta
 
+    def test_una_consulta_que_agota_el_presupuesto_pide_acotar(self):
+        # Antes una consulta pesada se llevaba los 90s enteros y el usuario no
+        # recibia NADA: ni datos ni explicacion, solo un 504 y silencio. Ahora
+        # el SQL se corta a tiempo y el agente puede decirle que acote.
+        class _CursorLento:
+            description = None
+
+            def execute(self, *_):
+                raise RuntimeError("Query timeout expired")
+
+            def close(self):
+                pass
+
+        class _MotorLento:
+            def __init__(self):
+                self.connection = self
+
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def cursor(self):
+                return _CursorLento()
+
+        with contexto_peticion(_MotorLento()) as ctx:
+            # La peticion arranco hace mucho: no queda presupuesto.
+            ctx.inicio -= modulo_agente.TIMEOUT_PETICION
+            respuesta = consultar_sql.invoke(
+                {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+
+        assert "Acotala" in respuesta
+        assert "[Year]" in respuesta, "debe decirle COMO acotar, no solo que fallo"
+
     def test_una_columna_sin_foto_si_consulta_la_base(self):
         motor, _ = self._invocar("ETL_Consolidado_B2B", "Store", [(1,), (2,)])
         assert motor.sql is not None
