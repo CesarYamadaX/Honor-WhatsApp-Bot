@@ -8,7 +8,15 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
-from agent import SQLAgent, consultar_sql, contexto_peticion, es_select
+from agent import (
+    SQLAgent,
+    _donde_vive_de_verdad,
+    _tokens_de_modelo,
+    buscar_modelos,
+    consultar_sql,
+    contexto_peticion,
+    es_select,
+)
 from formatting import MAX_ROWS_AS_TEXT
 
 # Bien por encima del umbral que activa el Excel (MAX_ROWS_AS_TEXT), en vez
@@ -541,7 +549,7 @@ class TestToolkitDelAgente:
         monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
         agente = SQLAgent(engine=engine)
         nombres = {herramienta.name for herramienta in agente.agent_executor.tools}
-        assert nombres == {"consultar_sql", "describir_objeto"}
+        assert nombres == {"consultar_sql", "describir_objeto", "buscar_modelos"}
 
 
 class _EjecutorEspia:
@@ -634,3 +642,172 @@ class TestMemoriaConversacional:
             agente.responder("ventas de Coppel")
 
         assert agente.historial == []
+
+
+class TestObjetoEnLaBaseEquivocada:
+    """Cubre un fallo real de produccion (log del 2026-09-15).
+
+    Alguien pregunto por las ventas de los modelos "magic" y el agente genero
+    `FROM [GTM BI Database].dbo.[ETL_Consolidado_B2B]`. La vista existe, pero
+    en RAW_DATA_B2B. SQL Server contesta "Invalid object name" sin decir donde
+    SI esta, asi que el modelo reintento la misma consulta, volvio a fallar
+    igual, y agoto los 90 segundos de timeout: el usuario recibio un 504 y su
+    reenvio choco con un 429.
+    """
+
+    def _error(self, nombre: str) -> Exception:
+        # Mismo texto que devuelve el driver ODBC.
+        return RuntimeError(
+            f"('42S02', \"[42S02] [Microsoft][ODBC Driver 18 for SQL Server]"
+            f"[SQL Server]Invalid object name '{nombre}'. (208)\")"
+        )
+
+    def test_dice_en_que_base_esta_de_verdad(self):
+        pista = _donde_vive_de_verdad(
+            self._error("GTM BI Database.dbo.ETL_Consolidado_B2B")
+        )
+        assert "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]" in pista
+
+    def test_nombra_las_dos_bases_cuando_el_objeto_esta_repetido(self):
+        # VW_TELCEL_B2B_SO_LC existe en GTM BI Database y en
+        # GTM_BI_INVENTORIES: quedarse con una sola mandaria al modelo a la
+        # equivocada la mitad de las veces.
+        pista = _donde_vive_de_verdad(self._error("loquesea.dbo.VW_TELCEL_B2B_SO_LC"))
+        assert "[GTM BI Database].dbo.[VW_TELCEL_B2B_SO_LC]" in pista
+        assert "[GTM_BI_INVENTORIES].dbo.[VW_TELCEL_B2B_SO_LC]" in pista
+
+    def test_no_inventa_nada_si_el_objeto_no_existe(self):
+        assert _donde_vive_de_verdad(self._error("dbo.TablaQueNoExiste")) == ""
+
+    def test_ignora_los_errores_que_no_son_de_nombre(self):
+        assert _donde_vive_de_verdad(RuntimeError("Conversion failed: 'Nov' to int")) == ""
+
+    def test_la_pista_viaja_con_el_error_al_modelo(self):
+        # Lo que importa: que la correccion llegue al modelo pegada al error,
+        # que es lo unico que este ve. El motor va simulado porque el fixture
+        # de pruebas es SQLite y ahi el mismo SQL falla con "syntax error",
+        # no con el "Invalid object name" de SQL Server.
+        class _MotorQueFalla:
+            def __init__(self, error):
+                self._error = error
+
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def exec_driver_sql(self, *_):
+                raise self._error
+
+        motor = _MotorQueFalla(self._error("GTM BI Database.dbo.ETL_Consolidado_B2B"))
+        with contexto_peticion(motor):
+            respuesta = consultar_sql.invoke(
+                {"query": "SELECT * FROM [GTM BI Database].dbo.[ETL_Consolidado_B2B]"}
+            )
+        assert "Error al ejecutar la consulta" in respuesta
+        assert "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]" in respuesta
+
+
+class _MotorDeCatalogo:
+    """Motor simulado que devuelve filas de modelos y guarda lo consultado."""
+
+    def __init__(self, filas):
+        self.filas = filas
+        self.sql = None
+        self.parametros = None
+
+    def connect(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def exec_driver_sql(self, sql, parametros=None):
+        self.sql, self.parametros = sql, parametros
+        return self
+
+    def fetchall(self):
+        return self.filas
+
+
+class TestBuscarModelos:
+    """Un usuario dice "magic" y se refiere a varios modelos de Honor.
+
+    Los nombres comerciales no estan escritos igual en todas las fuentes -- el
+    catalogo dice 'HONOR MAGIC 8 LITE 512GB 5G' y la vista de ventas
+    'HONOR MAGIC8 LITE 512GB 5G', sin espacio -- asi que un LIKE con el nombre
+    tal como lo dijo el usuario no encuentra nada, y uno con solo 'magic'
+    arrastra RED MAGIC (otra marca), los MagicBook (laptops) y hasta el Magic
+    Keyboard de Apple.
+    """
+
+    def test_parte_el_texto_en_palabras_y_numeros(self):
+        assert _tokens_de_modelo("magic 8 lite") == ["magic", "8", "lite"]
+
+    def test_los_comodines_de_like_no_sobreviven(self):
+        # Un token con % o _ se comportaria como comodin dentro del LIKE. El
+        # guion bajo importa: en LIKE vale por "un caracter cualquiera".
+        assert _tokens_de_modelo("magic%_8") == ["magic", "8"]
+
+    def test_se_topan_los_tokens(self):
+        muchos = " ".join(str(i) for i in range(20))
+        assert len(_tokens_de_modelo(muchos)) == 5
+
+    def test_un_like_por_token_unidos_con_and(self):
+        # Es lo que hace que 'magic 8' encuentre tanto 'MAGIC 8 LITE' como
+        # 'MAGIC8 LITE': los tokens se buscan sueltos, no como frase.
+        motor = _MotorDeCatalogo([("HONOR MAGIC 8 LITE 512GB 5G", "HONOR", 9)])
+        with contexto_peticion(motor):
+            buscar_modelos.invoke({"texto": "magic 8"})
+
+        assert motor.sql.count("LIKE ?") == 2
+        assert " AND " in motor.sql
+        assert motor.parametros == ("%magic%", "%8%")
+
+    def test_agrupa_por_marca_y_avisa_cuando_hay_varias(self):
+        motor = _MotorDeCatalogo(
+            [
+                ("HONOR MAGIC 7 PRO 512GB 5G", "HONOR", 21),
+                ("REDMAGIC 10S PRO 256GB 5G", "RED MAGIC", 2),
+            ]
+        )
+        with contexto_peticion(motor):
+            respuesta = buscar_modelos.invoke({"texto": "magic pro"})
+
+        assert "HONOR:" in respuesta and "RED MAGIC:" in respuesta
+        assert "MARCAS DISTINTAS" in respuesta
+
+    def test_una_sola_marca_no_dispara_el_aviso(self):
+        motor = _MotorDeCatalogo([("HONOR MAGIC 8 LITE 512GB 5G", "HONOR", 39)])
+        with contexto_peticion(motor):
+            respuesta = buscar_modelos.invoke({"texto": "magic 8 lite"})
+
+        assert "MARCAS DISTINTAS" not in respuesta
+
+    def test_siempre_explica_como_filtrar(self):
+        # Saber que modelos existen no basta: el agente tiene que saber que el
+        # nombre del catalogo no sirve tal cual contra las ventas.
+        motor = _MotorDeCatalogo([("HONOR MAGIC 8 LITE 512GB 5G", "HONOR", 39)])
+        with contexto_peticion(motor):
+            respuesta = buscar_modelos.invoke({"texto": "magic"})
+
+        assert "LIKE" in respuesta and "AND" in respuesta
+
+    def test_sin_resultados_no_inventa_modelos(self):
+        motor = _MotorDeCatalogo([])
+        with contexto_peticion(motor):
+            respuesta = buscar_modelos.invoke({"texto": "telefono inexistente"})
+
+        assert "Ningun modelo" in respuesta
+
+    def test_texto_sin_palabras_utiles(self):
+        motor = _MotorDeCatalogo([])
+        with contexto_peticion(motor):
+            assert "al menos una palabra" in buscar_modelos.invoke({"texto": "!!! ???"})

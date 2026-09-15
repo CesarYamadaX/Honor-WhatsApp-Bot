@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
-from catalogo import describir_objeto, indice
+from catalogo import buscar, describir_objeto, indice
 from excel_exporter import ExcelExporter
 from formatting import formatear_resultado
 
@@ -376,6 +377,125 @@ def _contexto_actual() -> ContextoPeticion:
     return ctx
 
 
+# SQL Server dice que el nombre no existe, pero no dice donde SI existe.
+_OBJETO_INVALIDO = re.compile(r"Invalid object name '([^']+)'")
+
+
+def _donde_vive_de_verdad(error: Exception) -> str:
+    """Si el objeto existe en otra base, nombra la buena. Si no, cadena vacia.
+
+    El error crudo del driver no lleva a ningun lado: el modelo no sabe si se
+    equivoco de base, de esquema o de nombre, asi que reintenta lo mismo hasta
+    agotar el timeout. Paso en produccion con
+    `[GTM BI Database].dbo.[ETL_Consolidado_B2B]` -- la vista existe, pero en
+    RAW_DATA_B2B; dos intentos identicos y 90 segundos perdidos.
+
+    El catalogo sabe en que base esta cada objeto, asi que la correccion se
+    puede dar hecha en vez de esperar a que el modelo adivine.
+    """
+    coincidencia = _OBJETO_INVALIDO.search(str(error))
+    if not coincidencia:
+        return ""
+    encontrados = buscar(coincidencia.group(1))
+    if not encontrados:
+        return ""
+    correctos = ", ".join(
+        f"[{base}].dbo.[{obj['nombre']}]" for base, obj in encontrados
+    )
+    return (
+        f" Ese objeto existe, pero en otra base: usa {correctos}. "
+        "Corrige la base y reintenta."
+    )
+
+
+# El catalogo de homologacion: 7 758 nombres de modelo, 184k filas. Se
+# consulta en medio segundo, a diferencia de la vista de ventas (39M filas),
+# donde un LIKE es un escaneo completo que agota el timeout.
+CATALOGO_MODELOS = "[GTM BI Database].dbo.[UNICOS$]"
+MAX_MODELOS = 30
+MAX_TOKENS = 5
+
+
+def _tokens_de_modelo(texto: str) -> list[str]:
+    """Palabras y numeros sueltos del texto, sin comodines de LIKE.
+
+    Se parte por todo lo que no sea alfanumerico (el guion bajo incluido, que
+    en LIKE vale por "un caracter cualquiera"), asi que ningun token puede
+    colarse como metacaracter.
+    """
+    return [t for t in re.findall(r"[A-Za-z0-9]+", texto)][:MAX_TOKENS]
+
+
+@tool
+def buscar_modelos(texto: str) -> str:
+    """Traduce un nombre coloquial de celular a los nombres reales del catalogo.
+
+    Usala ANTES de escribir el SELECT siempre que el usuario nombre un modelo
+    de forma suelta ("magic", "magic pro", "el X9", "los plegables"): te dice
+    que modelos existen de verdad, de que marca son, y como filtrarlos.
+    """
+    tokens = _tokens_de_modelo(texto)
+    if not tokens:
+        return "Dame al menos una palabra o numero del modelo."
+
+    condiciones = " AND ".join(["[HOMOLOGACION MODELO] LIKE ?"] * len(tokens))
+    sql = (
+        f"SELECT TOP {MAX_MODELOS} [HOMOLOGACION MODELO], [BRAND], COUNT(*) AS n "
+        f"FROM {CATALOGO_MODELOS} WHERE {condiciones} "
+        "GROUP BY [HOMOLOGACION MODELO], [BRAND] ORDER BY COUNT(*) DESC"
+    )
+
+    ctx = _contexto_actual()
+    try:
+        with ctx.engine.connect() as conexion:
+            filas = conexion.exec_driver_sql(
+                sql, tuple(f"%{t}%" for t in tokens)
+            ).fetchall()
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo la busqueda de modelos")
+        return f"No pude consultar el catalogo de modelos: {error}"
+
+    if not filas:
+        return (
+            f"Ningun modelo del catalogo contiene {' + '.join(tokens)}. "
+            "Prueba con menos palabras o revisa el nombre con el usuario."
+        )
+
+    por_marca: dict[str, list[str]] = {}
+    for modelo, marca, _ in filas:
+        por_marca.setdefault(marca or "(sin marca)", []).append(modelo)
+
+    lineas = []
+    for marca, modelos in por_marca.items():
+        lineas.append(f"{marca}:")
+        lineas += [f"  {m}" for m in modelos]
+
+    if len(por_marca) > 1:
+        lineas.append(
+            "OJO: son MARCAS DISTINTAS. 'RED MAGIC' es de otro fabricante y un "
+            "'MAGICBOOK' es una laptop, no un celular: no los mezcles."
+        )
+
+    filtro = " AND ".join(
+        f"[Material_Description] LIKE '%{t}%'" for t in tokens
+    )
+    lineas.append(
+        "COMO FILTRAR ESTO EN LAS VENTAS:\n"
+        "- La marca va por su COLUMNA: `[Brand] = 'HONOR'`. Meter la marca en "
+        "el LIKE de la descripcion PIERDE ventas, porque no todas las "
+        "descripciones repiten la marca.\n"
+        "- El modelo va por LIKE, uno por cada palabra QUE DIJO EL USUARIO, "
+        f"unidas con AND. Para lo que buscaste aqui es exactamente: {filtro}\n"
+        "- No agregues palabras que el usuario no dijo: un '%lite%' de mas "
+        "deja fuera los PRO y los plegables. Y no uses el nombre completo del "
+        "catalogo, que se escribe distinto en cada fuente ('MAGIC 8 LITE' en "
+        "el catalogo, 'MAGIC8 LITE' en la vista de ventas).\n"
+        "- Si arriba salen cosas que no son celulares (un MAGICBOOK es una "
+        "laptop) y la pregunta era de celulares, quitalas con NOT LIKE."
+    )
+    return "\n".join(lineas)
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
@@ -410,7 +530,7 @@ def consultar_sql(query: str) -> str:
         # solo le llega el texto de abajo, y el system_prefix de
         # _create_agent le prohibe citarlo tal cual al usuario.
         logger.exception("Error al ejecutar SQL generado por el agente")
-        return f"Error al ejecutar la consulta: {error}"
+        return f"Error al ejecutar la consulta: {error}{_donde_vive_de_verdad(error)}"
 
     resultado = formatear_resultado(df)
     if resultado.necesita_excel:
@@ -544,7 +664,11 @@ class SQLAgent:
         9. Varias tablas superan los 30 millones de filas. Agrega siempre con
            GROUP BY o acota con WHERE y TOP; nunca pidas todas las filas de una
            tabla grande.
-        10. Es una conversacion: el usuario escribe desde el telefono y
+        10. Si el usuario nombra un celular de forma suelta ("magic", "magic pro",
+           "el X9"), llama primero a `buscar_modelos`: los nombres comerciales no
+           estan escritos igual en todas las tablas, y un LIKE con el nombre tal
+           cual o no encuentra nada o mezcla marcas distintas.
+        11. Es una conversacion: el usuario escribe desde el telefono y
            acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
            "ahora por region", "el mismo dato pero de 2023"), resuelvela contra
            lo que ya se hablo en vez de pedirle que la repita completa.
@@ -588,7 +712,7 @@ class SQLAgent:
             agent_type="openai-tools",
             verbose=False,
             prompt=prompt,
-            extra_tools=[consultar_sql, describir_objeto],
+            extra_tools=[consultar_sql, describir_objeto, buscar_modelos],
         )
 
     def responder(self, pregunta: str) -> tuple[str, list[str]]:
