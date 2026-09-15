@@ -24,7 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
-from catalogo import buscar, describir_objeto, indice
+from catalogo import _corchetes, buscar, describir_objeto, indice
 from excel_exporter import ExcelExporter
 from formatting import formatear_resultado
 
@@ -347,10 +347,29 @@ def es_select(sql: str) -> bool:
 
 @dataclass
 class ContextoPeticion:
-    """Estado de una sola pregunta: de donde se lee y que archivos se generaron."""
+    """Estado de una sola pregunta: de donde se lee y que reporte se genero."""
 
     engine: Engine
     archivos: list[str] = field(default_factory=list)
+
+    def registrar_reporte(self, ruta: str) -> None:
+        """Guarda el reporte de la pregunta. Solo cuenta el primero.
+
+        Una pregunta, un archivo. Antes se acumulaban y se enviaban todos: el
+        usuario pidio agregar el modelo a un reporte de ventas y recibio dos
+        Excel -- 11 501 filas de ventas sin el modelo y 4 509 nombres de modelo
+        sin ventas-- cuando queria una sola tabla con ambas cosas.
+
+        Se conserva el PRIMERO, no el ultimo, porque una consulta que falla no
+        llega hasta aqui: solo las exitosas generan archivo. Asi que la primera
+        es la respuesta que el agente construyo, y lo que venga despues en la
+        misma vuelta son comprobaciones (un DISTINCT para ver como se escriben
+        los valores, un listado de apoyo). Conservar el ultimo mandaba esas
+        comprobaciones en lugar del reporte: en una prueba, la lista de 16
+        retailers en vez de las ventas que se habian pedido.
+        """
+        if not self.archivos:
+            self.archivos.append(ruta)
 
 
 _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default=None)
@@ -498,6 +517,99 @@ def buscar_modelos(texto: str) -> str:
     return "\n".join(lineas)
 
 
+MAX_VALORES = 50
+
+# Explorar no puede costar la respuesta: la peticion entera vive dentro de
+# AGENT_TIMEOUT_SECONDS (90s por defecto), que ademas tiene que alcanzar para
+# la consulta real y para armar el Excel.
+TIMEOUT_VALORES = 20
+
+
+@contextmanager
+def _presupuesto_de_tiempo(conexion, segundos: int) -> Iterator[None]:
+    """Limita cuanto puede tardar una consulta, y deja la conexion como estaba.
+
+    El timeout de pyodbc se fija en la CONEXION, no en el cursor, y el pool de
+    SQLAlchemy la recicla: si se dejara puesto, la siguiente consulta que
+    reutilice esa conexion -- por ejemplo el SELECT de verdad, que puede tardar
+    mucho mas-- moriria a los 20 segundos sin razon aparente. De ahi el
+    restaurar en el finally.
+    """
+    # `.connection` devuelve el proxy del pool, no la conexion de pyodbc:
+    # ponerle el timeout ahi no hace nada (se guarda en el envoltorio y la
+    # consulta sigue corriendo sin limite). El atributo hay que fijarlo en la
+    # conexion real, que en SQLAlchemy 2.x cuelga de `dbapi_connection`.
+    bruta = getattr(conexion.connection, "dbapi_connection", conexion.connection)
+    if not hasattr(bruta, "timeout"):  # SQLite en las pruebas
+        yield
+        return
+    anterior = bruta.timeout
+    bruta.timeout = segundos
+    try:
+        yield
+    finally:
+        bruta.timeout = anterior
+
+
+@tool
+def valores_distintos(tabla: str, columna: str) -> str:
+    """Lista como estan escritos los valores de una columna.
+
+    Usala para comprobar con que texto buscar ANTES de escribir el SELECT
+    final: los retailers, marcas y carriers no estan escritos de forma
+    uniforme. Es solo para mirar -- no genera ningun reporte para el usuario.
+    """
+    encontrados = buscar(tabla)
+    if not encontrados:
+        return f"No conozco ninguna tabla o vista {tabla!r}."
+    base, objeto = encontrados[0]
+
+    # El nombre de una columna no puede viajar como parametro, asi que se
+    # resuelve contra el catalogo y se usa el del catalogo, no el del modelo:
+    # lo que termina en el SQL nunca es texto libre.
+    por_nombre = {c["nombre"].casefold(): c["nombre"] for c in objeto["columnas"]}
+    real = por_nombre.get(columna.strip().strip("[]").casefold())
+    if real is None:
+        return (
+            f"{objeto['nombre']} no tiene columna {columna!r}. Tiene: "
+            + ", ".join(c["nombre"] for c in objeto["columnas"])
+        )
+
+    sql = (
+        f"SELECT DISTINCT TOP {MAX_VALORES} {_corchetes(real)} "
+        f"FROM {_corchetes(base)}.dbo.{_corchetes(objeto['nombre'])} "
+        f"WHERE {_corchetes(real)} IS NOT NULL ORDER BY 1"
+    )
+
+    ctx = _contexto_actual()
+    try:
+        with ctx.engine.connect() as conexion:
+            with _presupuesto_de_tiempo(conexion, TIMEOUT_VALORES):
+                filas = conexion.exec_driver_sql(sql).fetchall()
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo al listar valores distintos")
+        # Un DISTINCT sobre ETL_Consolidado_B2B (39M filas, UNION ALL de nueve
+        # vistas agregadas) tarda minutos. NO se responde con una muestra: las
+        # primeras filas de la vista son todas de un mismo retailer, asi que
+        # una muestra de 50k devuelve 3 de los 16 valores y el modelo
+        # concluiria que los demas no existen. Mejor decir que no se pudo.
+        # Sin el texto del driver: al agotarse el tiempo pyodbc cierra la
+        # conexion y reporta "Attempt to use a closed connection", que suena a
+        # un problema de red y manda a investigar donde no es.
+        return (
+            f"No pude listar los valores de {real} en {objeto['nombre']}: "
+            f"es una columna demasiado grande para enumerarla en "
+            f"{TIMEOUT_VALORES}s. Sigue con lo que ya sabes del prompt, o "
+            "acota por fecha en la consulta final."
+        )
+
+    if not filas:
+        return f"{real} no tiene valores en {objeto['nombre']}."
+    valores = "\n".join(f"  {fila[0]}" for fila in filas)
+    aviso = f"\n(solo los primeros {MAX_VALORES})" if len(filas) == MAX_VALORES else ""
+    return f"Valores de {real} en {objeto['nombre']}:\n{valores}{aviso}"
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
@@ -537,7 +649,7 @@ def consultar_sql(query: str) -> str:
     resultado = formatear_resultado(df)
     if resultado.necesita_excel:
         try:
-            ctx.archivos.append(ExcelExporter.export_to_excel(df))
+            ctx.registrar_reporte(ExcelExporter.export_to_excel(df))
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"
@@ -646,6 +758,20 @@ class SQLAgent:
         4. Para obtener los datos finales que responden la pregunta usa SIEMPRE la
            herramienta `consultar_sql`. Ella decide sola si la respuesta va como
            texto o como archivo Excel; no le pidas que exporte.
+           `consultar_sql` es SOLO para la respuesta final, nunca para explorar.
+           Para explorar tienes tres herramientas que NO generan reporte:
+           `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
+           celular) y `valores_distintos` (como estan escritos los valores de una
+           columna). El archivo que recibe el usuario es el de tu PRIMERA
+           llamada a `consultar_sql`: haz ahi la consulta completa, con todas
+           las columnas que te pidieron. Cualquier comprobacion va ANTES, con
+           las herramientas de exploracion, nunca como un segundo
+           `consultar_sql`.
+           Si el usuario pide una columna mas ("agregale el modelo"), vuelve a
+           correr UNA sola consulta con esa columna agregada a las que ya tenia.
+           Nunca la traigas por separado: dos consultas dan dos tablas a medias
+           -- las ventas sin el modelo y los modelos sin las ventas -- y ninguna
+           responde lo que se pidio.
         5. Respondes en un telefono: se breve. No repitas la tabla de resultados en
            tu respuesta final, resumela en una o dos frases.
         6. Si una herramienta devuelve un mensaje de error (por ejemplo, de la base
@@ -714,7 +840,12 @@ class SQLAgent:
             agent_type="openai-tools",
             verbose=False,
             prompt=prompt,
-            extra_tools=[consultar_sql, describir_objeto, buscar_modelos],
+            extra_tools=[
+                consultar_sql,
+                describir_objeto,
+                buscar_modelos,
+                valores_distintos,
+            ],
         )
 
     def responder(self, pregunta: str) -> tuple[str, list[str]]:

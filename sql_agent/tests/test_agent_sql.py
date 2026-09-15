@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
+import agent as modulo_agente
 from agent import (
     SQLAgent,
     _donde_vive_de_verdad,
@@ -16,6 +17,7 @@ from agent import (
     consultar_sql,
     contexto_peticion,
     es_select,
+    valores_distintos,
 )
 from formatting import MAX_ROWS_AS_TEXT
 
@@ -432,6 +434,26 @@ class TestConsultarSql:
         assert ctx.archivos[0].endswith(".xlsx")
         assert os.path.isabs(ctx.archivos[0])
 
+    def test_dos_consultas_dejan_un_solo_reporte_el_primero(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Una pregunta, un archivo. Antes se acumulaban: el usuario pidio
+        # agregar el modelo a un reporte de ventas y recibio DOS Excel --
+        # 11 501 filas de ventas sin el modelo, y 4 509 nombres de modelo sin
+        # ventas-- cuando queria una sola tabla con ambas cosas.
+        #
+        # Se queda el PRIMERO: una consulta que falla no genera archivo, asi
+        # que la primera exitosa es la respuesta, y lo que venga despues en la
+        # misma vuelta son comprobaciones. Quedandose con el ultimo, una
+        # prueba real mando la lista de 16 retailers en vez de las ventas.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        with contexto_peticion(engine) as ctx:
+            consultar_sql.invoke({"query": "SELECT * FROM ventas"})
+            primero = ctx.archivos[0]
+            consultar_sql.invoke({"query": "SELECT tienda FROM ventas"})
+
+        assert ctx.archivos == [primero]
+
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "DROP TABLE ventas"})
@@ -549,7 +571,12 @@ class TestToolkitDelAgente:
         monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
         agente = SQLAgent(engine=engine)
         nombres = {herramienta.name for herramienta in agente.agent_executor.tools}
-        assert nombres == {"consultar_sql", "describir_objeto", "buscar_modelos"}
+        assert nombres == {
+            "consultar_sql",
+            "describir_objeto",
+            "buscar_modelos",
+            "valores_distintos",
+        }
 
 
 class _EjecutorEspia:
@@ -719,6 +746,11 @@ class _MotorDeCatalogo:
         self.filas = filas
         self.sql = None
         self.parametros = None
+        # Lo que SQLAlchemy expone como conexion cruda. En None, el
+        # presupuesto de tiempo de `valores_distintos` no encuentra donde
+        # fijar el timeout y sigue de largo, que es lo correcto fuera de
+        # pyodbc.
+        self.connection = None
 
     def connect(self):
         return self
@@ -811,3 +843,53 @@ class TestBuscarModelos:
         motor = _MotorDeCatalogo([])
         with contexto_peticion(motor):
             assert "al menos una palabra" in buscar_modelos.invoke({"texto": "!!! ???"})
+
+
+class TestValoresDistintos:
+    """Explorar valores sin generar un reporte.
+
+    Existe porque el agente corria `SELECT DISTINCT [Retail]` por
+    `consultar_sql` para comprobar como estaban escritos los valores, y esa
+    comprobacion se convertia en un Excel que pisaba el reporte de verdad: el
+    usuario recibia la lista de retailers en vez de sus ventas.
+    """
+
+    def _invocar(self, tabla, columna, filas=()):
+        motor = _MotorDeCatalogo(list(filas))
+        with contexto_peticion(motor):
+            return motor, valores_distintos.invoke({"tabla": tabla, "columna": columna})
+
+    def test_lista_los_valores(self):
+        _, respuesta = self._invocar(
+            "EKT_B2B", "Carrier", [("ABIERTA",), ("TELCEL",)]
+        )
+        assert "ABIERTA" in respuesta and "TELCEL" in respuesta
+
+    def test_una_tabla_desconocida_no_llega_a_la_base(self):
+        motor, respuesta = self._invocar("TablaInventada", "Retail")
+        assert "No conozco" in respuesta
+        assert motor.sql is None
+
+    def test_una_columna_inexistente_lista_las_que_si_hay(self):
+        motor, respuesta = self._invocar("EKT_B2B", "NoExiste")
+        assert "no tiene columna" in respuesta
+        assert "Carrier" in respuesta  # le dice cuales si existen
+        assert motor.sql is None
+
+    def test_el_nombre_de_columna_nunca_viaja_como_texto_libre(self):
+        # Un identificador no se puede parametrizar, asi que se resuelve
+        # contra el catalogo y al SQL va el nombre del CATALOGO, nunca lo que
+        # escribio el modelo.
+        motor, respuesta = self._invocar("EKT_B2B", "Carrier]; DROP TABLE x--")
+        assert "no tiene columna" in respuesta
+        assert motor.sql is None
+
+    def test_el_sql_usa_el_nombre_calificado_y_un_tope(self):
+        motor, _ = self._invocar("EKT_B2B", "carrier", [("TELCEL",)])
+        assert "[RAW_DATA_B2B].dbo.[EKT_B2B]" in motor.sql
+        assert f"TOP {modulo_agente.MAX_VALORES}" in motor.sql
+
+    def test_avisa_cuando_la_lista_quedo_cortada(self):
+        filas = [(f"v{i}",) for i in range(modulo_agente.MAX_VALORES)]
+        _, respuesta = self._invocar("EKT_B2B", "Carrier", filas)
+        assert "solo los primeros" in respuesta

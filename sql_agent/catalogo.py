@@ -49,6 +49,16 @@ NOTAS_GENERALES = [
     "con 'Invalid object name'. Las tablas crudas son su insumo y no cuadran con ella (filtran "
     "distinto y no estan agregadas); ve a ellas solo si te piden el dato "
     "crudo, y entonces avisa que no es la cifra oficial.",
+    "Este es el BI de Honor Mexico, pero las tablas de venta traen TODAS las "
+    "marcas (Samsung, Motorola, Oppo, Xiaomi, Apple...): son datos de "
+    "competencia. Por eso 'las ventas de Honor' NO son el total de la tabla: "
+    "exigen `[Brand] = 'HONOR'` explicito. Si el usuario nombra una marca y no "
+    "filtras por ella, le estaras reportando el mercado entero como si fuera "
+    "de esa marca, y el numero saldra varias veces mas grande de lo real.",
+    "En las tablas de venta no hay columna [Model] ni [Modelo]. El modelo del "
+    "telefono va dentro de [Material_Description] en ETL_Consolidado_B2B (y en "
+    "[Modelo Homologado] o [Desc Sku] en las crudas). [Brand] es el "
+    "fabricante, no el modelo.",
     "En ETL_Consolidado_B2B cada fila es una combinacion de tienda, SKU, "
     "carrier y dia ya sumada, no un movimiento suelto. Para unidades vendidas "
     "usa SUM([QTY]); COUNT(*) responde otra pregunta y casi nunca es la que "
@@ -56,11 +66,13 @@ NOTAS_GENERALES = [
     "Los nombres de retailer no son uniformes ni una sola etiqueta por cadena: "
     "Elektra aparece como 'ELEKTRA' en mayusculas, y Telcel esta repartido en "
     "'TELCEL CAC', 'TELCEL RETAIL', 'TELCEL DISTR. ASOC.', 'TELCEL WEB', "
-    "'TELCEL CORPO.' y 'TELCEL VENTA EMP.'. Filtra con LIKE, o consulta antes "
-    "los valores distintos de la columna.",
+    "'TELCEL CORPO.' y 'TELCEL VENTA EMP.'. Filtra con LIKE, o mira antes con "
+    "`valores_distintos` como estan escritos.",
     "Si una consulta devuelve cero filas, NO concluyas que no hay datos: casi "
-    "siempre el filtro esta mal. Comprueba los valores distintos de la columna "
-    "que filtraste antes de responderle al usuario que no hay informacion.",
+    "siempre el filtro esta mal. Revisa con `valores_distintos` la columna que "
+    "filtraste antes de responderle al usuario que no hay informacion. Esa "
+    "comprobacion va SIEMPRE por `valores_distintos`, nunca por un SELECT "
+    "DISTINCT en `consultar_sql`: eso generaria un reporte que pisa el bueno.",
 ]
 
 # Notas de un objeto concreto, que salen cuando el agente lo consulta.
@@ -74,6 +86,12 @@ NOTAS_POR_OBJETO = {
     "ETL_Consolidado_B2B": (
         "Se escribe [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]; no esta en "
         "[GTM BI Database]. "
+        "NO tiene columna [Model] ni [Modelo]: el modelo del telefono vive "
+        "dentro de [Material_Description] (que es el SKU mas la descripcion, "
+        "p. ej. 'N.HMG8LTNBDLCH AT&T Dealers HONOR MAGIC8 LITE 512GB 5G'). "
+        "Si te piden agrupar o mostrar 'el modelo', esa es la columna. "
+        "[Brand] es el fabricante (HONOR, SAMSUNG), no el modelo: no la uses "
+        "como reemplazo. "
         "LA fuente oficial de venta B2B: es la que usa el negocio, asi que sus "
         "numeros son los buenos. Union de las nueve vistas vw_ETL_*, una por "
         "retailer, ya normalizadas. [Year], [Month] y [Day] son enteros. "
