@@ -44,7 +44,9 @@ NOTAS_GENERALES = [
     "La vista [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] es la fuente OFICIAL de "
     "venta B2B, la que usa el negocio: unifica a todos los retailers con "
     "columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Usala por "
-    "defecto. Las tablas crudas son su insumo y no cuadran con ella (filtran "
+    "defecto, y escribe su nombre COMPLETO tal cual: vive en RAW_DATA_B2B y "
+    "NO en [GTM BI Database] -- escribirla ahi es el error mas comun y falla "
+    "con 'Invalid object name'. Las tablas crudas son su insumo y no cuadran con ella (filtran "
     "distinto y no estan agregadas); ve a ellas solo si te piden el dato "
     "crudo, y entonces avisa que no es la cifra oficial.",
     "En ETL_Consolidado_B2B cada fila es una combinacion de tienda, SKU, "
@@ -70,6 +72,8 @@ NOTAS_POR_OBJETO = {
         "mes usa el rango de [Day], que si es datetime."
     ),
     "ETL_Consolidado_B2B": (
+        "Se escribe [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]; no esta en "
+        "[GTM BI Database]. "
         "LA fuente oficial de venta B2B: es la que usa el negocio, asi que sus "
         "numeros son los buenos. Union de las nueve vistas vw_ETL_*, una por "
         "retailer, ya normalizadas. [Year], [Month] y [Day] son enteros. "

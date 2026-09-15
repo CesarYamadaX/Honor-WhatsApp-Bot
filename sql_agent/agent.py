@@ -481,6 +481,8 @@ def buscar_modelos(texto: str) -> str:
     )
     lineas.append(
         "COMO FILTRAR ESTO EN LAS VENTAS:\n"
+        "- La tabla es [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B], escrita "
+        "completa y tal cual. NO esta en [GTM BI Database].\n"
         "- La marca va por su COLUMNA: `[Brand] = 'HONOR'`. Meter la marca en "
         "el LIKE de la descripcion PIERDE ventas, porque no todas las "
         "descripciones repiten la marca.\n"
