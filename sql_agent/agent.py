@@ -25,7 +25,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
-from catalogo import _corchetes, buscar, describir_objeto, indice
+from catalogo import _corchetes, buscar, describir_objeto, indice, valores_conocidos
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
 from formatting import formatear_resultado
@@ -597,6 +597,15 @@ def valores_distintos(tabla: str, columna: str) -> str:
             + ", ".join(c["nombre"] for c in objeto["columnas"])
         )
 
+    # Primero la foto. En las columnas que el agente consulta seguido
+    # (retailers, marcas, carriers, anios) el DISTINCT contra la vista grande
+    # tarda minutos: en produccion se comia los 20s de timeout sin devolver
+    # nada, tres veces, y agotaba los 90 de la peticion antes de que la
+    # consulta real alcanzara a correr.
+    precalculados = valores_conocidos(objeto["nombre"], real)
+    if precalculados is not None:
+        return _listar(real, objeto["nombre"], precalculados)
+
     sql = (
         f"SELECT DISTINCT TOP {MAX_VALORES} {_corchetes(real)} "
         f"FROM {_corchetes(base)}.dbo.{_corchetes(objeto['nombre'])} "
@@ -625,11 +634,24 @@ def valores_distintos(tabla: str, columna: str) -> str:
             "acota por fecha en la consulta final."
         )
 
-    if not filas:
-        return f"{real} no tiene valores en {objeto['nombre']}."
-    valores = "\n".join(f"  {fila[0]}" for fila in filas)
-    aviso = f"\n(solo los primeros {MAX_VALORES})" if len(filas) == MAX_VALORES else ""
-    return f"Valores de {real} en {objeto['nombre']}:\n{valores}{aviso}"
+    return _listar(real, objeto["nombre"], [fila[0] for fila in filas])
+
+
+def _listar(columna: str, objeto: str, valores: list) -> str:
+    if not valores:
+        return f"{columna} no tiene valores en {objeto}."
+    lineas = "\n".join(f"  {v}" for v in valores[:MAX_VALORES])
+    if len(valores) > MAX_VALORES:
+        # Viene de la foto, que trae la lista completa: se puede decir cuantos
+        # quedaron fuera.
+        aviso = f"\n(solo los primeros {MAX_VALORES} de {len(valores)})"
+    elif len(valores) == MAX_VALORES:
+        # Viene de la base con TOP 50: puede haber mas, no hay forma de saber
+        # cuantos sin pagar otra consulta.
+        aviso = f"\n(solo los primeros {MAX_VALORES})"
+    else:
+        aviso = ""
+    return f"Valores de {columna} en {objeto}:\n{lineas}{aviso}"
 
 
 def _ejecutar_interrumpible(conexion, query: str, cancelacion) -> pd.DataFrame:

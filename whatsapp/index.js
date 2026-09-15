@@ -368,6 +368,18 @@ async function arrancar() {
         socketActual = null;
 
         const codigo = lastDisconnect?.error?.output?.statusCode;
+        // El motivo, no solo el hecho: un bucle de reconexion se ve igual en
+        // el log venga de una sesion cerrada, de un reemplazo por otra
+        // instancia o de un error del servidor, y sin el codigo no hay forma
+        // de saber cual de los tres es.
+        const motivo =
+          Object.keys(DisconnectReason).find((k) => DisconnectReason[k] === codigo) ??
+          "desconocido";
+        console.log(
+          `[whatsapp] desconectado (${motivo}, codigo ${codigo ?? "sin codigo"})` +
+            `${lastDisconnect?.error?.message ? `: ${lastDisconnect.error.message}` : ""}`,
+        );
+
         if (codigo === DisconnectReason.loggedOut) {
           // La sesion se cerro desde el telefono: hay que volver a parear.
           console.log("[whatsapp] sesion cerrada, borrando credenciales");
@@ -378,7 +390,6 @@ async function arrancar() {
           }
           intentosReconexion = 0;
         }
-        console.log("[whatsapp] desconectado");
       }
     } catch (error) {
       console.error(`[whatsapp] fallo procesando connection.update: ${error.message}`);

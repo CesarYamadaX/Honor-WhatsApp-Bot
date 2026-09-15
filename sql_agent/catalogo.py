@@ -19,6 +19,35 @@ from pathlib import Path
 from langchain.tools import tool
 
 RUTA_CATALOGO = Path(__file__).with_name("catalogo.json")
+RUTA_VALORES = Path(__file__).with_name("valores.json")
+
+
+@lru_cache(maxsize=1)
+def cargar_valores() -> dict:
+    """Valores conocidos de las columnas que el agente consulta seguido.
+
+    Son una foto, calculada una vez contra el servidor. Existen porque un
+    SELECT DISTINCT sobre ETL_Consolidado_B2B (39M filas, UNION ALL de nueve
+    vistas agregadas) tarda minutos: en produccion cada consulta de esas se
+    comia los 20s de timeout de `valores_distintos` sin devolver nada, y tres
+    llamadas agotaban los 90 segundos de la peticion entera antes de que la
+    consulta de verdad alcanzara a correr.
+
+    Son columnas de baja cardinalidad y poco movimiento (retailers, marcas,
+    carriers, anios): si aparece un retailer nuevo, se regenera el archivo.
+    """
+    if not RUTA_VALORES.exists():
+        return {}
+    return json.loads(RUTA_VALORES.read_text(encoding="utf-8"))
+
+
+def valores_conocidos(objeto: str, columna: str) -> list[str] | None:
+    """Los valores precalculados de esa columna, o None si no hay foto."""
+    por_objeto = cargar_valores().get(objeto, {})
+    for nombre, valores in por_objeto.items():
+        if nombre.casefold() == columna.casefold():
+            return valores
+    return None
 
 # Lo que el esquema NO dice y hace que el agente se equivoque con seguridad.
 #

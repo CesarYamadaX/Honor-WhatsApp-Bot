@@ -55,6 +55,16 @@ class TestNotasDeNegocio:
         assert "NOTA:" in ficha
         assert "[Retail]" in ficha
 
+    def test_cada_columna_con_valores_existe_de_verdad(self):
+        # Una foto de valores sobre una columna renombrada nunca se mostraria
+        # y el agente volveria al DISTINCT lento sin que nadie lo note.
+        for objeto, columnas in catalogo.cargar_valores().items():
+            encontrados = catalogo.buscar(objeto)
+            assert encontrados, f"{objeto} ya no existe en el catalogo"
+            reales = {c["nombre"].casefold() for c in encontrados[0][1]["columnas"]}
+            for columna in columnas:
+                assert columna.casefold() in reales, f"{objeto}.{columna} ya no existe"
+
     def test_cada_objeto_anotado_existe_en_el_catalogo(self):
         # Una nota sobre una tabla renombrada o borrada nunca se mostraria, y
         # nadie se enteraria de que quedo muerta.

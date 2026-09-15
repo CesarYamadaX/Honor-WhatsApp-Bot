@@ -882,6 +882,20 @@ class TestValoresDistintos:
         )
         assert "ABIERTA" in respuesta and "TELCEL" in respuesta
 
+    def test_las_columnas_con_foto_no_tocan_la_base(self):
+        # Regresion de produccion: un DISTINCT sobre ETL_Consolidado_B2B
+        # (39M filas) tarda ~200s. El agente lo pedia para [Retail] y [Year]
+        # en cada consulta, agotaba los 20s de timeout sin devolver nada, y
+        # tres llamadas se comian los 90s de la peticion antes de que la
+        # consulta real alcanzara a correr: el usuario recibia un 504.
+        motor, respuesta = self._invocar("ETL_Consolidado_B2B", "Retail")
+        assert motor.sql is None, "no debe consultar la base: hay valores precalculados"
+        assert "Coppel" in respuesta and "ELEKTRA" in respuesta
+
+    def test_una_columna_sin_foto_si_consulta_la_base(self):
+        motor, _ = self._invocar("ETL_Consolidado_B2B", "Store", [(1,), (2,)])
+        assert motor.sql is not None
+
     def test_una_tabla_desconocida_no_llega_a_la_base(self):
         motor, respuesta = self._invocar("TablaInventada", "Retail")
         assert "No conozco" in respuesta
