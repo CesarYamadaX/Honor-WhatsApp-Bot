@@ -10,10 +10,14 @@ const MENSAJES = {
 
 // Red de seguridad para cuando el servicio nunca contesta (proceso Python
 // muerto a media peticion, socket a medio abrir, etc). Deliberadamente por
-// encima de los 90s de timeout del lado Python: en el caso normal el 504
-// del servicio gana primero y da un mensaje mas especifico. Este timeout
-// solo cubre el caso en que ni siquiera eso llega.
-const TIMEOUT_MS_DEFAULT = 120_000;
+// encima del peor caso del lado Python: hasta CANCEL_WAIT_SECONDS (60s)
+// esperando a que la consulta anterior se de por cancelada, MAS los
+// AGENT_TIMEOUT_SECONDS (90s) de la consulta nueva. Si este numero fuera
+// menor que esa suma, el sidecar abandonaria una peticion que todavia iba a
+// contestar y le diria al usuario que el sistema no esta disponible, que es
+// falso. En el caso normal el 504 del servicio gana primero y da un mensaje
+// mas especifico; esto solo cubre que ni siquiera eso llegue.
+const TIMEOUT_MS_DEFAULT = 180_000;
 
 // Timeout corto: es una comprobacion en memoria contra la allowlist, sin base
 // de datos ni modelo de por medio.
