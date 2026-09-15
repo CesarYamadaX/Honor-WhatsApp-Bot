@@ -892,10 +892,49 @@ class TestValoresDistintos:
         assert motor.sql is None, "no debe consultar la base: hay valores precalculados"
         assert "Coppel" in respuesta and "ELEKTRA" in respuesta
 
-    def test_una_consulta_que_agota_el_presupuesto_pide_acotar(self):
-        # Antes una consulta pesada se llevaba los 90s enteros y el usuario no
-        # recibia NADA: ni datos ni explicacion, solo un 504 y silencio. Ahora
-        # el SQL se corta a tiempo y el agente puede decirle que acote.
+    def test_sin_presupuesto_no_se_intenta_otra_consulta(self):
+        # Del log de produccion: la primera consulta se comio 67 de los 90
+        # segundos y los tres reintentos recibieron el piso de 10s, que no
+        # alcanza para NINGUNA consulta contra la vista consolidada. El agente
+        # quedo en un bucle de intentos condenados mientras el usuario
+        # esperaba sin recibir nada. Mejor no correr y decirselo.
+        class _CursorNoUsado:
+            description = None
+
+            def execute(self, *_):
+                raise AssertionError("no deberia ejecutarse: no queda tiempo")
+
+            def close(self):
+                pass
+
+        class _MotorNoUsado:
+            def __init__(self):
+                self.connection = self
+
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def cursor(self):
+                return _CursorNoUsado()
+
+        with contexto_peticion(_MotorNoUsado()) as ctx:
+            ctx.inicio -= modulo_agente.TIMEOUT_PETICION
+            respuesta = consultar_sql.invoke(
+                {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+
+        assert "No reintentes" in respuesta
+
+    def test_una_consulta_cortada_por_tiempo_explica_la_causa_real(self):
+        # El consejo NO puede ser "acotala por fecha": esta medido que un SUM
+        # de un solo mes tarda lo mismo. Lo que si cambia el resultado es
+        # dejar de filtrar la vista consolidada por [Retail].
         class _CursorLento:
             description = None
 
@@ -921,15 +960,14 @@ class TestValoresDistintos:
             def cursor(self):
                 return _CursorLento()
 
-        with contexto_peticion(_MotorLento()) as ctx:
-            # La peticion arranco hace mucho: no queda presupuesto.
-            ctx.inicio -= modulo_agente.TIMEOUT_PETICION
+        # Con presupuesto de sobra: lo que corta es el driver, no el reloj.
+        with contexto_peticion(_MotorLento()):
             respuesta = consultar_sql.invoke(
                 {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
             )
 
-        assert "Acotala" in respuesta
-        assert "[Year]" in respuesta, "debe decirle COMO acotar, no solo que fallo"
+        assert "[Retail]" in respuesta, "debe señalar la causa real"
+        assert "NO va a ayudar" in respuesta, "no debe sugerir acotar por fecha"
 
     def test_una_columna_sin_foto_si_consulta_la_base(self):
         motor, _ = self._invocar("ETL_Consolidado_B2B", "Store", [(1,), (2,)])

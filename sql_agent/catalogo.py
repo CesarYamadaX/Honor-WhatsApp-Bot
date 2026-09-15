@@ -84,6 +84,17 @@ NOTAS_GENERALES = [
     "exigen `[Brand] = 'HONOR'` explicito. Si el usuario nombra una marca y no "
     "filtras por ella, le estaras reportando el mercado entero como si fuera "
     "de esa marca, y el numero saldra varias veces mas grande de lo real.",
+    "RENDIMIENTO, medido: filtrar ETL_Consolidado_B2B por [Brand] tarda ~9s, "
+    "pero filtrarla por [Retail] tarda entre 60 y 210 SEGUNDOS y se pasa del "
+    "tiempo disponible. El motivo es que [Retail] es una constante fija en "
+    "cada una de las nueve vistas que la union junta, asi que el motor no "
+    "puede descartar ninguna y las calcula todas. Acotar por fecha NO ayuda: "
+    "medido, un solo SUM de un mes tarda 63s igual. "
+    "Entonces: si la pregunta es de UN retailer y necesitas detalle (por "
+    "modelo, por tienda), consulta la tabla cruda de ese retailer en "
+    "RAW_DATA_B2B --COPPEL_B2B responde en 1 segundo-- y avisale al usuario "
+    "que es el dato crudo y no la cifra consolidada. Deja la vista "
+    "consolidada para comparar entre retailers o para filtrar por marca.",
     "En las tablas de venta no hay columna [Model] ni [Modelo]. El modelo del "
     "telefono va dentro de [Material_Description] en ETL_Consolidado_B2B (y en "
     "[Modelo Homologado] o [Desc Sku] en las crudas). [Brand] es el "

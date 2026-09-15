@@ -69,17 +69,17 @@ class Config:
     # (el SELECT se aborta con cursor.cancel()); este plazo cubre el caso
     # feo, que es estar dentro de una llamada al modelo, que no se puede
     # interrumpir. Pasado el plazo se responde 429, como antes.
-    espera_cancelacion: float = 60.0
+    espera_cancelacion: float = 25.0
 
     @classmethod
     def desde_entorno(cls) -> "Config":
         return cls(
             allowlist=_leer_allowlist(),
-            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 90),
+            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 150),
             ttl_minutos=_leer_entero("SESSION_TTL_MINUTES", 60),
             api_host=os.getenv("API_HOST", "127.0.0.1"),
             api_port=_leer_entero("API_PORT", 8000),
-            espera_cancelacion=_leer_entero("CANCEL_WAIT_SECONDS", 60),
+            espera_cancelacion=_leer_entero("CANCEL_WAIT_SECONDS", 25),
         )
 
     def autorizado(self, chat_id: str) -> bool:

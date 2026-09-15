@@ -563,14 +563,17 @@ def buscar_modelos(texto: str) -> str:
 # Debe coincidir con AGENT_TIMEOUT_SECONDS: es el presupuesto que la API le
 # da a la peticion completa. Aqui solo se usa para repartirlo, no para
 # imponerlo.
-TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 90)
+TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 150)
 # Lo que se reserva para armar el Excel y la grafica y devolver la respuesta.
 MARGEN_DE_ENTREGA = 20
+# Por debajo de esto no vale la pena intentar: contra la vista consolidada,
+# hasta un SUM de un solo mes tarda mas de un minuto (medido).
+MINIMO_UTIL = 30
 
 MAX_VALORES = 50
 
 # Explorar no puede costar la respuesta: la peticion entera vive dentro de
-# AGENT_TIMEOUT_SECONDS (90s por defecto), que ademas tiene que alcanzar para
+# AGENT_TIMEOUT_SECONDS (150s por defecto), que ademas tiene que alcanzar para
 # la consulta real y para armar el Excel.
 TIMEOUT_VALORES = 20
 
@@ -764,7 +767,19 @@ def consultar_sql(query: str) -> str:
     # segundos enteros y el usuario no recibe NADA: ni datos ni explicacion,
     # solo silencio y un 504. Asi, en el peor caso el agente se entera a
     # tiempo y puede decirle que acote la pregunta.
-    presupuesto = max(10, int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA))
+    presupuesto = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
+    if presupuesto < MINIMO_UTIL:
+        # Antes aqui habia un piso de 10s, y era peor que no correr: ninguna
+        # consulta contra la vista consolidada baja de eso, asi que el agente
+        # reintentaba una y otra vez con un presupuesto que no le alcanzaba a
+        # nada. En el log se ven cuatro intentos seguidos cortados a los 10s
+        # mientras el usuario esperaba sin recibir nada.
+        return (
+            "Ya no queda tiempo en esta peticion para otra consulta. No "
+            "reintentes: dile al usuario que la consulta resulto demasiado "
+            "pesada y sugierele preguntar por un retailer o un periodo "
+            "concretos."
+        )
     comenzo = time.monotonic()
     try:
         with ctx.engine.connect() as conexion:
@@ -790,8 +805,12 @@ def consultar_sql(query: str) -> str:
             # tal cual para que acote en vez de reintentar lo mismo.
             return (
                 f"La consulta tardo mas de {presupuesto}s y la cancele para no "
-                "dejar al usuario sin respuesta. Acotala: filtra por [Year] y "
-                "[Month], agrupa menos columnas, o usa TOP."
+                "dejar al usuario sin respuesta. Acotarla por fecha NO va a "
+                "ayudar (medido: un SUM de un solo mes tarda lo mismo). Si "
+                "filtraste ETL_Consolidado_B2B por [Retail], ESE es el "
+                "problema: repite la consulta sobre la tabla cruda de ese "
+                "retailer en RAW_DATA_B2B, que responde en segundos, y avisa "
+                "que es el dato crudo."
             )
         return f"Error al ejecutar la consulta: {error}{_donde_vive_de_verdad(error)}"
 
