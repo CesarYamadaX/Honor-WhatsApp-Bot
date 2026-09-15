@@ -66,7 +66,13 @@ NOTAS_POR_OBJETO = {
     "ETL_Consolidado_B2B": (
         "Vista normalizada con TODOS los retailers: el mejor punto de partida "
         "para comparar entre cadenas o para una pregunta de un retailer cuya "
-        "tabla cruda no conoces. [Year], [Month] y [Day] son enteros."
+        "tabla cruda no conoces. [Year], [Month] y [Day] son enteros. OJO: "
+        "excluye las filas con QTY negativo (devoluciones/ajustes) que si "
+        "aparecen en las tablas crudas de RAW_DATA_B2B -- verificado en "
+        "EKT_B2B marzo 2026: cruda=144,190 (incluye -250 de 233 filas "
+        "negativas), ETL=144,440 (solo positivas). Si alguien pregunta por "
+        "que un total no cuadra con la tabla cruda, esta es la razon; no "
+        "significa que uno de los dos este mal."
     ),
     "TBL_DB_FOR_DOS": (
         "Su columna [Retail] solo contiene 'Coppel', 'Liverpool Offline' y "
