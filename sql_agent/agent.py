@@ -27,6 +27,7 @@ from sqlparse import tokens as sql_tokens
 
 from catalogo import _corchetes, buscar, describir_objeto, indice
 from excel_exporter import ExcelExporter
+from grafica import exportar_grafica
 from formatting import formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
@@ -361,8 +362,8 @@ class ContextoPeticion:
     # cooperativa: se revisa antes de cada herramienta y se aborta ahi.
     cancelacion: threading.Event | None = None
 
-    def registrar_reporte(self, ruta: str) -> None:
-        """Guarda el reporte de la pregunta. Solo cuenta el primero.
+    def registrar_reporte(self, *rutas: str | None) -> None:
+        """Guarda los adjuntos de la pregunta. Solo cuenta la primera consulta.
 
         Una pregunta, un archivo. Antes se acumulaban y se enviaban todos: el
         usuario pidio agregar el modelo a un reporte de ventas y recibio dos
@@ -378,7 +379,7 @@ class ContextoPeticion:
         retailers en vez de las ventas que se habian pedido.
         """
         if not self.archivos:
-            self.archivos.append(ruta)
+            self.archivos.extend(r for r in rutas if r)
 
 
 _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default=None)
@@ -725,10 +726,21 @@ def consultar_sql(query: str) -> str:
     resultado = formatear_resultado(df)
     if resultado.necesita_excel:
         try:
-            ctx.registrar_reporte(ExcelExporter.export_to_excel(df))
+            excel = ExcelExporter.export_to_excel(df)
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"
+
+        # La grafica va primero: en el chat se ve de un vistazo, y el Excel
+        # queda debajo para quien quiera el detalle. Que falle no cuesta el
+        # reporte: los datos son lo que se pidio.
+        try:
+            imagen = exportar_grafica(df)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo generar la grafica; se manda solo el Excel")
+            imagen = None
+
+        ctx.registrar_reporte(imagen, excel)
     return resultado.texto
 
 

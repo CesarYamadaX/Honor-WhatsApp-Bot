@@ -430,9 +430,10 @@ class TestConsultarSql:
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "SELECT * FROM ventas"})
         assert "Excel" in salida
-        assert len(ctx.archivos) == 1
-        assert ctx.archivos[0].endswith(".xlsx")
-        assert os.path.isabs(ctx.archivos[0])
+        # Dos adjuntos: la grafica como imagen (va primera, se ve de un
+        # vistazo en el chat) y el Excel con los datos debajo.
+        assert [os.path.splitext(r)[1] for r in ctx.archivos] == [".png", ".xlsx"]
+        assert all(os.path.isabs(r) for r in ctx.archivos)
 
     def test_dos_consultas_dejan_un_solo_reporte_el_primero(
         self, engine, tmp_path, monkeypatch
@@ -449,10 +450,10 @@ class TestConsultarSql:
         monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
         with contexto_peticion(engine) as ctx:
             consultar_sql.invoke({"query": "SELECT * FROM ventas"})
-            primero = ctx.archivos[0]
+            de_la_primera = list(ctx.archivos)
             consultar_sql.invoke({"query": "SELECT tienda FROM ventas"})
 
-        assert ctx.archivos == [primero]
+        assert ctx.archivos == de_la_primera
 
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
@@ -542,7 +543,8 @@ class TestConsultarSql:
             barrera.wait()  # ambos hilos entran a la vez, mismo instante logico
             with contexto_peticion(motor) as ctx:
                 consultar_sql.invoke({"query": "SELECT * FROM ventas"})
-                rutas[nombre] = ctx.archivos[0]
+                # El .xlsx, no el primer adjunto: la grafica va primera.
+                rutas[nombre] = next(r for r in ctx.archivos if r.endswith(".xlsx"))
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             futuro_a = pool.submit(peticion, "a", motor_a)

@@ -185,6 +185,14 @@ async function enviarArchivo(jid, ruta) {
     return;
   }
 
+  // La grafica va como IMAGEN, no como documento: asi se ve en la propia
+  // conversacion, sin abrir nada. Antes viajaba dentro del Excel, en una
+  // segunda hoja que en el telefono nadie abre.
+  if (path.extname(ruta).toLowerCase() === ".png") {
+    await socketActual.sendMessage(jid, { image: contenido, mimetype: "image/png" });
+    return;
+  }
+
   await socketActual.sendMessage(jid, {
     document: contenido,
     fileName: path.basename(ruta),

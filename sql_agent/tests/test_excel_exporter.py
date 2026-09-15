@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 import excel_exporter
-from excel_exporter import HOJA_DATOS, HOJA_GRAFICA, MAX_CATEGORIAS, ExcelExporter
+from excel_exporter import HOJA_DATOS, ExcelExporter
 
 
 def _df():
@@ -76,108 +76,15 @@ def _exportar(df, tmp_path, monkeypatch, nombre="reporte.xlsx"):
     return openpyxl.load_workbook(ExcelExporter.export_to_excel(df, filename=nombre))
 
 
-def _grafica(libro):
-    return libro[HOJA_GRAFICA]._charts[0]
-
-
-def _color(serie) -> str:
-    """Hex del relleno de una serie; al releer, openpyxl lo envuelve."""
-    relleno = serie.graphicalProperties.solidFill
-    return getattr(relleno, "srgbClr", relleno)
-
-
-class TestGrafica:
-    def test_barras_para_comparar_magnitudes(self, tmp_path, monkeypatch):
-        libro = _exportar(
-            pd.DataFrame({"Retail": ["Coppel", "Elektra", "Liverpool"], "QTY": [1, 2, 3]}),
-            tmp_path,
-            monkeypatch,
-        )
-        assert libro.sheetnames == [HOJA_DATOS, HOJA_GRAFICA]
-        assert type(_grafica(libro)).__name__ == "BarChart"
-
-    def test_linea_cuando_hay_una_columna_de_fecha(self, tmp_path, monkeypatch):
-        # Una fecha convierte la pregunta en "como evoluciona", no en "quien
-        # es mayor": eso es una linea, no barras.
-        libro = _exportar(
-            pd.DataFrame(
-                {"Fecha": pd.date_range("2026-01-01", periods=5), "QTY": [1, 2, 3, 4, 5]}
-            ),
-            tmp_path,
-            monkeypatch,
-        )
-        assert type(_grafica(libro)).__name__ == "LineChart"
-
-    def test_una_serie_no_lleva_leyenda_y_varias_si(self, tmp_path, monkeypatch):
-        # Con una sola serie el titulo ya la nombra y la leyenda es ruido. Con
-        # dos o mas es obligatoria: el color no puede ser lo unico que las
-        # distinga.
-        una = _exportar(
-            pd.DataFrame({"Retail": ["a", "b"], "QTY": [1, 2]}), tmp_path, monkeypatch
-        )
-        assert _grafica(una).legend is None
-
-        dos = _exportar(
-            pd.DataFrame({"Retail": ["a", "b"], "QTY": [1, 2], "INV": [3, 4]}),
-            tmp_path,
-            monkeypatch,
-            nombre="dos.xlsx",
-        )
-        assert _grafica(dos).legend is not None
-
-    def test_las_barras_de_una_serie_comparten_color(self, tmp_path, monkeypatch):
-        # Colorear cada barra segun su tamano duplicaria en el color lo que la
-        # longitud ya dice, y gasta el unico canal libre que queda.
-        libro = _exportar(
-            pd.DataFrame({"Retail": ["a", "b", "c"], "QTY": [3, 1, 2]}), tmp_path, monkeypatch
-        )
-        serie = _grafica(libro).series[0]
-        assert _color(serie) == excel_exporter.PALETA_SERIES[0]
-        assert serie.dPt == []  # ningun punto con color propio
-
-    def test_los_colores_siguen_el_orden_fijo_de_la_paleta(self, tmp_path, monkeypatch):
-        # El orden es el mecanismo que garantiza la separacion para
-        # daltonismo; reordenarlo o generar un color nuevo la rompe.
-        libro = _exportar(
-            pd.DataFrame({"k": ["a", "b"], "x": [1, 2], "y": [3, 4], "z": [5, 6]}),
-            tmp_path,
-            monkeypatch,
-        )
-        colores = [_color(s) for s in _grafica(libro).series]
-        assert colores == list(excel_exporter.PALETA_SERIES[:3])
-
-    def test_se_recorta_a_max_categorias_sin_perder_la_tabla(self, tmp_path, monkeypatch):
-        # La grafica se acota para que las etiquetas no se amontonen, pero la
-        # hoja de datos conserva todas las filas.
-        filas = MAX_CATEGORIAS + 10
-        libro = _exportar(
-            pd.DataFrame({"Modelo": [f"M{i}" for i in range(filas)], "QTY": list(range(filas))}),
-            tmp_path,
-            monkeypatch,
-        )
-        assert libro[HOJA_DATOS].max_row == filas + 1
-        assert _grafica(libro).series[0].val.numRef.f.endswith(f"${MAX_CATEGORIAS + 1}")
-
-    @pytest.mark.parametrize(
-        "df, motivo",
-        [
-            (pd.DataFrame({"a": ["x", "y"], "b": ["p", "q"]}), "sin columna numerica"),
-            (pd.DataFrame({"Retail": ["Coppel"], "QTY": [5]}), "una sola fila no es grafica"),
-        ],
+def test_el_excel_es_solo_datos(tmp_path, monkeypatch):
+    # La grafica salio del Excel: ahora se manda como imagen aparte, porque en
+    # el telefono nadie abre la segunda hoja de un adjunto. Una hoja de mas
+    # aqui significa que la grafica volvio a colarse.
+    libro = _exportar(
+        pd.DataFrame({"Retail": ["a", "b", "c"], "QTY": [3, 1, 2]}), tmp_path, monkeypatch
     )
-    def test_sin_grafica_cuando_no_ayudaria(self, df, motivo, tmp_path, monkeypatch):
-        libro = _exportar(df, tmp_path, monkeypatch)
-        assert libro.sheetnames == [HOJA_DATOS], motivo
-
-    def test_un_fallo_de_la_grafica_no_impide_enviar_los_datos(self, tmp_path, monkeypatch):
-        # Los datos son lo que el usuario pidio; la grafica es un extra.
-        def explotar(*_):
-            raise RuntimeError("forma de datos no prevista")
-
-        monkeypatch.setattr(excel_exporter, "_agregar_grafica", explotar)
-        libro = _exportar(_df(), tmp_path, monkeypatch)
-        assert libro.sheetnames == [HOJA_DATOS]
-        assert libro[HOJA_DATOS].max_row == 3
+    assert libro.sheetnames == [HOJA_DATOS]
+    assert libro[HOJA_DATOS]._charts == []
 
 
 class TestAnchoDeColumnas:
@@ -258,36 +165,6 @@ class TestFormatoDeFechas:
             monkeypatch,
         )
         assert libro[HOJA_DATOS]["A2"].number_format == "yyyy-mm-dd"
-
-    def test_el_eje_muestra_solo_el_dia_aunque_el_dato_traiga_hora(
-        self, tmp_path, monkeypatch
-    ):
-        # La tabla conserva la hora porque es un dato; el eje no la muestra
-        # porque ahi solo estorba (parte cada marca en dos lineas).
-        df = pd.DataFrame(
-            {
-                "Momento": pd.to_datetime(["2026-03-01 08:30", "2026-03-02 14:45"]),
-                "QTY": [5, 9],
-            }
-        )
-        libro = _exportar(df, tmp_path, monkeypatch)
-
-        eje = _grafica(libro).x_axis
-        assert eje.numFmt.formatCode == excel_exporter.FORMATO_FECHA
-        # sourceLinked dejaria el formato del eje a merced del de la celda.
-        assert eje.numFmt.sourceLinked is False
-
-    def test_la_linea_no_se_suaviza(self, tmp_path, monkeypatch):
-        # Excel interpola con una curva que se sale del rango real: con datos
-        # entre 3 y 9 dibuja 2.8 y 9.2, valores que nadie midio.
-        libro = _exportar(
-            pd.DataFrame(
-                {"Fecha": pd.date_range("2026-03-01", periods=4), "QTY": [5, 9, 3, 7]}
-            ),
-            tmp_path,
-            monkeypatch,
-        )
-        assert _grafica(libro).series[0].smooth is False
 
     def test_la_tabla_tampoco_muestra_la_hora(self, tmp_path, monkeypatch):
         libro = _exportar(
