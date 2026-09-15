@@ -10,7 +10,7 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 
-import { preguntar } from "./agentClient.js";
+import { autorizado, preguntar } from "./agentClient.js";
 import { calcularEsperaReconexion } from "./backoff.js";
 import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
@@ -18,6 +18,16 @@ import { RegistroDeVistos } from "./dedupe.js";
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
 const MAX_FILE_MB = leerMaxFileMB();
 const CARPETA_AUTH = "auth_info";
+
+// A partir de aqui la consulta se considera "de las dificiles" y se avisa que
+// sigue viva. Por debajo, el indicador de "escribiendo" basta y un mensaje
+// seria ruido. Una consulta tipica se responde en pocos segundos; las que
+// cruzan tablas grandes pasan del medio minuto y ahi el silencio se siente
+// como que el bot se cayo -- en los logs se ve al usuario reenviando.
+const AVISO_DE_ESPERA_MS = leerEnteroPositivo("WAIT_NOTICE_SECONDS", 12) * 1000;
+const TEXTO_DE_ESPERA =
+  "Esta consulta esta tardando mas de lo normal, sigo en ella. " +
+  "Si quieres, mandame otra pregunta y cancelo esta.";
 
 // WhatsApp expira el indicador de "escribiendo" solo, hay que renovarlo.
 const INTERVALO_PRESENCIA_MS = 8000;
@@ -45,19 +55,22 @@ const registroVistos = new RegistroDeVistos();
 // esperando respuesta.
 const presenciaPorJid = new Map(); // jid -> { contador, temporizador }
 
-function leerMaxFileMB() {
-  const DEFECTO = 16;
-  const crudo = process.env.MAX_FILE_MB;
-  if (crudo === undefined) return DEFECTO;
+function leerEnteroPositivo(clave, defecto) {
+  const crudo = process.env[clave];
+  if (crudo === undefined) return defecto;
 
   const valor = Number(crudo);
   if (!Number.isFinite(valor) || valor <= 0) {
     console.error(
-      `[whatsapp] MAX_FILE_MB="${crudo}" no es un numero valido, usando el default de ${DEFECTO}`,
+      `[whatsapp] ${clave}="${crudo}" no es un numero valido, usando el default de ${defecto}`,
     );
-    return DEFECTO;
+    return defecto;
   }
   return valor;
+}
+
+function leerMaxFileMB() {
+  return leerEnteroPositivo("MAX_FILE_MB", 16);
 }
 
 const dormir = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,31 +243,30 @@ async function atender(mensaje) {
     const texto = textoDelMensaje(mensaje);
     if (!texto || !texto.trim()) return;
 
-    // El indicador de "escribiendo" NO arranca aqui, antes de preguntar().
-    // Root cause del Critico 2 de la revision final: si un numero fuera de
-    // la allowlist ve al bot "escribiendo" durante el round-trip, eso ya
-    // confirma que hay un bot vivo del otro lado -- exactamente lo que el
-    // spec prohibe cuando dice que a los no autorizados "se ignora en
-    // silencio" (la autorizacion es un 403 que solo Python conoce; Node no
-    // puede adelantarla).
-    //
-    // Con el contrato HTTP actual, preguntar() hace UNA sola llamada que
-    // devuelve o bien null (403, casi inmediato: Python revisa la allowlist
-    // antes de tocar el agente) o bien la respuesta YA completa (200, tras
-    // los 30s+ que puede tardar el agente). No hay forma de "asomarse" a la
-    // autorizacion sin esperar tambien el resultado, asi que para cuando se
-    // sabe que el chat esta autorizado la consulta ya termino: el indicador
-    // ya no puede cubrir la espera del agente (que es cuando mas serviria),
-    // solo el tramo de envio de los fragmentos y archivos de la respuesta.
-    // Se prefiere ese indicador reducido a arriesgar mostrarlo a un chat no
-    // autorizado.
-    const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
-    // null = chat no autorizado: silencio total, ni acuse de recibo, ni
-    // jamas se llego a mostrar "escribiendo".
-    if (resultado === null) return;
+    // Nada de señales de vida antes de saber que el chat esta autorizado: si
+    // un numero ajeno ve al bot "escribiendo", eso ya confirma que hay un bot
+    // del otro lado, y a los no autorizados se los ignora en silencio.
+    // Por eso se pregunta primero, con una llamada que solo mira la allowlist
+    // y vuelve en milisegundos. Antes esto no existia y la unica forma de
+    // saberlo era mandar la pregunta entera y esperar: para cuando se sabia,
+    // la consulta ya habia terminado y el indicador no cubria nada.
+    if (!(await autorizado(AGENT_API_URL, idAutorizacion))) return;
 
+    // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo
+    // y, si la consulta se alarga, un aviso para que el usuario sepa que
+    // sigue viva y que puede cancelarla.
     const detener = mantenerEscribiendo(jid);
+    const avisoDeEspera = setTimeout(() => {
+      enviarMensajeSimple(jid, TEXTO_DE_ESPERA);
+    }, AVISO_DE_ESPERA_MS);
+
     try {
+      const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
+      // null = 403 (dejo de estar autorizado entre una llamada y otra) o 409
+      // (a esta pregunta la cancelo un mensaje posterior, que es el que va a
+      // contestar). En ambos casos, silencio.
+      if (resultado === null) return;
+
       let enviadoAlgo = false;
       if (resultado.reply && resultado.reply.trim()) {
         await enviarTexto(jid, resultado.reply);
@@ -270,6 +282,7 @@ async function atender(mensaje) {
         await enviarMensajeSimple(jid, "No tengo una respuesta para eso. Intenta reformular tu pregunta.");
       }
     } finally {
+      clearTimeout(avisoDeEspera);
       detener();
     }
   } catch (error) {

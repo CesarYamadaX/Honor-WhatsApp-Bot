@@ -714,9 +714,24 @@ class TestObjetoEnLaBaseEquivocada:
         # que es lo unico que este ve. El motor va simulado porque el fixture
         # de pruebas es SQLite y ahi el mismo SQL falla con "syntax error",
         # no con el "Invalid object name" de SQL Server.
+        class _CursorQueFalla:
+            def __init__(self, error):
+                self._error = error
+                self.description = None
+
+            def execute(self, *_):
+                raise self._error
+
+            def close(self):
+                pass
+
         class _MotorQueFalla:
             def __init__(self, error):
                 self._error = error
+                # `consultar_sql` va por el cursor crudo para poder abortar el
+                # SELECT a media ejecucion; el motor simulado replica esa
+                # forma: engine -> connection -> cursor().
+                self.connection = self
 
             def connect(self):
                 return self
@@ -727,8 +742,8 @@ class TestObjetoEnLaBaseEquivocada:
             def __exit__(self, *_):
                 return False
 
-            def exec_driver_sql(self, *_):
-                raise self._error
+            def cursor(self):
+                return _CursorQueFalla(self._error)
 
         motor = _MotorQueFalla(self._error("GTM BI Database.dbo.ETL_Consolidado_B2B"))
         with contexto_peticion(motor):

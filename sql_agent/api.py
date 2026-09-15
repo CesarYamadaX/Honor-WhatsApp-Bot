@@ -6,12 +6,14 @@ solo en loopback. Nunca exponerlo en 0.0.0.0.
 
 import asyncio
 import logging
+import unicodedata
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from agent import ConsultaCancelada
 from config import Config
 from session import RegistroSesiones
 
@@ -21,11 +23,44 @@ MENSAJE_ERROR_INTERNO = (
     "Tuve un problema al consultar la base de datos. "
     "Intenta de nuevo en un momento, o reformula la pregunta."
 )
+MENSAJE_CANCELADO = "Listo, cancele la consulta anterior."
+MENSAJE_NADA_QUE_CANCELAR = "No tenias ninguna consulta en curso."
+
+_PALABRAS_DE_CANCELACION = {
+    "cancela",
+    "cancelar",
+    "cancelalo",
+    "cancelala",
+    "detente",
+    "olvidalo",
+    "ya no",
+}
+
+
+def _sin_acentos(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto) if not unicodedata.combining(c)
+    )
+
+
+def es_cancelacion(texto: str) -> bool:
+    """True si el mensaje es una orden de cancelar y no una pregunta.
+
+    Se compara el mensaje entero, no si contiene la palabra: "cancela" es una
+    orden, pero "cuantas ventas se cancelaron en marzo" es una pregunta
+    legitima que no se debe tratar como cancelacion.
+    """
+    limpio = _sin_acentos(texto).strip().strip(".!¡").casefold()
+    return limpio in _PALABRAS_DE_CANCELACION
 
 
 class Peticion(BaseModel):
     chat_id: str
     text: str
+
+
+class Autorizacion(BaseModel):
+    chat_id: str
 
 
 class Respuesta(BaseModel):
@@ -40,14 +75,22 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
         ttl_segundos=config.ttl_minutos * 60,
     )
 
-    def _ejecutar(sesion, pregunta: str, chat_id: str) -> Respuesta:
+    def _ejecutar(sesion, pregunta: str, chat_id: str) -> Respuesta | None:
         # El lock se suelta aqui dentro, no en el llamador: si la peticion
         # expira, asyncio cancela la espera pero el hilo sigue corriendo, y
         # soltar el lock antes dejaria entrar una segunda consulta del mismo
         # chat mientras la primera todavia golpea la base.
         try:
-            texto, archivos = sesion.agente.responder(pregunta)
+            texto, archivos = sesion.agente.responder(
+                pregunta, cancelacion=sesion.cancelacion
+            )
             return Respuesta(reply=texto, files=list(archivos))
+        except ConsultaCancelada:
+            # None, no un mensaje: al usuario ya le esta contestando la
+            # pregunta nueva, la que provoco la cancelacion. Mandarle ademas
+            # un "cancelado" por la vieja seria ruido.
+            logger.info("Consulta cancelada para %s", chat_id)
+            return None
         except Exception:
             logger.exception("Fallo el agente para %s", chat_id)
             return Respuesta(reply=MENSAJE_ERROR_INTERNO, files=[])
@@ -64,17 +107,59 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
 
         registro.purgar()
         sesion = registro.obtener(peticion.chat_id)
-        if not sesion.lock.acquire(blocking=False):
-            raise HTTPException(status_code=429, detail="Consulta en curso")
+        quiere_cancelar = es_cancelacion(peticion.text)
+
+        if sesion.lock.acquire(blocking=False):
+            # Nada en curso. Un "cancela" aqui no tiene a que aplicarse.
+            if quiere_cancelar:
+                sesion.lock.release()
+                return Respuesta(reply=MENSAJE_NADA_QUE_CANCELAR, files=[])
+        else:
+            # Hay una consulta viva. El mensaje nuevo manda: se le pide que se
+            # rinda y se espera a que suelte el turno.
+            logger.info("Cancelando la consulta en curso de %s", peticion.chat_id)
+            sesion.cancelacion.set()
+            liberado = await run_in_threadpool(
+                sesion.lock.acquire, True, config.espera_cancelacion
+            )
+            sesion.cancelacion.clear()
+            if not liberado:
+                # No solto a tiempo: probablemente atorada en una llamada al
+                # modelo, que no se puede interrumpir. Se responde como antes.
+                raise HTTPException(status_code=429, detail="Consulta en curso")
+            if quiere_cancelar:
+                sesion.lock.release()
+                return Respuesta(reply=MENSAJE_CANCELADO, files=[])
 
         try:
-            return await asyncio.wait_for(
+            respuesta = await asyncio.wait_for(
                 run_in_threadpool(_ejecutar, sesion, peticion.text, peticion.chat_id),
                 timeout=config.timeout_segundos,
             )
         except (asyncio.TimeoutError, TimeoutError):
             logger.warning("Timeout para %s", peticion.chat_id)
             raise HTTPException(status_code=504, detail="La consulta tardo demasiado")
+
+        if respuesta is None:
+            # A esta pregunta la cancelo una posterior, que es la que va a
+            # contestar. 409 le dice al sidecar que no mande nada.
+            raise HTTPException(status_code=409, detail="Consulta cancelada")
+        return respuesta
+
+    @app.post("/authorized")
+    async def authorized(peticion: Autorizacion) -> dict:
+        """Dice si un chat esta en la allowlist, sin correr nada.
+
+        Existe para que el sidecar pueda mostrar "escribiendo" y el aviso de
+        espera SOLO a quien esta autorizado. Antes no podia: la unica forma de
+        saberlo era mandar la pregunta entera y esperar, y para entonces la
+        consulta ya habia terminado. Mostrarle cualquier señal de vida a un
+        numero ajeno confirma que hay un bot del otro lado, que es justo lo
+        que la allowlist evita.
+        """
+        if not config.autorizado(peticion.chat_id):
+            raise HTTPException(status_code=403, detail="No autorizado")
+        return {"ok": True}
 
     @app.get("/health")
     async def health() -> dict:

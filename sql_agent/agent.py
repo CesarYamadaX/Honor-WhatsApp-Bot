@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -345,12 +346,20 @@ def es_select(sql: str) -> bool:
     return _evaluar_sql(sql)[0]
 
 
+class ConsultaCancelada(Exception):
+    """El usuario mando otra pregunta (o pidio cancelar) y esta ya no importa."""
+
+
 @dataclass
 class ContextoPeticion:
     """Estado de una sola pregunta: de donde se lee y que reporte se genero."""
 
     engine: Engine
     archivos: list[str] = field(default_factory=list)
+    # Lo pone la API cuando llega un mensaje nuevo del mismo chat. No hay
+    # forma de matar el hilo que corre el agente, asi que la cancelacion es
+    # cooperativa: se revisa antes de cada herramienta y se aborta ahi.
+    cancelacion: threading.Event | None = None
 
     def registrar_reporte(self, ruta: str) -> None:
         """Guarda el reporte de la pregunta. Solo cuenta el primero.
@@ -376,9 +385,11 @@ _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default
 
 
 @contextmanager
-def contexto_peticion(engine: Engine) -> Iterator[ContextoPeticion]:
+def contexto_peticion(
+    engine: Engine, cancelacion: threading.Event | None = None
+) -> Iterator[ContextoPeticion]:
     """Activa un contexto por petición, en lugar del viejo global _db_instance."""
-    ctx = ContextoPeticion(engine=engine)
+    ctx = ContextoPeticion(engine=engine, cancelacion=cancelacion)
     testigo = _contexto.set(ctx)
     try:
         yield ctx
@@ -387,12 +398,22 @@ def contexto_peticion(engine: Engine) -> Iterator[ContextoPeticion]:
 
 
 def _contexto_actual() -> ContextoPeticion:
+    """El contexto de la peticion en curso, si no la han cancelado.
+
+    Todas las herramientas que tocan la base pasan por aqui, asi que es el
+    punto natural para rendirse: el agente alterna llamada al modelo y llamada
+    a herramienta, y una llamada al modelo no se puede interrumpir, pero entre
+    una y otra si. En el peor caso se aborta un paso despues de que el usuario
+    lo pidio, no al terminar los 90 segundos.
+    """
     ctx = _contexto.get()
     if ctx is None:
         raise RuntimeError(
             "No hay contexto de peticion activo. Las herramientas solo pueden "
             "usarse dentro de contexto_peticion()."
         )
+    if ctx.cancelacion is not None and ctx.cancelacion.is_set():
+        raise ConsultaCancelada()
     return ctx
 
 
@@ -610,6 +631,64 @@ def valores_distintos(tabla: str, columna: str) -> str:
     return f"Valores de {real} en {objeto['nombre']}:\n{valores}{aviso}"
 
 
+def _ejecutar_interrumpible(conexion, query: str, cancelacion) -> pd.DataFrame:
+    """Corre el SELECT de forma que se pueda abortar a media ejecucion.
+
+    Revisar la cancelacion entre herramientas no alcanza: la parte lenta de
+    una consulta dificil es el SQL mismo, y mientras el driver espera a SQL
+    Server no se pasa por ningun punto de control. En una prueba real, pedir
+    otra cosa a los 12 segundos no cancelaba nada y la consulta vieja seguia
+    hasta agotar los 90 del timeout.
+
+    La solucion es `cursor.cancel()` de pyodbc, que esta pensado justo para
+    esto: se puede llamar desde OTRO hilo mientras el cursor esta ocupado, y
+    manda un SQLCancel al servidor. Un hilo vigilante espera el evento y
+    cancela; si la consulta termina antes, el vigilante se apaga solo.
+
+    Se usa el cursor crudo y no `exec_driver_sql` por la misma razon de
+    siempre: el SQL viaja tal cual al driver, sin que SQLAlchemy interprete
+    ":algo" como parametro de vinculo.
+    """
+    bruta = getattr(conexion.connection, "dbapi_connection", conexion.connection)
+    cursor = bruta.cursor()
+
+    termino = threading.Event()
+
+    def vigilar():
+        while not termino.wait(0.5):
+            if cancelacion.is_set():
+                try:
+                    cursor.cancel()
+                except Exception:  # noqa: BLE001 - ya no hay nada que salvar
+                    logger.debug("cursor.cancel() fallo; la consulta seguira sola")
+                return
+
+    vigilante = None
+    if cancelacion is not None and hasattr(cursor, "cancel"):
+        vigilante = threading.Thread(target=vigilar, daemon=True)
+        vigilante.start()
+
+    try:
+        cursor.execute(query)
+        columnas = [c[0] for c in cursor.description or []]
+        return pd.DataFrame.from_records(cursor.fetchall(), columns=columnas)
+    except Exception:
+        # Si se cancelo, el error del driver es consecuencia de eso y no un
+        # problema de la consulta: no tiene sentido devolverselo al modelo
+        # para que "corrija" nada.
+        if cancelacion is not None and cancelacion.is_set():
+            raise ConsultaCancelada() from None
+        raise
+    finally:
+        termino.set()
+        if vigilante is not None:
+            vigilante.join(timeout=1)
+        try:
+            cursor.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
@@ -631,12 +710,9 @@ def consultar_sql(query: str) -> str:
     ctx = _contexto_actual()
     try:
         with ctx.engine.connect() as conexion:
-            # exec_driver_sql, no pd.read_sql(text(query), ...): text() hace
-            # que SQLAlchemy interprete ":algo" dentro del SQL como parametro
-            # de vinculo. Con exec_driver_sql el SQL del usuario viaja crudo
-            # al driver, tal como lo escribio (o lo genero el modelo).
-            resultado_bruto = conexion.exec_driver_sql(query)
-            df = pd.DataFrame(resultado_bruto.fetchall(), columns=list(resultado_bruto.keys()))
+            df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+    except ConsultaCancelada:
+        raise
     except Exception as error:  # noqa: BLE001 - el mensaje (resumido) vuelve al modelo
         # El error completo -con nombres de tabla/columna y detalle del
         # driver ODBC- se registra aqui, en el log del servidor, que es
@@ -848,9 +924,16 @@ class SQLAgent:
             ],
         )
 
-    def responder(self, pregunta: str) -> tuple[str, list[str]]:
-        """Responde una pregunta y devuelve (texto, rutas de archivos generados)."""
-        with contexto_peticion(self.engine) as ctx:
+    def responder(
+        self, pregunta: str, cancelacion: threading.Event | None = None
+    ) -> tuple[str, list[str]]:
+        """Responde una pregunta y devuelve (texto, rutas de archivos generados).
+
+        Si se activa `cancelacion` mientras corre, aborta con
+        `ConsultaCancelada` en la siguiente herramienta y no toca el
+        historial: una pregunta cancelada no ocurrio.
+        """
+        with contexto_peticion(self.engine, cancelacion) as ctx:
             respuesta = self.agent_executor.invoke(
                 {"input": pregunta, "chat_history": list(self.historial)}
             )

@@ -11,6 +11,10 @@ class Sesion:
     agente: Any
     ultimo_uso: float
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Se activa para pedirle a la consulta en curso que se rinda. No la mata:
+    # corre en un hilo del threadpool y a un hilo no se le puede hacer nada
+    # desde fuera. La consulta la mira entre paso y paso y se detiene sola.
+    cancelacion: threading.Event = field(default_factory=threading.Event)
 
 
 class RegistroSesiones:

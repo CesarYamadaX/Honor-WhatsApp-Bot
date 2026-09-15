@@ -64,6 +64,11 @@ class Config:
     ttl_minutos: int
     api_host: str
     api_port: int
+    # Cuanto se espera a que la consulta en curso se de por cancelada cuando
+    # llega un mensaje nuevo del mismo chat. La cancelacion es cooperativa: el
+    # agente la mira entre paso y paso, y un paso puede ser una llamada al
+    # modelo que no se interrumpe. Pasado este tiempo se responde 429.
+    espera_cancelacion: float = 25.0
 
     @classmethod
     def desde_entorno(cls) -> "Config":
@@ -73,6 +78,7 @@ class Config:
             ttl_minutos=_leer_entero("SESSION_TTL_MINUTES", 60),
             api_host=os.getenv("API_HOST", "127.0.0.1"),
             api_port=_leer_entero("API_PORT", 8000),
+            espera_cancelacion=_leer_entero("CANCEL_WAIT_SECONDS", 25),
         )
 
     def autorizado(self, chat_id: str) -> bool:

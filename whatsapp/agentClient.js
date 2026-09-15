@@ -15,6 +15,39 @@ const MENSAJES = {
 // solo cubre el caso en que ni siquiera eso llega.
 const TIMEOUT_MS_DEFAULT = 120_000;
 
+// Timeout corto: es una comprobacion en memoria contra la allowlist, sin base
+// de datos ni modelo de por medio.
+const TIMEOUT_AUTORIZACION_MS = 5000;
+
+/**
+ * Pregunta si un chat esta autorizado, sin correr ninguna consulta.
+ *
+ * Se llama ANTES de atender el mensaje para poder mostrar "escribiendo" y el
+ * aviso de espera solo a quien corresponde. Ante la duda devuelve false: si el
+ * servicio no contesta, es preferible quedarse callado que arriesgarse a
+ * darle señales de vida a un numero ajeno.
+ *
+ * @returns {Promise<boolean>}
+ */
+export async function autorizado(baseUrl, chatId, timeoutMs = TIMEOUT_AUTORIZACION_MS) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), timeoutMs);
+  try {
+    const respuesta = await fetch(`${baseUrl}/authorized`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId }),
+      signal: controlador.signal,
+    });
+    return respuesta.status === 200;
+  } catch (error) {
+    console.error(`[agentClient] no pude verificar autorizacion: ${error.message}`);
+    return false;
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
 /**
  * Le pregunta al agente SQL.
  * @param {string} baseUrl
@@ -49,6 +82,11 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
 
   // El servicio ya decidio que este chat no existe para nosotros.
   if (respuesta.status === 403) return null;
+
+  // 409: a esta pregunta la cancelo un mensaje posterior del mismo chat, y es
+  // ese el que va a contestar. Silencio: mandar ademas un aviso por la vieja
+  // seria ruido justo cuando el usuario ya cambio de tema.
+  if (respuesta.status === 409) return null;
 
   if (respuesta.status === 429) return { reply: MENSAJES[429], files: [] };
   if (respuesta.status === 504) return { reply: MENSAJES[504], files: [] };

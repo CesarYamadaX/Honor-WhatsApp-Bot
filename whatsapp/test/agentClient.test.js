@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { preguntar } from "../agentClient.js";
+import { autorizado, preguntar } from "../agentClient.js";
 
 async function servidorFalso(manejador) {
   const servidor = http.createServer(manejador);
@@ -62,6 +62,58 @@ test("403 devuelve null: no se contesta nada", async () => {
   const s = await servidorFalso(responder(403, { detail: "No autorizado" }));
   try {
     assert.equal(await preguntar(s.url, "chat@s.whatsapp.net", "hola"), null);
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("409 devuelve null: a esa pregunta la reemplazo otra", async () => {
+  // La cancelo un mensaje posterior del mismo chat, y es ese el que va a
+  // contestar. Mandar ademas un aviso por la vieja seria ruido.
+  const s = await servidorFalso(responder(409, { detail: "Consulta cancelada" }));
+  try {
+    assert.equal(await preguntar(s.url, "chat@s.whatsapp.net", "hola"), null);
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("autorizado: 200 es true y 403 es false", async () => {
+  const ok = await servidorFalso(responder(200, { ok: true }));
+  try {
+    assert.equal(await autorizado(ok.url, "chat@s.whatsapp.net"), true);
+  } finally {
+    await ok.cerrar();
+  }
+
+  const no = await servidorFalso(responder(403, { detail: "No autorizado" }));
+  try {
+    assert.equal(await autorizado(no.url, "chat@s.whatsapp.net"), false);
+  } finally {
+    await no.cerrar();
+  }
+});
+
+test("autorizado: si el servicio no contesta, se asume que NO", async () => {
+  // Ante la duda, callar. Un false de mas solo ignora un mensaje; un true de
+  // mas le muestra señales de vida a un numero ajeno.
+  assert.equal(await autorizado("http://127.0.0.1:1", "chat@s.whatsapp.net", 300), false);
+});
+
+test("autorizado: manda el chat_id y no el texto del mensaje", async () => {
+  let recibido = null;
+  const s = await servidorFalso((req, res) => {
+    let cuerpo = "";
+    req.on("data", (t) => (cuerpo += t));
+    req.on("end", () => {
+      recibido = JSON.parse(cuerpo);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  try {
+    await autorizado(s.url, "chat@s.whatsapp.net");
+    assert.deepEqual(recibido, { chat_id: "chat@s.whatsapp.net" });
   } finally {
     await s.cerrar();
   }
