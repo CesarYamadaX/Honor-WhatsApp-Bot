@@ -967,6 +967,7 @@ class TestValoresDistintos:
             )
 
         assert "[Retail]" in respuesta, "debe señalar la causa real"
+        assert "vw_ETL_" in respuesta, "debe nombrar la alternativa rapida"
         assert "NO va a ayudar" in respuesta, "no debe sugerir acotar por fecha"
 
     def test_una_columna_sin_foto_si_consulta_la_base(self):

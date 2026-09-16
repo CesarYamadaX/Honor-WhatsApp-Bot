@@ -563,7 +563,7 @@ def buscar_modelos(texto: str) -> str:
 # Debe coincidir con AGENT_TIMEOUT_SECONDS: es el presupuesto que la API le
 # da a la peticion completa. Aqui solo se usa para repartirlo, no para
 # imponerlo.
-TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 150)
+TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 300)
 # Lo que se reserva para armar el Excel y la grafica y devolver la respuesta.
 MARGEN_DE_ENTREGA = 20
 # Por debajo de esto no vale la pena intentar: contra la vista consolidada,
@@ -573,7 +573,7 @@ MINIMO_UTIL = 30
 MAX_VALORES = 50
 
 # Explorar no puede costar la respuesta: la peticion entera vive dentro de
-# AGENT_TIMEOUT_SECONDS (150s por defecto), que ademas tiene que alcanzar para
+# AGENT_TIMEOUT_SECONDS (300s por defecto), que ademas tiene que alcanzar para
 # la consulta real y para armar el Excel.
 TIMEOUT_VALORES = 20
 
@@ -808,9 +808,9 @@ def consultar_sql(query: str) -> str:
                 "dejar al usuario sin respuesta. Acotarla por fecha NO va a "
                 "ayudar (medido: un SUM de un solo mes tarda lo mismo). Si "
                 "filtraste ETL_Consolidado_B2B por [Retail], ESE es el "
-                "problema: repite la consulta sobre la tabla cruda de ese "
-                "retailer en RAW_DATA_B2B, que responde en segundos, y avisa "
-                "que es el dato crudo."
+                "problema: repite la consulta sobre la vista de ese retailer "
+                "(vw_ETL_COPPEL, vw_ETL_Elektra, vw_ETL_TELCEL_B2B...), que "
+                "trae las mismas columnas y no recorre las otras ocho."
             )
         return f"Error al ejecutar la consulta: {error}{_donde_vive_de_verdad(error)}"
 

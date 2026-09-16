@@ -75,7 +75,7 @@ class Config:
     def desde_entorno(cls) -> "Config":
         return cls(
             allowlist=_leer_allowlist(),
-            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 150),
+            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 300),
             ttl_minutos=_leer_entero("SESSION_TTL_MINUTES", 60),
             api_host=os.getenv("API_HOST", "127.0.0.1"),
             api_port=_leer_entero("API_PORT", 8000),
