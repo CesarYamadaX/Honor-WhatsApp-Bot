@@ -443,6 +443,37 @@ def _es_por_tiempo(error: Exception) -> bool:
     return bool(_POR_TIEMPO.search(str(error)))
 
 
+def _homologacion_mal_unida(sql: str) -> str:
+    """Detecta el cruce de columnas que devuelve un top falso, o "" si no lo hay.
+
+    UNICOS$ tiene dos columnas para unir y cada una va con su tabla:
+    [DESCRIPCION] con la tabla CRUDA del retailer, y
+    [MATERIAL DESCRIPTION FINAL] con las vistas vw_ETL_COPPEL*. Cruzarlas no
+    da error ni cero filas: da MENOS filas. Medido contra vw_ETL_COPPEL, unir
+    por [DESCRIPCION] casa apenas el 3.6% del volumen, y el top que sale
+    parece de lo mas razonable.
+
+    Por eso se bloquea aqui y no solo en el prompt: el agente acerto el join
+    unas veces y lo cruzo otras con la misma instruccion delante, y el
+    resultado equivocado es indistinguible del bueno a simple vista.
+    """
+    plano = " ".join(sql.split()).upper()
+    if "UNICOS$" not in plano or "VW_ETL_" not in plano:
+        return ""
+    if "MATERIAL DESCRIPTION FINAL" in plano:
+        return ""
+    if "DESCRIPCION" not in plano:
+        return ""
+    return (
+        "Ese JOIN esta mal y devolveria un top falso: estas uniendo una vista "
+        "vw_ETL_* con [DESCRIPCION], y esa combinacion solo casa el 3.6% del "
+        "volumen. Con una vista vw_ETL_COPPEL usa "
+        "u.[MATERIAL DESCRIPTION FINAL] = v.[Material_Description]; para "
+        "cualquier otro retailer consulta la TABLA CRUDA y une por "
+        "u.[DESCRIPCION]."
+    )
+
+
 def _donde_vive_de_verdad(error: Exception) -> str:
     """Si el objeto existe en otra base, nombra la buena. Si no, cadena vacia.
 
@@ -761,6 +792,10 @@ def consultar_sql(query: str) -> str:
             f"y una sola sentencia por consulta ({motivo})."
         )
 
+    mal_unida = _homologacion_mal_unida(query)
+    if mal_unida:
+        return mal_unida
+
     ctx = _contexto_actual()
     # Lo que queda del presupuesto de la peticion, menos un margen para armar
     # el Excel y la grafica. Sin esto una consulta pesada se lleva los 90
@@ -977,11 +1012,22 @@ class SQLAgent:
         9. Varias tablas superan los 30 millones de filas. Agrega siempre con
            GROUP BY o acota con WHERE y TOP; nunca pidas todas las filas de una
            tabla grande.
-        10. Si el usuario nombra un celular de forma suelta ("magic", "magic pro",
+        10. Agrupar o listar POR MODELO exige unir con la homologacion
+           ([GTM BI Database].dbo.[UNICOS$]) y agrupar por
+           [HOMOLOGACION MODELO]. Nunca agrupes por la descripcion de la tabla
+           de ventas: cada cadena escribe el mismo telefono a su manera y el
+           mismo modelo sale partido en varias filas. La ruta que funciona
+           para todos los retailers es la TABLA CRUDA unida por
+           [DESCRIPCION] (ver la nota de UNICOS$ en el catalogo); ademas es
+           mucho mas rapida que la vista.
+           Despues del join comprueba cuanto quedo sin casar: si se perdio una
+           parte grande del volumen, la llave esta mal y el resultado es falso
+           aunque parezca razonable.
+        11. Si el usuario nombra un celular de forma suelta ("magic", "magic pro",
            "el X9"), llama primero a `buscar_modelos`: los nombres comerciales no
            estan escritos igual en todas las tablas, y un LIKE con el nombre tal
            cual o no encuentra nada o mezcla marcas distintas.
-        11. Es una conversacion: el usuario escribe desde el telefono y
+        12. Es una conversacion: el usuario escribe desde el telefono y
            acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
            "ahora por region", "el mismo dato pero de 2023"), resuelvela contra
            lo que ya se hablo en vez de pedirle que la repita completa.

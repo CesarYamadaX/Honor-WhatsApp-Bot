@@ -862,6 +862,78 @@ class TestBuscarModelos:
             assert "al menos una palabra" in buscar_modelos.invoke({"texto": "!!! ???"})
 
 
+class TestHomologacionMalUnida:
+    """El cruce de columnas que devuelve un top falso sin fallar.
+
+    UNICOS$ tiene [DESCRIPCION] (va con la tabla cruda) y
+    [MATERIAL DESCRIPTION FINAL] (va con vw_ETL_COPPEL). Cruzarlas no da error
+    ni cero filas: casa el 3.6% del volumen y devuelve un top que parece
+    razonable. Paso en produccion dos veces con la instruccion en el prompt,
+    asi que se bloquea en codigo.
+    """
+
+    def _consultar(self, sql):
+        class _Motor:
+            def __init__(self):
+                self.connection = self
+                self.ejecuto = False
+
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def cursor(self):
+                raise AssertionError("no deberia llegar a la base")
+
+        motor = _Motor()
+        with contexto_peticion(motor):
+            return consultar_sql.invoke({"query": sql})
+
+    def test_rechaza_vista_etl_unida_por_descripcion(self):
+        respuesta = self._consultar(
+            "SELECT u.[HOMOLOGACION MODELO], SUM(v.[QTY]) "
+            "FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] v "
+            "JOIN [GTM BI Database].dbo.[UNICOS$] u "
+            "ON u.[DESCRIPCION] = v.[Material_Description] "
+            "GROUP BY u.[HOMOLOGACION MODELO]"
+        )
+        assert "top falso" in respuesta
+        assert "MATERIAL DESCRIPTION FINAL" in respuesta
+
+    def test_acepta_la_vista_etl_con_su_columna(self):
+        # (B): vw_ETL_COPPEL + [MATERIAL DESCRIPTION FINAL]. No la bloquea; la
+        # consulta llega a la base (que aqui falla, y ese error no es el aviso
+        # de la guarda).
+        respuesta = self._consultar(
+            "SELECT u.[HOMOLOGACION MODELO] "
+            "FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] v "
+            "JOIN [GTM BI Database].dbo.[UNICOS$] u "
+            "ON u.[MATERIAL DESCRIPTION FINAL] = v.[Material_Description]"
+        )
+        assert "top falso" not in respuesta
+
+    def test_acepta_la_tabla_cruda_con_descripcion(self):
+        # (A): tabla cruda + [DESCRIPCION], la ruta que sirve para todos.
+        respuesta = self._consultar(
+            "SELECT u.[HOMOLOGACION MODELO] "
+            "FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B] v "
+            "JOIN [GTM BI Database].dbo.[UNICOS$] u "
+            "ON u.[DESCRIPCION] = v.[Modelo]"
+        )
+        assert "top falso" not in respuesta
+
+    def test_no_estorba_a_una_consulta_sin_homologacion(self):
+        respuesta = self._consultar(
+            "SELECT [Material_Description] FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL]"
+        )
+        assert "top falso" not in respuesta
+
+
 class TestValoresDistintos:
     """Explorar valores sin generar un reporte.
 
