@@ -98,9 +98,22 @@ class TestLegibilidad:
         assert grafica._miles(600000) == "600 000"
         assert grafica._miles(1234567) == "1 234 567"
 
-    def test_se_recorta_a_max_categorias(self):
-        filas = grafica.MAX_CATEGORIAS + 20
+    def test_sin_grafica_cuando_hay_demasiadas_filas(self):
+        # Antes dibujaba las primeras 25 de lo que hubiera. Con 17 879 filas
+        # eso no es un resumen, es un pedazo arbitrario del principio de la
+        # tabla: no informa y parece que informa. O cabe entera o no se hace.
+        filas = grafica.MAX_CATEGORIAS + 1
         df = pd.DataFrame({"R": [f"r{i}" for i in range(filas)], "QTY": list(range(filas))})
-        # No revienta y produce imagen: el recorte vive dentro de
-        # exportar_grafica, y la tabla completa va en el Excel.
+        assert exportar_grafica(df) is None
+
+    def test_justo_en_el_limite_si_se_grafica(self):
+        filas = grafica.MAX_CATEGORIAS
+        df = pd.DataFrame({"R": [f"r{i}" for i in range(filas)], "QTY": list(range(filas))})
         assert os.path.isfile(exportar_grafica(df))
+
+    def test_la_grafica_muestra_todas_las_filas(self):
+        # Si existe, no esconde nada: el titulo ya no puede decir
+        # "primeras N de M" porque ese caso no ocurre.
+        df = pd.DataFrame({"R": ["a", "b", "c"], "QTY": [3, 1, 2]})
+        ruta = exportar_grafica(df)
+        assert os.path.isfile(ruta)

@@ -34,7 +34,16 @@ COLOR_TEXTO = "#0b0b0b"
 COLOR_TEXTO_SUAVE = "#52514e"
 
 MAX_SERIES = 6
-MAX_CATEGORIAS = 25
+
+# Cuantas categorias puede mostrar una grafica legible. Pasado esto NO se
+# recorta: no se hace grafica.
+#
+# Antes se dibujaban las primeras 25 filas de lo que hubiera. Con un resultado
+# de 17 879 filas eso no es un resumen, es un pedazo arbitrario del principio
+# de la tabla: no informa, y encima parece que informa. Una grafica que no
+# muestra todo lo que se pregunto miente por omision, asi que o cabe entera o
+# se manda solo el Excel.
+MAX_CATEGORIAS = 40
 # Ancho comodo para la pantalla de un telefono sin que las etiquetas se
 # apelmacen; 150 dpi deja el texto nitido al hacer zoom.
 ANCHO_PULGADAS = 10
@@ -62,6 +71,10 @@ def _planear(df: pd.DataFrame):
     de "quien es mayor" (barras).
     """
     if df is None or len(df) < 2:
+        return None
+    if len(df) > MAX_CATEGORIAS:
+        # Demasiadas filas para mostrarlas todas: mejor sin grafica que con
+        # una que solo ensena el principio de la tabla.
         return None
 
     numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
@@ -140,8 +153,7 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
         return None
     categoria, valores, es_temporal = plan
 
-    recorte = df.head(MAX_CATEGORIAS)
-    etiquetas = _etiquetas(recorte[categoria], es_temporal)
+    etiquetas = _etiquetas(df[categoria], es_temporal)
 
     horizontal = not es_temporal and _conviene_horizontal(etiquetas)
     alto = (
@@ -156,14 +168,14 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
             for indice, nombre in enumerate(valores):
                 ejes.plot(
                     etiquetas,
-                    recorte[nombre],
+                    df[nombre],
                     color=PALETA_SERIES[indice % len(PALETA_SERIES)],
                     linewidth=2,
                     label=str(nombre),
                 )
         else:
             grosor = 0.8 / len(valores)
-            posiciones = range(len(recorte))
+            posiciones = range(len(df))
             for indice, nombre in enumerate(valores):
                 # Un solo color por serie pinta TODAS las barras igual. Es
                 # deliberado: colorear cada barra segun su tamano duplicaria
@@ -172,10 +184,10 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
                 desplazadas = [p + indice * grosor for p in posiciones]
                 color = PALETA_SERIES[indice % len(PALETA_SERIES)]
                 if horizontal:
-                    ejes.barh(desplazadas, recorte[nombre], height=grosor,
+                    ejes.barh(desplazadas, df[nombre], height=grosor,
                               color=color, label=str(nombre))
                 else:
-                    ejes.bar(desplazadas, recorte[nombre], width=grosor,
+                    ejes.bar(desplazadas, df[nombre], width=grosor,
                              color=color, label=str(nombre))
 
             centro = [p + (len(valores) - 1) * grosor / 2 for p in posiciones]
@@ -190,8 +202,6 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
                 ejes.set_xticklabels(etiquetas)
 
         titulo = ", ".join(str(v) for v in valores) + f" por {categoria}"
-        if len(df) > len(recorte):
-            titulo += f" (primeras {len(recorte)} de {len(df):,})".replace(",", " ")
         ejes.set_title(titulo, color=COLOR_TEXTO, fontsize=13, pad=14)
 
         # Una sola serie se nombra sola en el titulo; una leyenda de un
