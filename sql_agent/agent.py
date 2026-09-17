@@ -27,6 +27,7 @@ from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
 from catalogo import _corchetes, buscar, describir_objeto, indice, valores_conocidos
+from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
 from formatting import formatear_resultado
@@ -857,8 +858,17 @@ def consultar_sql(query: str) -> str:
     )
     resultado = formatear_resultado(df)
     if resultado.necesita_excel:
+        # La ficha de las tiendas, modelos y carriers que salieron, para que
+        # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
+        # reporte sale igual con la hoja de datos.
         try:
-            excel = ExcelExporter.export_to_excel(df)
+            contexto = contexto_del_resultado(df, ctx.engine)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo armar el contexto; va solo la tabla")
+            contexto = {}
+
+        try:
+            excel = ExcelExporter.export_to_excel(df, contexto=contexto)
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"

@@ -79,11 +79,19 @@ def _ajustar_ancho_de_columnas(hoja, df: pd.DataFrame) -> None:
 
 class ExcelExporter:
     @staticmethod
-    def export_to_excel(df: pd.DataFrame, filename: str = None) -> str:
+    def export_to_excel(
+        df: pd.DataFrame,
+        filename: str = None,
+        contexto: dict[str, pd.DataFrame] | None = None,
+    ) -> str:
         """
         Exporta un DataFrame de Pandas a un archivo Excel.
         Si no se proporciona un nombre de archivo, se genera uno con la fecha actual
         mas un sufijo aleatorio.
+
+        `contexto` son hojas adicionales con la ficha de las tiendas, modelos
+        y carriers que aparecen en el resultado (ver contexto.py). Van DESPUES
+        de los datos: la primera hoja es siempre lo que se pregunto.
         """
         if df is None or df.empty:
             raise ValueError("No hay datos para exportar. El DataFrame está vacío.")
@@ -128,9 +136,20 @@ class ExcelExporter:
         # adjunto; una imagen se ve en la conversacion misma.
         with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
             df.to_excel(escritor, index=False, sheet_name=HOJA_DATOS)
+            for nombre, ficha in (contexto or {}).items():
+                if ficha is None or ficha.empty:
+                    continue
+                # Excel corta los nombres de hoja a 31 caracteres y revienta
+                # con los duplicados; los nuestros son cortos, pero se recorta
+                # por si alguien agrega uno largo.
+                ficha.to_excel(escritor, index=False, sheet_name=str(nombre)[:31])
             try:
-                _formatear_columnas_de_fecha(escritor.book[HOJA_DATOS], df)
-                _ajustar_ancho_de_columnas(escritor.book[HOJA_DATOS], df)
+                for nombre in escritor.book.sheetnames:
+                    tabla = df if nombre == HOJA_DATOS else (contexto or {}).get(nombre)
+                    if tabla is None:
+                        continue
+                    _formatear_columnas_de_fecha(escritor.book[nombre], tabla)
+                    _ajustar_ancho_de_columnas(escritor.book[nombre], tabla)
             except Exception:
                 # Los datos son lo que el usuario pidio; el formato es un
                 # extra. Un resultado con una forma que no se previo aqui no
