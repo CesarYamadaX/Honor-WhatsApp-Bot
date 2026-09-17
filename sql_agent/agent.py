@@ -851,12 +851,25 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
             f"  {retail} | {carrier or 'sin carrier'} | {nombre} | "
             f"${float(precio):,.2f}".replace(",", " ") + f" | {url}"
         )
+    modelos = {fila[2] for fila in filas}
     lineas.append(
         "AL RESPONDER: di que es el precio publicado en internet ese dia (no "
-        "el precio interno), y para cada uno incluye SIEMPRE el carrier y la "
-        "liga del producto. Sin eso el usuario no puede verificarlo ni sabe "
-        "de que plan es el precio."
+        "el precio interno), y para cada renglon incluye SIEMPRE el NOMBRE "
+        "COMPLETO del modelo tal como aparece arriba, el carrier y la liga. "
+        "Sin el carrier no se sabe si el precio es con plan o libre, y sin la "
+        "liga el usuario no puede verificarlo."
     )
+    if len(modelos) > 1:
+        # El caso real: 256GB a $7 199 y 512GB a $9 999 en la misma tienda.
+        # Presentarlos como "el Magic 8 Lite" hace parecer que el mismo
+        # telefono cuesta muy distinto segun el carrier, cuando lo que cambia
+        # es la capacidad.
+        lineas.append(
+            f"OJO: aqui hay {len(modelos)} versiones distintas del modelo "
+            f"({', '.join(sorted(modelos))}). NO las presentes como si fueran "
+            "el mismo telefono: la diferencia de precio es de version, no de "
+            "tienda. Nombra la version en cada renglon."
+        )
     return "\n".join(lineas)
 
 

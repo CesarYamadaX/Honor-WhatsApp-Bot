@@ -1017,6 +1017,34 @@ class TestPrecioEnInternet:
         motor, _ = self._invocar("magic", retailer="Coppel", filas=[self._oferta()])
         assert "%Coppel%" in motor.parametros
 
+    def test_avisa_cuando_hay_varias_versiones_del_modelo(self):
+        # Caso real: en Coppel el 256GB estaba a $7 199 y el 512GB a $9 999.
+        # Presentarlos juntos como "el Magic 8 Lite" hace parecer que el mismo
+        # telefono cuesta muy distinto segun el carrier.
+        filas = [
+            ("Coppel", "Graymarket", "HONOR MAGIC 8 LITE 256GB 5G", 7199.0,
+             "2026-09-17", "https://coppel.com/a"),
+            ("Coppel", "Telcel", "HONOR MAGIC 8 LITE 512GB 5G", 9999.0,
+             "2026-09-17", "https://coppel.com/b"),
+        ]
+        _, respuesta = self._invocar("magic 8 lite", filas=filas)
+
+        assert "2 versiones distintas" in respuesta
+        assert "256GB" in respuesta and "512GB" in respuesta
+        assert "no de tienda" in respuesta
+
+    def test_con_una_sola_version_no_estorba_con_el_aviso(self):
+        filas = [
+            ("Coppel", "Telcel", "HONOR MAGIC 8 LITE 512GB 5G", 9999.0,
+             "2026-09-17", "https://coppel.com/b"),
+        ]
+        _, respuesta = self._invocar("magic 8 lite", filas=filas)
+        assert "versiones distintas" not in respuesta
+
+    def test_exige_el_nombre_completo_del_modelo(self):
+        _, respuesta = self._invocar("magic 8 lite", filas=[self._oferta()])
+        assert "NOMBRE COMPLETO" in respuesta
+
     def test_sin_resultados_no_inventa_un_precio(self):
         _, respuesta = self._invocar("telefono inexistente")
         assert "No hay precios publicados" in respuesta
