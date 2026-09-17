@@ -435,6 +435,41 @@ class TestConsultarSql:
         assert [os.path.splitext(r)[1] for r in ctx.archivos] == [".png", ".xlsx"]
         assert all(os.path.isabs(r) for r in ctx.archivos)
 
+    def test_pocas_filas_pero_pidieron_el_archivo(self, engine, tmp_path, monkeypatch):
+        # Del log de produccion: el usuario pidio el Excel, la consulta
+        # devolvio 8 filas y no se genero ningun archivo. La decision era solo
+        # por numero de filas e ignoraba lo que habia pedido.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        with contexto_peticion(engine) as ctx:
+            consultar_sql.invoke(
+                {"query": "SELECT * FROM ventas WHERE monto < 50", "entregar_archivo": True}
+            )
+
+        assert ctx.archivos, "si lo pidieron, el archivo tiene que existir"
+        assert any(r.endswith(".xlsx") for r in ctx.archivos)
+
+    def test_sin_pedirlo_un_resultado_corto_sigue_siendo_solo_texto(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Mandar un adjunto de tres filas a un chat es ruido.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        with contexto_peticion(engine) as ctx:
+            consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 50"})
+
+        assert ctx.archivos == []
+
+    def test_pedir_el_archivo_sin_resultados_no_revienta(
+        self, engine, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        with contexto_peticion(engine) as ctx:
+            salida = consultar_sql.invoke(
+                {"query": "SELECT * FROM ventas WHERE monto < 0", "entregar_archivo": True}
+            )
+
+        assert ctx.archivos == []
+        assert "Sin resultados" in salida
+
     def test_dos_consultas_dejan_un_solo_reporte_el_primero(
         self, engine, tmp_path, monkeypatch
     ):

@@ -859,12 +859,16 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
 
 
 @tool
-def consultar_sql(query: str) -> str:
+def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
 
     Usa SIEMPRE esta herramienta para obtener los datos finales que responden
-    la pregunta. Si el resultado tiene muchas filas, esta herramienta genera
-    automaticamente un archivo Excel y lo entrega; no necesitas pedirlo.
+    la pregunta. Con muchas filas arma sola el Excel y la grafica.
+
+    Pon `entregar_archivo=True` cuando el usuario PIDA el archivo ("mandame el
+    excel", "pasamelo en archivo", "descargable"): sin eso, un resultado corto
+    se responde solo como texto y el usuario se queda esperando un adjunto que
+    nunca llega.
     """
     es_valida, motivo = _evaluar_sql(query)
     if not es_valida:
@@ -940,7 +944,9 @@ def consultar_sql(query: str) -> str:
         " ".join(query.split())[:400],
     )
     resultado = formatear_resultado(df)
-    if resultado.necesita_excel:
+    # `not df.empty`: sin filas no hay nada que exportar, y pedir el archivo
+    # no puede convertir un "sin resultados" en un error de exportacion.
+    if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
         # reporte sale igual con la hoja de datos.
@@ -1069,8 +1075,12 @@ class SQLAgent:
         3. Si el usuario pide modificar o borrar informacion, niegate educadamente
            explicando que solo tienes acceso de lectura.
         4. Para obtener los datos finales que responden la pregunta usa SIEMPRE la
-           herramienta `consultar_sql`. Ella decide sola si la respuesta va como
-           texto o como archivo Excel; no le pidas que exporte.
+           herramienta `consultar_sql`. Con muchas filas arma sola el Excel y la
+           grafica.
+           Si el usuario PIDE el archivo ("mandame el excel", "pasamelo en
+           archivo", "descargable"), llamala con `entregar_archivo=True`: un
+           resultado corto se responde solo como texto, y sin eso el usuario se
+           queda esperando un adjunto que nunca llega.
            `consultar_sql` es SOLO para la respuesta final, nunca para explorar.
            Para explorar tienes tres herramientas que NO generan reporte:
            `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
