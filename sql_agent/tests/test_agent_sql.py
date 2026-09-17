@@ -15,6 +15,7 @@ from agent import (
     _tokens_de_modelo,
     buscar_modelos,
     consultar_sql,
+    precio_en_internet,
     contexto_peticion,
     es_select,
     valores_distintos,
@@ -614,6 +615,7 @@ class TestToolkitDelAgente:
             "buscar_modelos",
             "valores_distintos",
             "pronosticar_ventas",
+            "precio_en_internet",
         }
 
 
@@ -968,6 +970,60 @@ class TestHomologacionMalUnida:
             "SELECT [Material_Description] FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL]"
         )
         assert "top falso" not in respuesta
+
+
+class TestPrecioEnInternet:
+    """El respaldo cuando el precio no esta en la tabla interna.
+
+    Lo que sale de aqui NO es el precio del negocio: es lo que la tienda
+    publica en su sitio ese dia. Sin decirlo, y sin el carrier y la liga, el
+    usuario no sabe si es con plan o libre ni puede verificarlo.
+    """
+
+    def _invocar(self, modelo, retailer="", filas=()):
+        motor = _MotorDeCatalogo(list(filas))
+        motor.connection = None
+        with contexto_peticion(motor):
+            return motor, precio_en_internet.invoke(
+                {"modelo": modelo, "retailer": retailer}
+            )
+
+    def _oferta(self):
+        return (
+            "Coppel", "Telcel", "HONOR MAGIC 8 LITE 512GB 5G", 9999.0,
+            "2026-09-17", "https://www.coppel.com/pdp/telcel-honor-magic-8",
+        )
+
+    def test_muestra_fecha_carrier_precio_y_liga(self):
+        _, respuesta = self._invocar("magic 8 lite", filas=[self._oferta()])
+        assert "2026-09-17" in respuesta
+        assert "Telcel" in respuesta
+        assert "9 999.00" in respuesta
+        assert "https://www.coppel.com/pdp/telcel-honor-magic-8" in respuesta
+
+    def test_le_exige_al_agente_citar_la_fuente(self):
+        # Un precio de internet presentado como precio interno es un dato
+        # equivocado disfrazado de correcto.
+        _, respuesta = self._invocar("magic 8 lite", filas=[self._oferta()])
+        assert "publicado en internet" in respuesta
+        assert "carrier" in respuesta and "liga" in respuesta
+
+    def test_los_valores_viajan_como_parametros(self):
+        motor, _ = self._invocar("magic'; DROP TABLE x--", filas=[self._oferta()])
+        assert "DROP TABLE" not in motor.sql
+        assert any("magic" in str(p) for p in motor.parametros)
+
+    def test_filtrar_por_retailer_agrega_su_parametro(self):
+        motor, _ = self._invocar("magic", retailer="Coppel", filas=[self._oferta()])
+        assert "%Coppel%" in motor.parametros
+
+    def test_sin_resultados_no_inventa_un_precio(self):
+        _, respuesta = self._invocar("telefono inexistente")
+        assert "No hay precios publicados" in respuesta
+
+    def test_texto_sin_palabras_utiles(self):
+        _, respuesta = self._invocar("!!! ???")
+        assert "al menos una palabra" in respuesta
 
 
 class TestValoresDistintos:

@@ -156,6 +156,17 @@ NOTAS_GENERALES = [
     "LAPTOP, COMPUTER, SMARTWATCH, AUDIO y ACCESORIO. Es la forma limpia de "
     "responder 'solo celulares' o 'solo accesorios' sin adivinar por el "
     "nombre del modelo.",
+    "PRECIOS: hay DOS fuentes y no son lo mismo. "
+    "[GTM BI Database].dbo.[Prices] es el precio interno, el que maneja el "
+    "negocio, y es la fuente por defecto; su [Material Description] se escribe "
+    "como la descripcion del retailer, igual que [DESCRIPCION] de UNICOS$. "
+    "Si ahi no aparece el modelo, usa la herramienta `precio_en_internet`, "
+    "que consulta el scraping de las tiendas en linea ([Scrap]): trae el "
+    "precio publicado, la fecha, el carrier y la liga del producto. "
+    "Al responder con esa fuente hay que decir SIEMPRE que es el precio "
+    "publicado en internet ese dia --no el interno-- y dar la liga y el "
+    "carrier de cada uno: sin el carrier no se sabe si es con plan o libre, y "
+    "sin la liga el usuario no puede verificarlo.",
     "Las vistas y tablas con IOT en el nombre (vw_ETL_COPPEL_IOT, "
     "vw_ETL_Liverpool_IOT, Coppel_IOT, Liverpool_IOT) son la linea que el "
     "negocio llama accesorios: NO son telefonos. En los datos son tablets, "

@@ -776,6 +776,90 @@ def _ejecutar_interrumpible(conexion, query: str, cancelacion) -> pd.DataFrame:
             pass
 
 
+MAX_OFERTAS = 12
+
+# La tabla de scraping de las tiendas en linea. Se consulta cuando el precio
+# no esta en [GTM BI Database].dbo.[Prices], que es el precio interno.
+TABLA_SCRAP = "[Scrap].dbo.[Complete_Scrap]"
+
+
+@tool
+def precio_en_internet(modelo: str, retailer: str = "") -> str:
+    """Precio publicado hoy en la tienda en linea de cada retailer.
+
+    Usala cuando el precio NO aparezca en [GTM BI Database].dbo.[Prices], que
+    es el precio interno. Esto es otra cosa: lo que la tienda publica en su
+    sitio, recogido por scraping, con su liga y su carrier.
+
+    `modelo` es el nombre del telefono ("magic 8 lite", "x9c"). `retailer`
+    opcional para acotar a uno ("Coppel", "Elektra", "Liverpool").
+    """
+    tokens = _tokens_de_modelo(modelo)
+    if not tokens:
+        return "Dame al menos una palabra o numero del modelo."
+
+    condiciones = " AND ".join(["[approved_name] LIKE ?"] * len(tokens))
+    parametros = [f"%{t}%" for t in tokens]
+    filtro_retail = ""
+    if retailer.strip():
+        filtro_retail = " AND [retail] LIKE ?"
+        parametros.append(f"%{retailer.strip()}%")
+
+    # De la fecha mas reciente que exista para ese modelo, el anuncio mas
+    # barato de cada tienda y carrier. Sin el ROW_NUMBER salen decenas de
+    # anuncios del mismo telefono en la misma tienda, que en un chat no se
+    # pueden leer.
+    sql = f"""
+        WITH reciente AS (
+            SELECT [retail], [carrier], [approved_name], [price],
+                   [consultation_date], [url],
+                   ROW_NUMBER() OVER (
+                       PARTITION BY [retail], [carrier] ORDER BY [price]
+                   ) AS orden
+            FROM {TABLA_SCRAP}
+            WHERE {condiciones}{filtro_retail}
+              AND [consultation_date] = (
+                  SELECT MAX([consultation_date]) FROM {TABLA_SCRAP}
+                  WHERE {condiciones}{filtro_retail}
+              )
+        )
+        SELECT TOP {MAX_OFERTAS} [retail], [carrier], [approved_name], [price],
+               [consultation_date], [url]
+        FROM reciente WHERE orden = 1 ORDER BY [price]
+    """
+
+    ctx = _contexto_actual()
+    try:
+        with ctx.engine.connect() as conexion:
+            cursor = conexion.exec_driver_sql(sql, tuple(parametros) * 2)
+            filas = cursor.fetchall()
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo la consulta de precios de internet")
+        return f"No pude consultar los precios publicados: {error}"
+
+    if not filas:
+        return (
+            f"No hay precios publicados para {' + '.join(tokens)}"
+            + (f" en {retailer}" if retailer.strip() else "")
+            + ". Prueba con menos palabras del modelo."
+        )
+
+    fecha = filas[0][4]
+    lineas = [f"Precios publicados en las tiendas en linea el {fecha}:"]
+    for retail, carrier, nombre, precio, _, url in filas:
+        lineas.append(
+            f"  {retail} | {carrier or 'sin carrier'} | {nombre} | "
+            f"${float(precio):,.2f}".replace(",", " ") + f" | {url}"
+        )
+    lineas.append(
+        "AL RESPONDER: di que es el precio publicado en internet ese dia (no "
+        "el precio interno), y para cada uno incluye SIEMPRE el carrier y la "
+        "liga del producto. Sin eso el usuario no puede verificarlo ni sabe "
+        "de que plan es el precio."
+    )
+    return "\n".join(lineas)
+
+
 MAX_MESES_PRONOSTICO = 12
 
 
@@ -1187,6 +1271,7 @@ class SQLAgent:
                 buscar_modelos,
                 valores_distintos,
                 pronosticar_ventas,
+                precio_en_internet,
             ],
         )
 
