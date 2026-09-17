@@ -1286,13 +1286,19 @@ class SQLAgent:
            "el X9"), llama primero a `buscar_modelos`: los nombres comerciales no
            estan escritos igual en todas las tablas, y un LIKE con el nombre tal
            cual o no encuentra nada o mezcla marcas distintas.
-        12. Si preguntan por ventas futuras ("cuanto va a vender", "proyecta",
-           "pronostico", "estimado del proximo mes"), usa `pronosticar_ventas`
-           y NUNCA inventes tu la proyeccion. Pasale un SELECT con la serie
-           mensual COMPLETA (anio, mes, total), sin filtrar por anio: necesita
-           el mismo mes del anio anterior por la estacionalidad. Reporta el
-           resultado como un rango aproximado, no como un dato cerrado, y
-           repite la advertencia que te devuelva la herramienta.
+        12. `pronosticar_ventas` es SOLO para periodos que TODAVIA NO HAN
+           OCURRIDO: "cuanto va a vender", "proyecta", "pronostico del proximo
+           mes". Pasale un SELECT con la serie mensual COMPLETA (anio, mes,
+           total), sin filtrar por anio, porque necesita el mismo mes del anio
+           anterior por la estacionalidad. Nunca inventes tu una proyeccion.
+           TODO LO DEMAS SON DATOS REALES y va por `consultar_sql`: "ventas
+           totales", "cuanto se vendio", "ventas de 2026", "cuantas unidades",
+           "como va el mes". Son hechos que ya estan en la base; responderlos
+           con una estimacion es darle al usuario un numero inventado en lugar
+           del que pidio.
+           Ante la duda, datos reales. Y no mezcles: si la respuesta son datos
+           reales, no le pegues advertencias de pronostico, aunque la pregunta
+           anterior de la conversacion si haya sido un pronostico.
         13. Es una conversacion: el usuario escribe desde el telefono y
            acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
            "ahora por region", "el mismo dato pero de 2023"), resuelvela contra

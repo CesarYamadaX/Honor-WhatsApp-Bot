@@ -618,6 +618,29 @@ class TestToolkitDelAgente:
             "precio_en_internet",
         }
 
+    def test_el_prompt_reserva_el_pronostico_para_el_futuro(self, engine, monkeypatch):
+        # Paso en produccion: el usuario pidio "ventas totales" y le llego una
+        # proyeccion. La regla decia cuando USAR pronosticar_ventas pero no
+        # cuando no, y con la memoria conversacional el modelo se quedaba en
+        # modo pronostico despues de una pregunta de pronostico. Un dato que
+        # ya esta en la base respondido con una estimacion es un numero
+        # inventado, y encima se ve igual de plausible que el bueno.
+        from langchain_core.prompts import ChatPromptTemplate
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+        agente = SQLAgent(engine=engine)
+        plantilla = next(
+            paso
+            for paso in agente.agent_executor.agent.runnable.steps
+            if isinstance(paso, ChatPromptTemplate)
+        )
+        # El texto va sangrado y partido en lineas: se compara sin saltos.
+        sistema = " ".join(plantilla.messages[0].content.split())
+
+        assert "TODAVIA NO HAN OCURRIDO" in sistema
+        assert "TODO LO DEMAS SON DATOS REALES" in sistema
+        assert '"ventas totales"' in sistema
+
 
 class _EjecutorEspia:
     """Reemplaza al agent_executor: registra lo invocado sin llamar al LLM."""
