@@ -1,8 +1,11 @@
 import threading
 
+import httpx
+import openai
 import pytest
 from fastapi.testclient import TestClient
 
+import api
 from api import crear_app
 from config import Config
 
@@ -88,6 +91,79 @@ class TestRespuesta:
         cuerpo = r.json()["reply"]
         assert "login failed" not in cuerpo
         assert "Traceback" not in cuerpo
+
+    def test_si_el_proveedor_del_modelo_falla_no_se_culpa_a_la_base(self):
+        # Paso en produccion: se acabo el presupuesto de la cuenta y el bot
+        # le contestaba a todos "problema al consultar la base de datos".
+        # La pregunta ni siquiera llega al SQL, y ese mensaje manda a buscar
+        # el problema donde no esta -- ademas de invitar a reintentar algo
+        # que va a fallar igual hasta que alguien toque la cuenta.
+        class AgenteSinCuota:
+            def responder(self, pregunta, cancelacion=None):
+                raise openai.PermissionDeniedError(
+                    message="Budget limit exceeded (monthly limit).",
+                    response=httpx.Response(
+                        403, request=httpx.Request("POST", "http://x")
+                    ),
+                    body=None,
+                )
+
+        app = crear_app(_config(), AgenteSinCuota)
+        with TestClient(app) as cliente:
+            r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
+
+        cuerpo = r.json()["reply"]
+        assert cuerpo == api.MENSAJE_SERVICIO_CAIDO
+        assert "base de datos" not in cuerpo
+        assert "lauragabrielacastellanos" in cuerpo
+        assert "Budget limit" not in cuerpo
+
+    def test_el_error_que_langchain_reenvuelve_tambien_se_reconoce(self):
+        # langchain_openai no propaga el error de openai tal cual: lo vuelve
+        # a levantar como una clase suya con `raise ... from e`. Si solo se
+        # mirara la excepcion de hasta arriba, el caso real no se detecta.
+        from langchain_openai.chat_models.base import OpenAIPermissionDeniedError
+
+        respuesta = httpx.Response(403, request=httpx.Request("POST", "http://x"))
+        original = openai.PermissionDeniedError(
+            message="Budget limit exceeded", response=respuesta, body=None
+        )
+        try:
+            try:
+                raise original
+            except openai.PermissionDeniedError as e:
+                raise OpenAIPermissionDeniedError(
+                    message=e.message, response=respuesta, body=None
+                ) from e
+        except Exception as envuelto:
+            assert api.es_falla_del_servicio(envuelto)
+
+    def test_una_falla_de_la_base_sigue_dando_el_mensaje_de_siempre(self):
+        # El mensaje del servicio caido es para el proveedor del modelo. Un
+        # timeout de SQL si se puede arreglar reformulando o reintentando,
+        # y no hay nada que pedirle al equipo de GTM.
+        class AgenteQueFalla:
+            def responder(self, pregunta, cancelacion=None):
+                raise RuntimeError("timeout expired")
+
+        app = crear_app(_config(), AgenteQueFalla)
+        with TestClient(app) as cliente:
+            r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
+
+        assert r.json()["reply"] == api.MENSAJE_ERROR_INTERNO
+
+    def test_un_400_del_modelo_no_es_falla_de_cuenta(self):
+        # Un prompt demasiado largo llega como 400 desde el mismo modulo.
+        # Eso es culpa de la consulta, no de la cuenta: mandar al usuario a
+        # hablar con el equipo de GTM seria un falso positivo.
+        from langchain_openai.chat_models.base import OpenAIContextOverflowError
+
+        error = OpenAIContextOverflowError(
+            message="too many tokens",
+            response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+            body=None,
+        )
+        assert not api.es_falla_del_servicio(error)
 
 
 class TestConcurrencia:

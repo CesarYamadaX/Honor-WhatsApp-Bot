@@ -23,6 +23,36 @@ MENSAJE_ERROR_INTERNO = (
     "Tuve un problema al consultar la base de datos. "
     "Intenta de nuevo en un momento, o reformula la pregunta."
 )
+MENSAJE_SERVICIO_CAIDO = (
+    "Ahorita no puedo responder preguntas: el servicio de inteligencia "
+    "artificial que uso esta fuera de linea. No se arregla reformulando la "
+    "pregunta ni esperando un rato. Comunicate con lauragabrielacastellanos "
+    "o con alguien del equipo de GTM Mexico para que lo revisen."
+)
+
+# Errores del proveedor del modelo: presupuesto agotado (403), sin saldo
+# (402), clave vencida (401) o cuota diaria topada (429). Ninguno se arregla
+# del lado del usuario -- la pregunta ni siquiera llega a la base de datos --,
+# y culpar al SQL lo manda a buscar el problema donde no esta.
+_CODIGOS_DE_CUENTA = frozenset({401, 402, 403, 429})
+_MODULOS_DEL_MODELO = frozenset({"openai", "langchain_openai"})
+
+
+def es_falla_del_servicio(error: BaseException | None) -> bool:
+    """True si el fallo viene del proveedor del modelo y no de la base.
+
+    Se recorre la cadena de causas porque langchain reenvuelve el error de
+    openai en uno suyo, y el codigo HTTP puede venir en cualquiera de los dos.
+    """
+    vistos: set[int] = set()
+    while error is not None and id(error) not in vistos:
+        vistos.add(id(error))
+        modulo = type(error).__module__.split(".")[0]
+        if modulo in _MODULOS_DEL_MODELO:
+            if getattr(error, "status_code", None) in _CODIGOS_DE_CUENTA:
+                return True
+        error = error.__cause__ or error.__context__
+    return False
 MENSAJE_CANCELADO = "Listo, cancele la consulta anterior."
 MENSAJE_NADA_QUE_CANCELAR = "No tenias ninguna consulta en curso."
 
@@ -91,8 +121,15 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
             # un "cancelado" por la vieja seria ruido.
             logger.info("Consulta cancelada para %s", chat_id)
             return None
-        except Exception:
+        except Exception as error:
             logger.exception("Fallo el agente para %s", chat_id)
+            if es_falla_del_servicio(error):
+                logger.error(
+                    "El proveedor del modelo rechazo la peticion de %s: "
+                    "revisar la cuenta (presupuesto, saldo o clave)",
+                    chat_id,
+                )
+                return Respuesta(reply=MENSAJE_SERVICIO_CAIDO, files=[])
             return Respuesta(reply=MENSAJE_ERROR_INTERNO, files=[])
         finally:
             sesion.lock.release()
