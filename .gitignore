@@ -1,9 +1,12 @@
 sql_agent/.env
 whatsapp/.env
 sql_agent/venv/
+sql_agent/.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 node_modules/
 auth_info/
 exports/
+# Salida de los servicios cuando se levantan a mano para probar.
+*.log
