@@ -26,7 +26,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlparse import tokens as sql_tokens
 
-from catalogo import _corchetes, buscar, describir_objeto, indice, valores_conocidos
+from catalogo import (
+    _corchetes,
+    buscar,
+    cargar_catalogo,
+    describir_objeto,
+    indice,
+    valores_conocidos,
+)
 from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
@@ -439,6 +446,54 @@ _OBJETO_INVALIDO = re.compile(r"Invalid object name '([^']+)'")
 # cumpla el presupuesto medido aqui (el driver cuenta desde que mandó la
 # consulta, no desde que se armo).
 _POR_TIEMPO = re.compile(r"timeout expired|HYT00|query timeout", re.IGNORECASE)
+
+
+_COLUMNA_INVALIDA = re.compile(r"Invalid column name '([^']+)'")
+
+
+def _columnas_que_si_existen(error: Exception, query: str) -> str:
+    """Si la columna no existe, dice cuales tiene la tabla. "" si no aplica.
+
+    SQL Server dice que [Día] no existe, pero no dice como se llama ahi la
+    fecha. Y la fecha se llama distinto en cada tabla: [Día] en COPPEL_B2B,
+    [Day] en EKT_B2B, [Fecha] en TELCEL_B2B, [Date]+[Year]/[Month]/[Day] en
+    las vistas vw_ETL_*. En produccion el agente probaba [Día] contra la
+    vista de Elektra, comia el error y recien entonces acertaba: un viaje
+    perdido en cada pronostico. El catalogo tiene las columnas, asi que la
+    correccion se puede dar hecha.
+    """
+    coincidencia = _COLUMNA_INVALIDA.search(str(error))
+    if not coincidencia:
+        return ""
+    faltante = coincidencia.group(1)
+
+    plano = " ".join(query.split())
+    candidatos = [
+        objeto
+        for base in cargar_catalogo()["bases"]
+        for objeto in base["objetos"]
+        # Identificador completo, no subcadena: la vista "Coppel" vive dentro
+        # del texto "COPPEL_B2B" y sin esto se reportaban las columnas de la
+        # tabla equivocada.
+        if re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(objeto['nombre'])}(?![A-Za-z0-9_])",
+            plano,
+            re.IGNORECASE,
+        )
+    ]
+    # El nombre mas largo primero: si la consulta nombra varias tablas, la
+    # mas especifica es la que suele traer la columna en cuestion.
+    for objeto in sorted(candidatos, key=lambda o: -len(o["nombre"])):
+        columnas = [c["nombre"] for c in objeto["columnas"]]
+        if any(c.casefold() == faltante.casefold() for c in columnas):
+            # Esta tabla si la tiene: el error viene de otra de la consulta.
+            continue
+        return (
+            f" {objeto['nombre']} no tiene [{faltante}]. Sus columnas son: "
+            + ", ".join(f"[{c}]" for c in columnas)
+            + "."
+        )
+    return ""
 
 
 def _es_por_tiempo(error: Exception) -> bool:
@@ -1032,7 +1087,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 "(vw_ETL_COPPEL, vw_ETL_Elektra, vw_ETL_TELCEL_B2B...), que "
                 "trae las mismas columnas y no recorre las otras ocho."
             )
-        return f"Error al ejecutar la consulta: {error}{_donde_vive_de_verdad(error)}"
+        return (
+            f"Error al ejecutar la consulta: {error}"
+            f"{_donde_vive_de_verdad(error)}"
+            f"{_columnas_que_si_existen(error, query)}"
+        )
 
     logger.info(
         "SQL ok en %.0fs, %d filas: %s",

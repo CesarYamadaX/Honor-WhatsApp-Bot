@@ -972,6 +972,49 @@ class TestHomologacionMalUnida:
         assert "top falso" not in respuesta
 
 
+class TestColumnaQueNoExiste:
+    """La fecha se llama distinto en cada tabla, y el error no dice como.
+
+    [Día] en COPPEL_B2B, [Day] en EKT_B2B, [Fecha] en TELCEL_B2B, y
+    [Date]+[Year]/[Month]/[Day] en las vistas vw_ETL_*. En produccion el
+    agente probaba [Día] contra la vista de Elektra y perdia un viaje en cada
+    pronostico antes de acertar.
+    """
+
+    def _error(self, columna: str) -> Exception:
+        return RuntimeError(
+            f"('42S22', \"[42S22] [Microsoft][ODBC Driver 18 for SQL Server]"
+            f"[SQL Server]Invalid column name '{columna}'. (207)\")"
+        )
+
+    def test_dice_que_columnas_tiene_de_verdad(self):
+        pista = modulo_agente._columnas_que_si_existen(
+            self._error("Día"),
+            "SELECT [Día] FROM [RAW_DATA_B2B].dbo.[vw_ETL_Elektra]",
+        )
+        assert "vw_ETL_Elektra no tiene" in pista
+        assert "[Date]" in pista and "[Year]" in pista
+
+    def test_calla_si_la_tabla_si_tiene_esa_columna(self):
+        # El error viene de otra tabla de la consulta; no hay nada que
+        # corregir sobre esta.
+        pista = modulo_agente._columnas_que_si_existen(
+            self._error("Día"),
+            "SELECT [Día] FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B]",
+        )
+        assert pista == ""
+
+    def test_ignora_los_errores_que_no_son_de_columna(self):
+        assert modulo_agente._columnas_que_si_existen(
+            RuntimeError("Query timeout expired"), "SELECT 1"
+        ) == ""
+
+    def test_calla_si_no_reconoce_la_tabla(self):
+        assert modulo_agente._columnas_que_si_existen(
+            self._error("X"), "SELECT [X] FROM algo_que_no_esta_en_el_catalogo"
+        ) == ""
+
+
 class TestPrecioEnInternet:
     """El respaldo cuando el precio no esta en la tabla interna.
 
