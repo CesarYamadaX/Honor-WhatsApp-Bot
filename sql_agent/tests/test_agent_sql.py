@@ -578,6 +578,7 @@ class TestToolkitDelAgente:
             "describir_objeto",
             "buscar_modelos",
             "valores_distintos",
+            "pronosticar_ventas",
         }
 
 

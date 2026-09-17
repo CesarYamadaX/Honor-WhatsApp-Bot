@@ -30,6 +30,7 @@ from catalogo import _corchetes, buscar, describir_objeto, indice, valores_conoc
 from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
+from pronostico import ERROR_TIPICO, proyectar
 from formatting import formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
@@ -775,6 +776,88 @@ def _ejecutar_interrumpible(conexion, query: str, cancelacion) -> pd.DataFrame:
             pass
 
 
+MAX_MESES_PRONOSTICO = 12
+
+
+@tool
+def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
+    """Proyecta las ventas de los proximos meses.
+
+    `sql_historico` es un SELECT que devuelve la serie mensual con TRES
+    columnas en este orden: anio, mes y total. Una fila por mes, por ejemplo:
+      SELECT YEAR([Día]), MONTH([Día]), SUM([Unidades])
+      FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B]
+      GROUP BY YEAR([Día]), MONTH([Día])
+    Trae la historia COMPLETA, sin filtrar por anio: el pronostico necesita el
+    mismo mes del anio anterior para tener en cuenta la estacionalidad.
+    """
+    meses = max(1, min(int(meses), MAX_MESES_PRONOSTICO))
+
+    es_valida, motivo = _evaluar_sql(sql_historico)
+    if not es_valida:
+        return f"Ese SQL no es una consulta de lectura valida ({motivo})."
+
+    ctx = _contexto_actual()
+    try:
+        with ctx.engine.connect() as conexion:
+            df = _ejecutar_interrumpible(conexion, sql_historico, ctx.cancelacion)
+    except ConsultaCancelada:
+        raise
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo la consulta historica del pronostico")
+        return f"No pude traer la historia: {error}"
+
+    if df.shape[1] < 3:
+        return (
+            "La consulta debe devolver tres columnas: anio, mes y total. "
+            f"Devolvio {df.shape[1]}."
+        )
+
+    try:
+        serie = [
+            (int(fila[0]), int(fila[1]), float(fila[2]))
+            for fila in df.itertuples(index=False)
+            if fila[0] is not None and fila[1] is not None and fila[2] is not None
+        ]
+    except (TypeError, ValueError):
+        return (
+            "No pude leer la serie: las columnas deben ser anio (numero), "
+            "mes (1-12) y total (numero), en ese orden."
+        )
+
+    resultado = proyectar(serie, meses)
+    if resultado is None:
+        return (
+            f"La historia trae {len(serie)} meses utiles y no alcanza para "
+            "proyectar. Trae la serie completa, sin filtrar por anio."
+        )
+
+    lineas = [f"Pronostico ({resultado.metodo}):"]
+    for anio, mes, valor in resultado.meses:
+        lineas.append(f"  {anio}-{mes:02d}: {valor:,.0f}".replace(",", " "))
+
+    if resultado.descartado:
+        anio, mes = resultado.descartado
+        lineas.append(
+            f"Se dejo fuera {anio}-{mes:02d} porque el mes todavia no termina; "
+            "incluirlo habria arrastrado el pronostico hacia abajo."
+        )
+    if resultado.confiable:
+        lineas.append(
+            f"En pruebas contra meses ya ocurridos este metodo se equivoca "
+            f"alrededor de {ERROR_TIPICO:.0%}. Dile al usuario el rango, no "
+            "un numero exacto."
+        )
+    else:
+        lineas.append(
+            "OJO: no hay un anio completo de historia, asi que esto es solo "
+            "tendencia y NO toma en cuenta la estacionalidad, que en estos "
+            "datos es fuerte (diciembre casi duplica a febrero). Avisale al "
+            "usuario que es una estimacion gruesa."
+        )
+    return "\n".join(lineas)
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
@@ -1037,7 +1120,14 @@ class SQLAgent:
            "el X9"), llama primero a `buscar_modelos`: los nombres comerciales no
            estan escritos igual en todas las tablas, y un LIKE con el nombre tal
            cual o no encuentra nada o mezcla marcas distintas.
-        12. Es una conversacion: el usuario escribe desde el telefono y
+        12. Si preguntan por ventas futuras ("cuanto va a vender", "proyecta",
+           "pronostico", "estimado del proximo mes"), usa `pronosticar_ventas`
+           y NUNCA inventes tu la proyeccion. Pasale un SELECT con la serie
+           mensual COMPLETA (anio, mes, total), sin filtrar por anio: necesita
+           el mismo mes del anio anterior por la estacionalidad. Reporta el
+           resultado como un rango aproximado, no como un dato cerrado, y
+           repite la advertencia que te devuelva la herramienta.
+        13. Es una conversacion: el usuario escribe desde el telefono y
            acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
            "ahora por region", "el mismo dato pero de 2023"), resuelvela contra
            lo que ya se hablo en vez de pedirle que la repita completa.
@@ -1086,6 +1176,7 @@ class SQLAgent:
                 describir_objeto,
                 buscar_modelos,
                 valores_distintos,
+                pronosticar_ventas,
             ],
         )
 
