@@ -601,8 +601,11 @@ async function cargarTurnos(chatId) {
 
 // --- Pestañas y refresco ---------------------------------------------------
 
-function elegirPestana(nombre) {
+function elegirPestana(nombre, cambiarUrl = true) {
   pestanaActual = nombre;
+  // La pestaña va en la direccion: asi se puede guardar el panel
+  // directamente en Usuarios, y recargar no te devuelve al principio.
+  if (cambiarUrl && location.hash.slice(1) !== nombre) location.hash = nombre;
   for (const otra of PESTANAS) {
     $(`tab-${otra}`).setAttribute("aria-selected", String(otra === nombre));
     $(`panel-${otra}`).hidden = otra !== nombre;
@@ -614,6 +617,13 @@ function elegirPestana(nombre) {
 for (const nombre of PESTANAS) {
   $(`tab-${nombre}`).addEventListener("click", () => elegirPestana(nombre));
 }
+
+function pestanaDeLaUrl() {
+  const pedida = location.hash.slice(1);
+  return PESTANAS.includes(pedida) ? pedida : "actividad";
+}
+window.addEventListener("hashchange", () => elegirPestana(pestanaDeLaUrl(), false));
+elegirPestana(pestanaDeLaUrl(), false);
 
 async function latido() {
   // Solo mientras la pestaña este a la vista: con el panel de fondo, esto

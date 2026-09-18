@@ -21,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -90,7 +91,10 @@ def revisar_requisitos(raiz: Path = RAIZ) -> list[str]:
     return problemas
 
 
-def url_de_salud(raiz: Path = RAIZ) -> str:
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _host_y_puerto(raiz: Path = RAIZ) -> tuple[str, str]:
     """Donde escucha el servicio, segun su .env (no siempre es el 8000)."""
     host, puerto = "127.0.0.1", "8000"
     archivo = raiz / "sql_agent" / ".env"
@@ -102,11 +106,29 @@ def url_de_salud(raiz: Path = RAIZ) -> str:
                 host = valor
             elif clave == "API_PORT" and valor:
                 puerto = valor
+    return host, puerto
+
+
+def url_de_salud(raiz: Path = RAIZ) -> str:
+    host, puerto = _host_y_puerto(raiz)
     # 0.0.0.0 es "escucha en todas las interfaces"; para preguntarle hay que
     # ir a una direccion de verdad.
     if host in ("0.0.0.0", "::"):
         host = "127.0.0.1"
     return f"http://{host}:{puerto}/health"
+
+
+def url_del_panel(raiz: Path = RAIZ) -> str | None:
+    """La direccion del panel, o None si esta apagado por no ser loopback.
+
+    El panel es una pagina web, no sale en la terminal, asi que si el
+    arranque no la dice de forma visible es como si no existiera. Antes la
+    escribia el servicio entre sus lineas de INFO y ahi se perdia.
+    """
+    host, puerto = _host_y_puerto(raiz)
+    if host not in LOOPBACK:
+        return None
+    return f"http://{host}:{puerto}/panel"
 
 
 def responde(url: str, timeout: float = 2.0) -> bool:
@@ -262,7 +284,7 @@ def _terminar(proceso: subprocess.Popen, nombre: str) -> None:
         proceso.kill()
 
 
-def main() -> int:
+def main(abrir_el_panel: bool = False) -> int:
     # El QR y los logs traen caracteres que la consola de Windows no imprime
     # en su codificacion por defecto.
     for flujo in (sys.stdout, sys.stderr):
@@ -342,7 +364,23 @@ def main() -> int:
             ]
         )
 
-        print("[iniciar] los dos arriba. Ctrl+C aqui, o `python apagar.py`.", flush=True)
+        panel = url_del_panel()
+        print("", flush=True)
+        print("  El bot esta encendido.", flush=True)
+        if panel:
+            print(f"  Panel (usuarios y conversaciones):  {panel}", flush=True)
+            print("  Abrelo en el navegador de esta maquina.", flush=True)
+        else:
+            print(
+                "  El panel esta apagado: API_HOST no es loopback y el "
+                "servicio no tiene autenticacion.",
+                flush=True,
+            )
+        print("  Para apagarlo: Ctrl+C aqui, o `python apagar.py`.", flush=True)
+        print("", flush=True)
+
+        if abrir_el_panel and panel:
+            webbrowser.open(panel)
 
         while True:
             for nombre, proceso in procesos:
@@ -367,4 +405,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # `--abrir` abre el panel en el navegador al terminar de levantar. No es
+    # el comportamiento por defecto: el bot se reinicia a menudo mientras se
+    # depura, y una pestaña nueva cada vez estorba.
+    sys.exit(main(abrir_el_panel="--abrir" in sys.argv))

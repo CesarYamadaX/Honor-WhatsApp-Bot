@@ -50,7 +50,13 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 
 ## Panel de administracion
 
-Se enciende con el bot, en <http://127.0.0.1:8000/panel>. Tres vistas:
+Se enciende con el bot, en <http://127.0.0.1:8000/panel>. Es una pagina web:
+hay que abrirla en el navegador de la maquina donde corre el bot -- el
+arranque escribe la direccion, y `python iniciar.py --abrir` la abre sola.
+Cada vista tiene su propia direccion (`#usuarios`, `#conversaciones`), asi que
+se puede guardar en favoritos la que se use mas.
+
+Tres vistas:
 
 - **Ahora mismo** — que consulta esta corriendo, desde hace cuanto y en que
   paso va (que SQL lanzo, cuantas filas trajo). Una consulta pesada tarda
