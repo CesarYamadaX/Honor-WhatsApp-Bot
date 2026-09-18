@@ -42,6 +42,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/agent.py` | Agente Text-to-SQL y el filtro de solo-lectura |
 | `sql_agent/formatting.py` | Decide si el resultado va como texto o como Excel |
 | `sql_agent/main.py` | CLI interactiva, alternativa a WhatsApp |
+| `iniciar.py` | Arranca los dos procesos en orden y los baja juntos |
 
 ## Seguridad
 
@@ -70,9 +71,21 @@ la empresa.
 
 ## Arranque
 
-Ver `whatsapp/README.md`. Resumen: copiar los dos `.env.example` a `.env`,
-llenarlos, levantar `sql_agent/api.py` y despues `whatsapp/` con `npm start`,
-y escanear el QR.
+Un solo comando levanta los dos procesos:
+
+    python iniciar.py
+
+(en Windows tambien sirve `iniciar.bat`, con doble clic). Arranca el servicio
+Python, espera a que conteste y recien entonces arranca el sidecar; Ctrl+C
+baja los dos, y si uno se cae, el otro se baja tambien. La primera vez imprime
+el QR para vincular WhatsApp.
+
+Antes hay que copiar `sql_agent/.env.example` a `.env` y llenarlo
+(`DB_URI`, `OPENROUTER_API_KEY`, `WHATSAPP_ALLOWED_NUMBERS`), y correr
+`npm install` en `whatsapp/`. Si falta algo, `iniciar.py` lo dice y no
+arranca nada.
+
+Para levantarlos por separado, ver `whatsapp/README.md`.
 
 Ningun `.env` con valores reales se versiona.
 

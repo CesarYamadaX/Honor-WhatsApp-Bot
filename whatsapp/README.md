@@ -30,6 +30,15 @@ que `index.js` usa directamente:
 
 ## Arranque
 
+Lo normal es levantar los dos de una, desde la raiz del repo:
+
+```bash
+python iniciar.py
+```
+
+Ctrl+C baja los dos. Lo de abajo es el arranque manual, util para depurar uno
+sin el otro.
+
 Terminal 1 — el servicio Python:
 
 ```bash
@@ -42,10 +51,13 @@ Terminal 2 — el sidecar de WhatsApp:
 
 ```bash
 cd whatsapp
-cp .env.example .env
 npm install
 npm start
 ```
+
+(`.env.example` esta de referencia, pero `index.js` no carga dotenv: lee
+`process.env` directo y todos sus valores tienen respaldo. Para cambiarlos hay
+que exportarlos en el entorno, no escribirlos en un `.env`.)
 
 La primera vez imprime un codigo QR en la terminal. Escanearlo desde
 WhatsApp > Dispositivos vinculados. La sesion queda guardada en `auth_info/`
