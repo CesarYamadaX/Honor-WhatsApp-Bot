@@ -38,6 +38,7 @@ from catalogo import (
 from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
+import bitacora
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, proyectar
 from formatting import formatear_resultado
@@ -586,6 +587,7 @@ def buscar_modelos(texto: str) -> str:
     de forma suelta ("magic", "magic pro", "el X9", "los plegables"): te dice
     que modelos existen de verdad, de que marca son, y como filtrarlos.
     """
+    bitacora.paso(f"buscando el modelo {texto!r} en el catalogo")
     tokens = _tokens_de_modelo(texto)
     if not tokens:
         return "Dame al menos una palabra o numero del modelo."
@@ -702,6 +704,7 @@ def valores_distintos(tabla: str, columna: str) -> str:
     final: los retailers, marcas y carriers no estan escritos de forma
     uniforme. Es solo para mirar -- no genera ningun reporte para el usuario.
     """
+    bitacora.paso(f"mirando como se escriben los valores de {tabla}.{columna}")
     encontrados = buscar(tabla)
     if not encontrados:
         return f"No conozco ninguna tabla o vista {tabla!r}."
@@ -851,6 +854,7 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
     `modelo` es el nombre del telefono ("magic 8 lite", "x9c"). `retailer`
     opcional para acotar a uno ("Coppel", "Elektra", "Liverpool").
     """
+    bitacora.paso(f"buscando el precio de {modelo!r} en el scraping de internet")
     tokens = _tokens_de_modelo(modelo)
     if not tokens:
         return "Dame al menos una palabra o numero del modelo."
@@ -945,6 +949,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     Trae la historia COMPLETA, sin filtrar por anio: el pronostico necesita el
     mismo mes del anio anterior para tener en cuenta la estacionalidad.
     """
+    bitacora.paso(f"proyectando los proximos {meses} meses")
     meses = max(1, min(int(meses), MAX_MESES_PRONOSTICO))
 
     es_valida, motivo = _evaluar_sql(sql_historico)
@@ -1058,6 +1063,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "concretos."
         )
     comenzo = time.monotonic()
+    bitacora.paso(f"SQL: {' '.join(query.split())}")
     try:
         with ctx.engine.connect() as conexion:
             with _presupuesto_de_tiempo(conexion, presupuesto):
@@ -1077,6 +1083,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             presupuesto,
             " ".join(query.split())[:400],
         )
+        bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}")
         if _es_por_tiempo(error) or tardo >= presupuesto:
             # Se agoto el presupuesto, no es un error de sintaxis: decirselo
             # tal cual para que acote en vez de reintentar lo mismo.
@@ -1095,12 +1102,14 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             f"{_columnas_que_si_existen(error, query)}"
         )
 
+    tardo = time.monotonic() - comenzo
     logger.info(
         "SQL ok en %.0fs, %d filas: %s",
-        time.monotonic() - comenzo,
+        tardo,
         len(df),
         " ".join(query.split())[:400],
     )
+    bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s")
     resultado = formatear_resultado(df)
     # `not df.empty`: sin filas no hay nada que exportar, y pedir el archivo
     # no puede convertir un "sin resultados" en un error de exportacion.

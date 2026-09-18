@@ -12,3 +12,5 @@ exports/
 *.log
 # PIDs de los procesos encendidos; los escribe iniciar.py.
 .bot-encendido.json
+# Usuarios del bot y bitacora de conversaciones: datos reales.
+sql_agent/datos/

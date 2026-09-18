@@ -6,16 +6,22 @@ solo en loopback. Nunca exponerlo en 0.0.0.0.
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import idioma as idiomas
 from agent import ConsultaCancelada
+from bitacora import Bitacora
 from config import Config
 from session import RegistroSesiones
+from usuarios import ErrorDeUsuarios, RegistroUsuarios
+from config import normalizar_chat_id
 
 logger = logging.getLogger("sql_agent.api")
 
@@ -109,35 +115,77 @@ class Respuesta(BaseModel):
     idioma: str = idiomas.POR_DEFECTO
 
 
-def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
+def crear_app(
+    config: Config,
+    fabrica_agente: Callable[[], Any],
+    usuarios: RegistroUsuarios | None = None,
+    bitacora: Bitacora | None = None,
+) -> FastAPI:
     app = FastAPI(title="sql_agent")
     registro = RegistroSesiones(
         fabrica=fabrica_agente,
         ttl_segundos=config.ttl_minutos * 60,
     )
+    # Sin registro en disco se trabaja con uno en memoria sembrado del .env:
+    # el comportamiento es el de siempre y las pruebas no necesitan archivos.
+    usuarios = usuarios if usuarios is not None else RegistroUsuarios(semilla=config.allowlist)
+    diario = bitacora if bitacora is not None else Bitacora()
+    app.state.usuarios = usuarios
+    app.state.bitacora = diario
+
+    def autorizado(chat_id: str) -> bool:
+        """Unico punto donde se decide si un chat existe para el bot.
+
+        Los grupos y las difusiones no pasan `normalizar_chat_id`, y un
+        numero que no este activo es indistinguible de uno que nunca estuvo:
+        cualquier respuesta distinta le confirmaria que hay un bot aqui.
+        """
+        numero = normalizar_chat_id(chat_id)
+        return numero is not None and usuarios.puede_usar(numero)
 
     def _ejecutar(sesion, pregunta: str, chat_id: str, idioma: str) -> Respuesta | None:
         # El lock se suelta aqui dentro, no en el llamador: si la peticion
         # expira, asyncio cancela la espera pero el hilo sigue corriendo, y
         # soltar el lock antes dejaria entrar una segunda consulta del mismo
         # chat mientras la primera todavia golpea la base.
+        turno = diario.comenzar(chat_id, pregunta)
+        comenzo = time.monotonic()
         try:
             texto, archivos = sesion.agente.responder(
                 pregunta, cancelacion=sesion.cancelacion
             )
+            idioma_usado = getattr(sesion.agente, "idioma", idioma)
+            diario.terminar(
+                turno,
+                respuesta=texto,
+                archivos=list(archivos),
+                idioma=idioma_usado,
+                segundos=time.monotonic() - comenzo,
+            )
             return Respuesta(
-                reply=texto,
-                files=list(archivos),
-                idioma=getattr(sesion.agente, "idioma", idioma),
+                reply=texto, files=list(archivos), idioma=idioma_usado
             )
         except ConsultaCancelada:
             # None, no un mensaje: al usuario ya le esta contestando la
             # pregunta nueva, la que provoco la cancelacion. Mandarle ademas
             # un "cancelado" por la vieja seria ruido.
             logger.info("Consulta cancelada para %s", chat_id)
+            diario.terminar(
+                turno,
+                estado="cancelado",
+                idioma=idioma,
+                segundos=time.monotonic() - comenzo,
+            )
             return None
         except Exception as error:
             logger.exception("Fallo el agente para %s", chat_id)
+            diario.terminar(
+                turno,
+                respuesta=str(error)[:500],
+                estado="error",
+                idioma=idioma,
+                segundos=time.monotonic() - comenzo,
+            )
             if es_falla_del_servicio(error):
                 logger.error(
                     "El proveedor del modelo rechazo la peticion de %s: "
@@ -157,7 +205,7 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
 
     @app.post("/ask", response_model=Respuesta)
     async def ask(peticion: Peticion) -> Respuesta:
-        if not config.autorizado(peticion.chat_id):
+        if not autorizado(peticion.chat_id):
             # El sidecar traduce esto a silencio: responder confirmaria que
             # hay un bot vivo del otro lado.
             logger.warning("Mensaje rechazado de %s", peticion.chat_id)
@@ -224,7 +272,7 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
         numero ajeno confirma que hay un bot del otro lado, que es justo lo
         que la allowlist evita.
         """
-        if not config.autorizado(peticion.chat_id):
+        if not autorizado(peticion.chat_id):
             raise HTTPException(status_code=403, detail="No autorizado")
         return {"ok": True}
 
@@ -244,7 +292,7 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
         mensaje de un numero ajeno no tiene por que cruzar hasta aca; cuando
         el sidecar llama a esto, la pregunta ya viajo por /ask.
         """
-        if not config.autorizado(peticion.chat_id):
+        if not autorizado(peticion.chat_id):
             raise HTTPException(status_code=403, detail="No autorizado")
         sesion = registro.existente(peticion.chat_id)
         if sesion is None:
@@ -255,7 +303,121 @@ def crear_app(config: Config, fabrica_agente: Callable[[], Any]) -> FastAPI:
     async def health() -> dict:
         return {"status": "ok", "sesiones": len(registro)}
 
+    # ------------------------------------------------------------------
+    # Panel de administracion. Vive dentro del mismo servicio para que se
+    # encienda con el bot y no haya un tercer proceso que recordar.
+    # ------------------------------------------------------------------
+
+    def _solo_local() -> None:
+        """Corta el panel si el servicio no esta atado a loopback.
+
+        El servicio no tiene autenticacion: su unica defensa es escuchar solo
+        en la maquina. Con /ask eso ya era delicado; el panel ademas da de
+        alta usuarios y deja leer conversaciones, asi que si alguien cambia
+        API_HOST a 0.0.0.0 el panel se apaga en vez de quedar abierto a la
+        red.
+        """
+        if config.api_host not in ("127.0.0.1", "localhost", "::1"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "El panel solo funciona con el servicio atado a loopback. "
+                    f"API_HOST es {config.api_host!r}: no tiene autenticacion y "
+                    "quedaria abierto a la red."
+                ),
+            )
+
+    @app.get("/panel", response_class=HTMLResponse)
+    async def panel() -> Any:
+        _solo_local()
+        archivo = Path(__file__).resolve().parent / "panel" / "index.html"
+        if not archivo.exists():
+            raise HTTPException(status_code=404, detail="Falta panel/index.html")
+        return FileResponse(archivo)
+
+    @app.get("/panel/usuarios")
+    async def listar_usuarios() -> dict:
+        _solo_local()
+        return {
+            "usuarios": [vars(u) for u in usuarios.listar()],
+            "con_conversacion_viva": registro.chats(),
+        }
+
+    class AltaUsuario(BaseModel):
+        numero: str
+        nombre: str = ""
+        nota: str = ""
+
+    class CambioUsuario(BaseModel):
+        numero: str
+        hasta: str | None = None
+        nota: str = ""
+
+    def _respuesta_de_usuario(accion, *args, **kwargs) -> dict:
+        """Ejecuta una operacion del registro y traduce su error a HTTP 400."""
+        try:
+            resultado = accion(*args, **kwargs)
+        except ErrorDeUsuarios as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"usuario": vars(resultado) if resultado is not None else None}
+
+    @app.post("/panel/usuarios")
+    async def agregar_usuario(alta: AltaUsuario) -> dict:
+        _solo_local()
+        logger.info("Panel: alta de %s", alta.numero)
+        return _respuesta_de_usuario(usuarios.agregar, alta.numero, alta.nombre, alta.nota)
+
+    @app.post("/panel/usuarios/bloquear")
+    async def bloquear_usuario(cambio: CambioUsuario) -> dict:
+        _solo_local()
+        logger.info("Panel: bloqueo de %s", cambio.numero)
+        return _respuesta_de_usuario(usuarios.bloquear, cambio.numero, cambio.nota)
+
+    @app.post("/panel/usuarios/suspender")
+    async def suspender_usuario(cambio: CambioUsuario) -> dict:
+        _solo_local()
+        logger.info("Panel: suspension de %s hasta %s", cambio.numero, cambio.hasta)
+        return _respuesta_de_usuario(
+            usuarios.suspender, cambio.numero, cambio.hasta, cambio.nota
+        )
+
+    @app.post("/panel/usuarios/reactivar")
+    async def reactivar_usuario(cambio: CambioUsuario) -> dict:
+        _solo_local()
+        logger.info("Panel: reactivacion de %s", cambio.numero)
+        return _respuesta_de_usuario(usuarios.reactivar, cambio.numero)
+
+    @app.post("/panel/usuarios/eliminar")
+    async def eliminar_usuario(cambio: CambioUsuario) -> dict:
+        _solo_local()
+        logger.info("Panel: baja de %s", cambio.numero)
+        return _respuesta_de_usuario(usuarios.eliminar, cambio.numero)
+
+    @app.get("/panel/actividad")
+    async def actividad() -> dict:
+        _solo_local()
+        return {"en_curso": diario.en_curso(), "sesiones": len(registro)}
+
+    @app.get("/panel/ultimos")
+    async def ultimos(limite: int = 6) -> dict:
+        """Las ultimas consultas de cualquier chat, para la vista de actividad.
+
+        Con el bot en reposo, "no hay nada corriendo" es una pantalla vacia.
+        Lo que uno quiere ver en ese momento es que acaba de hacer.
+        """
+        _solo_local()
+        return {"turnos": diario.turnos(limite=max(1, min(limite, 50)))}
+
+    @app.get("/panel/conversaciones")
+    async def conversaciones(chat_id: str | None = None, limite: int = 50) -> dict:
+        _solo_local()
+        limite = max(1, min(limite, 500))
+        if chat_id:
+            return {"turnos": diario.turnos(limite=limite, chat_id=chat_id)}
+        return {"chats": diario.chats(limite=limite)}
+
     return app
+
 
 
 def main() -> None:
@@ -268,7 +430,29 @@ def main() -> None:
     # seguro entre hilos, y crear uno por chat multiplicaria las conexiones a
     # SQL Server sin ganar nada.
     motor = SQLAgent._crear_engine()
-    app = crear_app(config, lambda: SQLAgent(engine=motor))
+
+    # El registro de usuarios se siembra con WHATSAPP_ALLOWED_NUMBERS la
+    # primera vez, asi que estrenar el panel no deja a nadie fuera. De ahi en
+    # adelante manda el archivo, que es lo que el panel edita en caliente.
+    datos = Path(__file__).resolve().parent / "datos"
+    usuarios = RegistroUsuarios(datos / "usuarios.json", semilla=config.allowlist)
+    diario = Bitacora(datos / "bitacora")
+
+    app = crear_app(config, lambda: SQLAgent(engine=motor), usuarios, diario)
+
+    if config.api_host in ("127.0.0.1", "localhost", "::1"):
+        logger.info(
+            "Panel de administracion: http://%s:%s/panel",
+            config.api_host,
+            config.api_port,
+        )
+    else:
+        logger.warning(
+            "API_HOST es %r y no loopback: el panel queda apagado. El servicio "
+            "no tiene autenticacion, y el panel da de alta usuarios y deja leer "
+            "conversaciones.",
+            config.api_host,
+        )
 
     import uvicorn
 

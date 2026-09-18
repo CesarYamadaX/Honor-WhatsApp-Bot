@@ -44,13 +44,55 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/main.py` | CLI interactiva, alternativa a WhatsApp |
 | `iniciar.py` | Arranca los dos procesos en orden y los baja juntos |
 | `apagar.py` | Apaga el bot desde otra terminal, WhatsApp primero |
+| `sql_agent/usuarios.py` | Quien puede usar el bot y en que estado esta |
+| `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
+| `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
+
+## Panel de administracion
+
+Se enciende con el bot, en <http://127.0.0.1:8000/panel>. Tres vistas:
+
+- **Ahora mismo** — que consulta esta corriendo, desde hace cuanto y en que
+  paso va (que SQL lanzo, cuantas filas trajo). Una consulta pesada tarda
+  minutos y sin esto se ve igual que un bot colgado. En reposo muestra las
+  ultimas consultas atendidas.
+- **Usuarios** — alta, suspension, bloqueo y baja. Los cambios entran de
+  inmediato, sin reiniciar.
+- **Conversaciones** — cada turno con la respuesta del bot y, desplegable,
+  lo que hizo para construirla.
+
+Los estados de un usuario:
+
+| Estado | Puede usar el bot | Se levanta solo |
+|---|---|---|
+| activo | si | — |
+| suspendido | no | si se le puso fecha, al pasar esa fecha |
+| bloqueado | no | nunca; alguien tiene que reactivarlo |
+| eliminado | no | no existe: si vuelve a escribir es un desconocido |
+
+Los tres casos que no son `activo` se comportan igual de cara a quien
+escribe: **silencio total**, como un numero que nunca estuvo. Contestarle
+"estas suspendido" le confirmaria que hay un bot del otro lado, que es
+justo lo que la allowlist evita.
+
+El panel **solo funciona con el servicio atado a loopback**. El servicio no
+tiene autenticacion propia, y el panel ademas da de alta usuarios y deja leer
+conversaciones: si `API_HOST` no es `127.0.0.1`, las rutas del panel
+responden 403 y el arranque lo avisa en el log. El bot sigue funcionando.
+
+Los usuarios viven en `sql_agent/datos/usuarios.json` y las conversaciones en
+`sql_agent/datos/bitacora/AAAA-MM-DD.jsonl`. Nada de eso se versiona. La
+primera vez, el registro se siembra con `WHATSAPP_ALLOWED_NUMBERS` para que
+estrenar el panel no deje a nadie fuera; de ahi en adelante manda el archivo,
+y la semilla nunca revive a un bloqueado.
 
 ## Seguridad
 
 Tres controles, y conviene entender que hace cada uno:
 
-1. **Allowlist de numeros** (`WHATSAPP_ALLOWED_NUMBERS`). Sin ella el servicio
-   no arranca. Un numero que no este en la lista recibe silencio total: ni
+1. **Registro de usuarios** (`sql_agent/datos/usuarios.json`, sembrado de
+   `WHATSAPP_ALLOWED_NUMBERS`, editable desde el panel). Sin la variable el
+   servicio no arranca. Un numero que no este activo recibe silencio total: ni
    respuesta ni indicador de "escribiendo", porque cualquier senal confirmaria
    que hay un bot del otro lado. Los grupos se ignoran siempre.
 

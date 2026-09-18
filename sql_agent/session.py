@@ -103,6 +103,11 @@ class RegistroSesiones:
         with self._candado:
             return self._sesiones.get(chat_id)
 
+    def chats(self) -> list[str]:
+        """Los chats con conversacion viva, para mostrarlos en el panel."""
+        with self._candado:
+            return sorted(self._sesiones)
+
     def purgar(self) -> int:
         """Elimina las sesiones inactivas. Devuelve cuantas se eliminaron."""
         limite = self._reloj() - self._ttl

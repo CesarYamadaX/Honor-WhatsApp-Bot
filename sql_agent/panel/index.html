@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel del bot</title>
+<style>
+  /* Sin tipografias de internet a proposito: el panel se abre justo cuando
+     algo va mal, y a veces lo que va mal es la red. Pila del sistema y
+     numeros tabulares, que es lo que pide una pantalla de datos. */
+  :root {
+    color-scheme: light;
+    --fondo: #f6f7f9;
+    --superficie: #ffffff;
+    --superficie-2: #eef1f5;
+    --borde: #dbe0e8;
+    --tinta: #161d2a;
+    --tinta-2: #55617a;
+    --tinta-3: #8b95a9;
+    --acento: #1d5fd6;
+    --acento-suave: #e7eefc;
+    --ok: #1a7f4b;
+    --ok-suave: #e1f3e9;
+    --aviso: #9a6206;
+    --aviso-suave: #fcf0da;
+    --alto: #b3261e;
+    --alto-suave: #fbe6e4;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --fondo: #0f1319;
+      --superficie: #161c25;
+      --superficie-2: #1d2531;
+      --borde: #2a3441;
+      --tinta: #e8ecf3;
+      --tinta-2: #a3aec1;
+      --tinta-3: #6d7a8f;
+      --acento: #6ea0ff;
+      --acento-suave: #1a2740;
+      --ok: #6cd39a;
+      --ok-suave: #14301f;
+      --aviso: #e3ae5a;
+      --aviso-suave: #33260f;
+      --alto: #f2867d;
+      --alto-suave: #351a18;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: var(--tinta);
+    font: 14px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .envoltorio { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  header.principal {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--borde); margin-bottom: 20px;
+  }
+  header.principal h1 {
+    margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  header.principal .sub { color: var(--tinta-3); font-size: 13px; }
+  .estado-servicio {
+    margin-left: auto; display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--tinta-2);
+  }
+  .foco {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--tinta-3); flex: none;
+  }
+  .foco.vivo { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-suave); }
+  .foco.muerto { background: var(--alto); box-shadow: 0 0 0 3px var(--alto-suave); }
+
+  nav.pestanas { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
+  nav.pestanas button {
+    font: inherit; font-weight: 550; color: var(--tinta-2);
+    background: none; border: 1px solid transparent; border-radius: 7px;
+    padding: 7px 13px; cursor: pointer;
+  }
+  nav.pestanas button:hover { background: var(--superficie-2); color: var(--tinta); }
+  nav.pestanas button[aria-selected="true"] {
+    background: var(--acento-suave); color: var(--acento); border-color: var(--acento);
+  }
+  nav.pestanas button:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  .cuenta {
+    margin-left: 5px; font-variant-numeric: tabular-nums;
+    font-size: 12px; opacity: .75;
+  }
+
+  h2 { font-size: 14px; font-weight: 650; margin: 0 0 10px; letter-spacing: -0.005em; }
+  .nota { color: var(--tinta-3); font-size: 13px; margin: 0 0 16px; max-width: 62ch; }
+
+  .tarjeta {
+    background: var(--superficie); border: 1px solid var(--borde);
+    border-radius: 10px; padding: 16px;
+  }
+  .lista { display: flex; flex-direction: column; gap: 12px; }
+
+  /* Actividad: lo que el bot esta haciendo ahora. */
+  .trabajo { border-left: 3px solid var(--acento); }
+  .trabajo .cabeza {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
+    margin-bottom: 10px;
+  }
+  .trabajo .quien { font-family: var(--mono); font-size: 12px; color: var(--tinta-2); }
+  .trabajo .pregunta { font-weight: 600; flex: 1 1 280px; }
+  .reloj {
+    font-variant-numeric: tabular-nums; font-size: 12px; color: var(--tinta-2);
+    background: var(--superficie-2); border-radius: 20px; padding: 2px 9px;
+  }
+  .reloj.largo { background: var(--aviso-suave); color: var(--aviso); }
+  .pasos {
+    margin: 0; padding: 0; list-style: none;
+    font-family: var(--mono); font-size: 12px; line-height: 1.7;
+    color: var(--tinta-2); overflow-x: auto;
+  }
+  .pasos li { white-space: pre-wrap; word-break: break-word; }
+  .pasos li::before { content: "› "; color: var(--tinta-3); }
+
+  /* Usuarios */
+  .tabla-envuelta { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--tinta-3); font-weight: 600;
+    padding: 0 10px 8px; white-space: nowrap;
+  }
+  td { padding: 11px 10px; border-top: 1px solid var(--borde); vertical-align: middle; }
+  td.numero { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pastilla {
+    display: inline-block; font-size: 12px; font-weight: 600;
+    padding: 2px 9px; border-radius: 20px; white-space: nowrap;
+  }
+  .pastilla.activo { background: var(--ok-suave); color: var(--ok); }
+  .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
+  .pastilla.bloqueado { background: var(--alto-suave); color: var(--alto); }
+  .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+  button.accion {
+    font: inherit; font-size: 12px; font-weight: 550;
+    background: var(--superficie); color: var(--tinta-2);
+    border: 1px solid var(--borde); border-radius: 6px;
+    padding: 5px 10px; cursor: pointer; white-space: nowrap;
+  }
+  button.accion:hover { border-color: var(--tinta-3); color: var(--tinta); }
+  button.accion.peligro:hover { border-color: var(--alto); color: var(--alto); }
+  button.accion:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+
+  form.alta { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+  label.campo { display: flex; flex-direction: column; gap: 5px; flex: 1 1 160px; }
+  label.campo span { font-size: 12px; color: var(--tinta-2); font-weight: 550; }
+  input {
+    font: inherit; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--borde); background: var(--fondo); color: var(--tinta);
+    width: 100%;
+  }
+  input:focus-visible { outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento); }
+  button.principal {
+    font: inherit; font-weight: 600; background: var(--acento); color: #fff;
+    border: 1px solid var(--acento); border-radius: 7px; padding: 9px 16px; cursor: pointer;
+  }
+  button.principal:hover { filter: brightness(1.08); }
+  button.principal:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
+
+  /* Conversaciones */
+  .chats { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+  button.chat {
+    font: inherit; text-align: left; cursor: pointer; width: 100%;
+    background: none; border: 1px solid transparent; border-radius: 8px;
+    padding: 9px 11px; color: var(--tinta);
+    display: flex; gap: 12px; align-items: baseline;
+  }
+  button.chat:hover { background: var(--superficie-2); }
+  button.chat[aria-current="true"] { background: var(--acento-suave); border-color: var(--acento); }
+  button.chat .num { font-family: var(--mono); font-size: 12px; }
+  button.chat .ult { color: var(--tinta-3); font-size: 12px; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .turno { border-left: 3px solid var(--borde); }
+  .turno.error { border-left-color: var(--alto); }
+  .turno.cancelado { border-left-color: var(--aviso); }
+  .turno .meta {
+    display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+    font-size: 12px; color: var(--tinta-3); margin-bottom: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .burbuja { padding: 9px 12px; border-radius: 9px; margin-bottom: 8px; }
+  .burbuja.pregunta { background: var(--superficie-2); }
+  .burbuja.respuesta { background: var(--acento-suave); white-space: pre-wrap; }
+  .etiqueta {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--tinta-3); font-weight: 600; display: block; margin-bottom: 3px;
+  }
+  details.tramoya summary {
+    cursor: pointer; font-size: 12px; color: var(--tinta-2); font-weight: 550;
+    padding: 4px 0;
+  }
+  details.tramoya summary:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  details.tramoya[open] summary { margin-bottom: 6px; }
+
+  .vacio {
+    color: var(--tinta-3); text-align: center; padding: 34px 16px;
+    border: 1px dashed var(--borde); border-radius: 10px;
+  }
+  .aviso-error {
+    background: var(--alto-suave); color: var(--alto); border: 1px solid var(--alto);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; font-weight: 550;
+  }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    .foco.vivo { animation: latir 2.4s ease-in-out infinite; }
+    @keyframes latir { 50% { opacity: .45; } }
+  }
+</style>
+</head>
+<body>
+<div class="envoltorio">
+
+  <header class="principal">
+    <h1>Panel del bot</h1>
+    <span class="sub">GTM Honor México</span>
+    <div class="estado-servicio">
+      <span class="foco" id="foco"></span>
+      <span id="texto-estado">conectando…</span>
+    </div>
+  </header>
+
+  <div id="error" class="aviso-error" hidden></div>
+
+  <nav class="pestanas" role="tablist">
+    <button role="tab" id="tab-actividad" aria-selected="true" aria-controls="panel-actividad">
+      Ahora mismo<span class="cuenta" id="cuenta-actividad"></span>
+    </button>
+    <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="panel-usuarios">
+      Usuarios<span class="cuenta" id="cuenta-usuarios"></span>
+    </button>
+    <button role="tab" id="tab-conversaciones" aria-selected="false" aria-controls="panel-conversaciones">
+      Conversaciones
+    </button>
+  </nav>
+
+  <section id="panel-actividad" role="tabpanel" aria-labelledby="tab-actividad">
+    <p class="nota">
+      Lo que el bot está haciendo en este instante: qué le preguntaron, desde
+      hace cuánto y en qué paso va. Una consulta pesada puede tardar minutos, y
+      desde fuera eso se ve igual que si estuviera colgado.
+    </p>
+    <div id="actividad" class="lista"></div>
+
+    <h2 style="margin-top:26px">Últimas consultas</h2>
+    <div id="ultimos" class="lista"></div>
+  </section>
+
+  <section id="panel-usuarios" role="tabpanel" aria-labelledby="tab-usuarios" hidden>
+    <p class="nota">
+      Quién puede usar el bot. Los cambios entran de inmediato, sin reiniciar
+      nada. Un número que no esté <strong>activo</strong> recibe silencio total,
+      igual que uno que nunca estuvo: cualquier otra respuesta le confirmaría
+      que hay un bot del otro lado.
+    </p>
+
+    <div class="tarjeta" style="margin-bottom:16px">
+      <h2>Dar de alta</h2>
+      <form class="alta" id="form-alta">
+        <label class="campo">
+          <span>Número con lada de país</span>
+          <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
+        </label>
+        <label class="campo">
+          <span>Nombre (opcional)</span>
+          <input id="alta-nombre" placeholder="Laura, ventas">
+        </label>
+        <button class="principal" type="submit">Agregar</button>
+      </form>
+    </div>
+
+    <div class="tarjeta">
+      <div class="tabla-envuelta">
+        <table>
+          <thead>
+            <tr>
+              <th>Número</th><th>Nombre</th><th>Estado</th><th>Desde / hasta</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="usuarios"></tbody>
+        </table>
+      </div>
+      <div id="sin-usuarios" class="vacio" hidden>Todavía no hay nadie dado de alta.</div>
+    </div>
+  </section>
+
+  <section id="panel-conversaciones" role="tabpanel" aria-labelledby="tab-conversaciones" hidden>
+    <p class="nota">
+      Cada turno con lo que contestó el bot y, debajo, lo que hizo para
+      contestarlo: el SQL que corrió, cuántas filas trajo y cuánto tardó.
+    </p>
+    <div id="chats" class="chats"></div>
+    <div id="turnos" class="lista"></div>
+  </section>
+
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const PESTANAS = ["actividad", "usuarios", "conversaciones"];
+let pestanaActual = "actividad";
+let chatElegido = null;
+
+function mostrarError(mensaje) {
+  const caja = $("error");
+  if (!mensaje) { caja.hidden = true; return; }
+  caja.textContent = mensaje;
+  caja.hidden = false;
+}
+
+async function pedir(ruta, opciones) {
+  const respuesta = await fetch(ruta, opciones);
+  const cuerpo = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok) throw new Error(cuerpo.detail || `Error ${respuesta.status}`);
+  return cuerpo;
+}
+
+function texto(nodo, valor) { nodo.textContent = valor ?? ""; return nodo; }
+function elemento(etiqueta, clase, contenido) {
+  const nodo = document.createElement(etiqueta);
+  if (clase) nodo.className = clase;
+  if (contenido !== undefined) nodo.textContent = contenido;
+  return nodo;
+}
+
+const soloNumero = (chatId) => String(chatId || "").split("@")[0];
+function hora(iso) {
+  if (!iso) return "";
+  const t = new Date(iso);
+  return isNaN(t) ? iso : t.toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
+}
+function duracion(segundos) {
+  const s = Math.max(0, Math.round(Number(segundos) || 0));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+// --- Ahora mismo -----------------------------------------------------------
+
+function pintarActividad(enCurso) {
+  const caja = $("actividad");
+  caja.replaceChildren();
+  $("cuenta-actividad").textContent = enCurso.length ? `· ${enCurso.length}` : "";
+
+  if (!enCurso.length) {
+    caja.append(elemento("div", "vacio", "El bot está en reposo: ninguna consulta corriendo."));
+    return;
+  }
+
+  for (const trabajo of enCurso) {
+    const tarjeta = elemento("article", "tarjeta trabajo");
+    const cabeza = elemento("div", "cabeza");
+    cabeza.append(
+      elemento("span", "pregunta", trabajo.pregunta),
+      elemento("span", "quien", soloNumero(trabajo.chat_id)),
+    );
+    const reloj = elemento("span", "reloj", duracion(trabajo.segundos));
+    if (Number(trabajo.segundos) > 60) reloj.classList.add("largo");
+    cabeza.append(reloj);
+    tarjeta.append(cabeza);
+
+    const pasos = elemento("ul", "pasos");
+    if (!trabajo.pasos.length) {
+      pasos.append(elemento("li", null, "pensando cómo responder…"));
+    } else {
+      for (const paso of trabajo.pasos) pasos.append(elemento("li", null, paso));
+    }
+    tarjeta.append(pasos);
+    caja.append(tarjeta);
+  }
+}
+
+let cuantoCorria = -1;
+
+async function pintarUltimos() {
+  try {
+    const datos = await pedir("/panel/ultimos?limite=6");
+    const caja = $("ultimos");
+    caja.replaceChildren();
+    if (!datos.turnos.length) {
+      caja.append(elemento("div", "vacio", "Ninguna consulta registrada todavía."));
+      return;
+    }
+    for (const turno of datos.turnos) {
+      const fila = elemento("article", `tarjeta turno ${turno.estado}`);
+      const meta = elemento("div", "meta");
+      meta.append(
+        elemento("span", null, hora(turno.inicio)),
+        elemento("span", "quien", soloNumero(turno.chat_id)),
+        elemento("span", null, duracion(turno.segundos)),
+      );
+      if (turno.estado !== "listo") meta.append(elemento("span", null, turno.estado));
+      fila.append(meta, elemento("div", null, turno.pregunta));
+      fila.addEventListener("click", () => {
+        elegirPestana("conversaciones");
+        cargarTurnos(turno.chat_id).catch((e) => mostrarError(e.message));
+      });
+      fila.style.cursor = "pointer";
+      caja.append(fila);
+    }
+  } catch (error) {
+    // La actividad en vivo es lo importante de esta pestaña; si el historial
+    // no carga, no vale la pena tapar la pantalla con un error.
+  }
+}
+
+// --- Usuarios --------------------------------------------------------------
+
+function filaDeUsuario(usuario) {
+  const fila = document.createElement("tr");
+  fila.append(
+    texto(elemento("td", "numero"), usuario.numero),
+    texto(elemento("td"), usuario.nombre || "—"),
+  );
+
+  const celdaEstado = elemento("td");
+  celdaEstado.append(elemento("span", `pastilla ${usuario.estado}`, usuario.estado));
+  fila.append(celdaEstado);
+
+  const cuando = usuario.estado === "suspendido" && usuario.suspendido_hasta
+    ? `hasta el ${usuario.suspendido_hasta}`
+    : `alta ${(usuario.creado || "").slice(0, 10)}`;
+  fila.append(texto(elemento("td"), cuando));
+
+  const celdaAcciones = elemento("td");
+  const acciones = elemento("div", "acciones");
+
+  if (usuario.estado !== "activo") {
+    acciones.append(boton("Reactivar", () => cambiar("reactivar", { numero: usuario.numero })));
+  }
+  if (usuario.estado !== "suspendido") {
+    acciones.append(boton("Suspender", () => suspender(usuario)));
+  }
+  if (usuario.estado !== "bloqueado") {
+    acciones.append(boton("Bloquear", () => cambiar("bloquear", { numero: usuario.numero })));
+  }
+  acciones.append(boton("Eliminar", () => eliminar(usuario), true));
+
+  celdaAcciones.append(acciones);
+  fila.append(celdaAcciones);
+  return fila;
+}
+
+function boton(etiqueta, alHacerClic, peligro) {
+  const b = elemento("button", `accion${peligro ? " peligro" : ""}`, etiqueta);
+  b.type = "button";
+  b.addEventListener("click", alHacerClic);
+  return b;
+}
+
+async function cambiar(accion, cuerpo) {
+  try {
+    mostrarError("");
+    await pedir(`/panel/usuarios/${accion}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+    await cargarUsuarios();
+  } catch (error) {
+    mostrarError(error.message);
+  }
+}
+
+function suspender(usuario) {
+  const hasta = prompt(
+    `Suspender a ${usuario.numero}.\n\n` +
+    "¿Hasta qué día? (AAAA-MM-DD)\n" +
+    "Déjalo vacío para que la suspensión no venza sola.",
+    "",
+  );
+  if (hasta === null) return;
+  cambiar("suspender", { numero: usuario.numero, hasta: hasta.trim() || null });
+}
+
+function eliminar(usuario) {
+  const quien = usuario.nombre ? `${usuario.nombre} (${usuario.numero})` : usuario.numero;
+  if (!confirm(`Eliminar a ${quien} de la lista.\n\nSi vuelve a escribir será un desconocido más. Para dejarlo fuera pudiendo devolverle el acceso después, usa Bloquear.`)) return;
+  cambiar("eliminar", { numero: usuario.numero });
+}
+
+async function cargarUsuarios() {
+  const datos = await pedir("/panel/usuarios");
+  const cuerpo = $("usuarios");
+  cuerpo.replaceChildren();
+  for (const usuario of datos.usuarios) cuerpo.append(filaDeUsuario(usuario));
+  $("sin-usuarios").hidden = datos.usuarios.length > 0;
+  const activos = datos.usuarios.filter((u) => u.estado === "activo").length;
+  $("cuenta-usuarios").textContent = `· ${activos}/${datos.usuarios.length}`;
+}
+
+$("form-alta").addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  try {
+    mostrarError("");
+    await pedir("/panel/usuarios", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        numero: $("alta-numero").value,
+        nombre: $("alta-nombre").value,
+      }),
+    });
+    $("alta-numero").value = "";
+    $("alta-nombre").value = "";
+    await cargarUsuarios();
+  } catch (error) {
+    mostrarError(error.message);
+  }
+});
+
+// --- Conversaciones --------------------------------------------------------
+
+async function cargarChats() {
+  const datos = await pedir("/panel/conversaciones");
+  const caja = $("chats");
+  caja.replaceChildren();
+
+  if (!datos.chats.length) {
+    caja.append(elemento("div", "vacio", "Todavía no hay conversaciones registradas."));
+    $("turnos").replaceChildren();
+    return;
+  }
+
+  for (const chat of datos.chats) {
+    const b = elemento("button", "chat");
+    b.type = "button";
+    b.append(
+      elemento("span", "num", soloNumero(chat.chat_id)),
+      elemento("span", "ult", chat.ultima_pregunta),
+      elemento("span", "reloj", `${chat.turnos} ${chat.turnos === 1 ? "turno" : "turnos"}`),
+    );
+    if (chat.chat_id === chatElegido) b.setAttribute("aria-current", "true");
+    b.addEventListener("click", () => cargarTurnos(chat.chat_id));
+    caja.append(b);
+  }
+
+  if (!chatElegido) await cargarTurnos(datos.chats[0].chat_id);
+}
+
+async function cargarTurnos(chatId) {
+  chatElegido = chatId;
+  for (const b of $("chats").querySelectorAll("button.chat")) {
+    const suyo = b.querySelector(".num").textContent === soloNumero(chatId);
+    if (suyo) b.setAttribute("aria-current", "true");
+    else b.removeAttribute("aria-current");
+  }
+
+  const datos = await pedir(`/panel/conversaciones?chat_id=${encodeURIComponent(chatId)}`);
+  const caja = $("turnos");
+  caja.replaceChildren();
+
+  for (const turno of datos.turnos) {
+    const tarjeta = elemento("article", `tarjeta turno ${turno.estado}`);
+
+    const meta = elemento("div", "meta");
+    meta.append(
+      elemento("span", null, hora(turno.inicio)),
+      elemento("span", null, `tardó ${duracion(turno.segundos)}`),
+    );
+    if (turno.idioma) meta.append(elemento("span", null, `respondió en ${turno.idioma}`));
+    if (turno.estado !== "listo") meta.append(elemento("span", null, turno.estado));
+    if (turno.archivos.length) {
+      meta.append(elemento("span", null, `${turno.archivos.length} archivo(s) enviados`));
+    }
+    tarjeta.append(meta);
+
+    const pregunta = elemento("div", "burbuja pregunta");
+    pregunta.append(elemento("span", "etiqueta", "Preguntó"), document.createTextNode(turno.pregunta));
+    tarjeta.append(pregunta);
+
+    if (turno.respuesta) {
+      const respuesta = elemento("div", "burbuja respuesta");
+      respuesta.append(elemento("span", "etiqueta", "Contestó el bot"), document.createTextNode(turno.respuesta));
+      tarjeta.append(respuesta);
+    }
+
+    if (turno.pasos.length) {
+      const detalle = elemento("details", "tramoya");
+      detalle.append(elemento("summary", null, `Qué hizo para contestar (${turno.pasos.length} pasos)`));
+      const pasos = elemento("ul", "pasos");
+      for (const paso of turno.pasos) pasos.append(elemento("li", null, paso));
+      detalle.append(pasos);
+      tarjeta.append(detalle);
+    }
+
+    caja.append(tarjeta);
+  }
+}
+
+// --- Pestañas y refresco ---------------------------------------------------
+
+function elegirPestana(nombre) {
+  pestanaActual = nombre;
+  for (const otra of PESTANAS) {
+    $(`tab-${otra}`).setAttribute("aria-selected", String(otra === nombre));
+    $(`panel-${otra}`).hidden = otra !== nombre;
+  }
+  if (nombre === "usuarios") cargarUsuarios().catch((e) => mostrarError(e.message));
+  if (nombre === "conversaciones") cargarChats().catch((e) => mostrarError(e.message));
+}
+
+for (const nombre of PESTANAS) {
+  $(`tab-${nombre}`).addEventListener("click", () => elegirPestana(nombre));
+}
+
+async function latido() {
+  // Solo mientras la pestaña este a la vista: con el panel de fondo, esto
+  // seria una peticion cada dos segundos durante horas sin que nadie mire.
+  if (document.hidden) return;
+  try {
+    const datos = await pedir("/panel/actividad");
+    $("foco").className = "foco vivo";
+    const sesiones = datos.sesiones === 1 ? "1 conversación viva" : `${datos.sesiones} conversaciones vivas`;
+    $("texto-estado").textContent = `servicio arriba · ${sesiones}`;
+    if (pestanaActual === "actividad") {
+      pintarActividad(datos.en_curso);
+      // El historial solo se relee cuando algo empieza o termina, no cada
+      // dos segundos: son archivos en disco y nadie los cambia entre medias.
+      if (datos.en_curso.length !== cuantoCorria) {
+        cuantoCorria = datos.en_curso.length;
+        pintarUltimos();
+      }
+    }
+  } catch (error) {
+    $("foco").className = "foco muerto";
+    $("texto-estado").textContent = "no contesta el servicio";
+    if (pestanaActual === "actividad") {
+      $("actividad").replaceChildren(
+        elemento("div", "vacio", "El servicio no contesta. ¿Sigue encendido el bot?"),
+      );
+    }
+  }
+}
+
+latido();
+cargarUsuarios().catch(() => {});
+setInterval(latido, 2000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) latido(); });
+</script>
+</body>
+</html>
