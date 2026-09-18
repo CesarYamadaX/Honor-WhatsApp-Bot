@@ -20,6 +20,7 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,
     MessagesPlaceholder,
+    SystemMessagePromptTemplate,
 )
 from langchain_openai import ChatOpenAI
 from sqlalchemy import create_engine
@@ -37,6 +38,7 @@ from catalogo import (
 from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
 from grafica import exportar_grafica
+import idioma as idiomas
 from pronostico import ERROR_TIPICO, proyectar
 from formatting import formatear_resultado
 
@@ -1183,6 +1185,9 @@ class SQLAgent:
         self.db = SQLDatabase(self.engine)
         self.llm = self._init_llm()
         self.historial: list[BaseMessage] = []
+        # El idioma se sostiene entre turnos: los mensajes de WhatsApp son
+        # cortos y muchos ("top 10", "y de Elektra?") no tienen idioma propio.
+        self.idioma = idiomas.POR_DEFECTO
         self.agent_executor = self._create_agent()
 
     @staticmethod
@@ -1303,6 +1308,12 @@ class SQLAgent:
            acorta. Si una pregunta se apoya en las anteriores ("y de Elektra?",
            "ahora por region", "el mismo dato pero de 2023"), resuelvela contra
            lo que ya se hablo en vez de pedirle que la repita completa.
+        14. Justo antes de cada pregunta vas a recibir un mensaje que te dice
+           en que idioma responder (espanol, ingles o chino). Obedecelo
+           siempre: es el idioma del usuario, ya detectado, y manda sobre el
+           idioma de los turnos anteriores y sobre el de estas instrucciones.
+           La base de datos esta en espanol; los nombres de columna y los
+           valores que menciones traducelos al idioma de la respuesta.
         """
 
         # Prompt propio en vez del que arma create_sql_agent: el suyo es
@@ -1315,10 +1326,17 @@ class SQLAgent:
         # El historial va entre el prompt de sistema y la pregunta actual, que
         # es donde el modelo espera encontrarlo: asi la pregunta nueva queda
         # como el ultimo turno y no sepultada entre mensajes viejos.
+        #
+        # La instruccion de idioma va DESPUES del historial y pegada a la
+        # pregunta, no dentro del prompt de sistema: el historial trae los
+        # turnos anteriores, que pueden estar en otro idioma, y lo ultimo que
+        # el modelo lee antes de la pregunta es lo que mas pesa. Ademas cambia
+        # turno a turno, asi que no puede ir en el texto fijo de arriba.
         prompt = ChatPromptTemplate.from_messages(
             [
                 SystemMessage(content=system_prefix),
                 MessagesPlaceholder(variable_name="chat_history"),
+                SystemMessagePromptTemplate.from_template("{instruccion_idioma}"),
                 HumanMessagePromptTemplate.from_template("{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
@@ -1362,9 +1380,14 @@ class SQLAgent:
         `ConsultaCancelada` en la siguiente herramienta y no toca el
         historial: una pregunta cancelada no ocurrio.
         """
+        self.idioma = idiomas.detectar(pregunta) or self.idioma
         with contexto_peticion(self.engine, cancelacion) as ctx:
             respuesta = self.agent_executor.invoke(
-                {"input": pregunta, "chat_history": list(self.historial)}
+                {
+                    "input": pregunta,
+                    "chat_history": list(self.historial),
+                    "instruccion_idioma": idiomas.INSTRUCCION[self.idioma],
+                }
             )
             texto = respuesta.get("output", "No se obtuvo respuesta.")
             self._recordar(pregunta, texto)

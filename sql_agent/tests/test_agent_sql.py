@@ -653,7 +653,10 @@ class _EjecutorEspia:
         # Copia: `responder` pasa una lista nueva, pero el historial que
         # contiene se sigue mutando turno a turno.
         self.invocaciones.append(
-            {"input": payload["input"], "chat_history": list(payload["chat_history"])}
+            {
+                **payload,
+                "chat_history": list(payload["chat_history"]),
+            }
         )
         return {"output": self.respuesta}
 
@@ -1260,3 +1263,76 @@ class TestValoresDistintos:
         filas = [(f"v{i}",) for i in range(modulo_agente.MAX_VALORES)]
         _, respuesta = self._invocar("EKT_B2B", "Carrier", filas)
         assert "solo los primeros" in respuesta
+
+
+class TestIdiomaDeLaRespuesta:
+    def test_arranca_en_espanol(self, engine, monkeypatch):
+        agente = _agente_espiado(engine, monkeypatch)
+        assert agente.idioma == "es"
+
+    def test_una_pregunta_en_ingles_cambia_el_idioma(self, engine, monkeypatch):
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.responder("total sales for Elektra in 2026")
+
+        assert agente.idioma == "en"
+        assert "English" in agente.agent_executor.invocaciones[0]["instruccion_idioma"]
+
+    def test_una_pregunta_sin_idioma_conserva_el_anterior(self, engine, monkeypatch):
+        # El caso que obliga a sostener el idioma entre turnos: en WhatsApp se
+        # pregunta completo una vez y despues se acorta. "top 10" no tiene
+        # idioma, y caer al espanol por defecto ahi le cambiaria el idioma a
+        # media conversacion a quien venia preguntando en ingles.
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.responder("how many units did Coppel sell")
+        agente.responder("top 10")
+
+        assert agente.idioma == "en"
+        assert "English" in agente.agent_executor.invocaciones[1]["instruccion_idioma"]
+
+    def test_se_puede_volver_al_espanol(self, engine, monkeypatch):
+        # Sostener el idioma no puede significar quedarse atorado en el.
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.responder("show me sales by store")
+        agente.responder("ahora dame las ventas por tienda")
+
+        assert agente.idioma == "es"
+
+    def test_el_chino_se_detecta_con_nombres_latinos_de_por_medio(
+        self, engine, monkeypatch
+    ):
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.responder("Elektra 2026年的总销量")
+
+        assert agente.idioma == "zh"
+        assert "中文" in agente.agent_executor.invocaciones[0]["instruccion_idioma"]
+
+    def test_la_instruccion_va_despues_del_historial_y_antes_de_la_pregunta(
+        self, engine, monkeypatch
+    ):
+        # Ahi y no dentro del prompt de sistema: el historial trae los turnos
+        # anteriores, que pueden estar en otro idioma, y lo ultimo que el
+        # modelo lee antes de la pregunta es lo que mas pesa.
+        from langchain_core.prompts import ChatPromptTemplate
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+        agente = SQLAgent(engine=engine)
+        plantilla = next(
+            paso
+            for paso in agente.agent_executor.agent.runnable.steps
+            if isinstance(paso, ChatPromptTemplate)
+        )
+        mensajes = plantilla.messages
+        idx_historial = next(
+            i
+            for i, m in enumerate(mensajes)
+            if getattr(m, "variable_name", None) == "chat_history"
+        )
+        idx_idioma = next(
+            i
+            for i, m in enumerate(mensajes)
+            if "instruccion_idioma" in getattr(m, "input_variables", [])
+        )
+        idx_pregunta = next(
+            i for i, m in enumerate(mensajes) if "input" in getattr(m, "input_variables", [])
+        )
+        assert idx_historial < idx_idioma < idx_pregunta

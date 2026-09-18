@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { autorizado, preguntar } from "../agentClient.js";
+import { autorizado, idiomaDelChat, preguntar } from "../agentClient.js";
+import { texto } from "../textos.js";
 
 async function servidorFalso(manejador) {
   const servidor = http.createServer(manejador);
@@ -34,7 +35,7 @@ test("200 devuelve la respuesta y los archivos", async () => {
   const s = await servidorFalso(responder(200, { reply: "listo", files: ["/tmp/a.xlsx"] }));
   try {
     const r = await preguntar(s.url, "chat@s.whatsapp.net", "hola");
-    assert.deepEqual(r, { reply: "listo", files: ["/tmp/a.xlsx"] });
+    assert.deepEqual(r, { reply: "listo", files: ["/tmp/a.xlsx"], idioma: "es" });
   } finally {
     await s.cerrar();
   }
@@ -245,6 +246,65 @@ test("si el servicio acepta la conexion y nunca responde, el timeout corta y avi
     const r = await preguntar(s.url, "chat@s.whatsapp.net", "hola", 50);
     assert.match(r.reply, /no est(a|á) disponible/i);
     assert.deepEqual(r.files, []);
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("el idioma de la respuesta viaja al sidecar", async () => {
+  // Lo que el sidecar agrega por su cuenta despues de la respuesta (avisos de
+  // archivo, "no tengo respuesta") tiene que salir en el idioma en que acaba
+  // de contestar el bot, no en el suyo.
+  const s = await servidorFalso(responder(200, { reply: "done", files: [], idioma: "en" }));
+  try {
+    const r = await preguntar(s.url, "chat@s.whatsapp.net", "total sales");
+    assert.equal(r.idioma, "en");
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("los avisos del sidecar salen en el idioma del chat", async () => {
+  // El 504 no lo escribe el modelo sino el sidecar, asi que hay que
+  // traducirlo. El idioma no puede venir en la respuesta -- justamente no hay
+  // respuesta --, se pregunta a /idioma, que es donde vive la deteccion.
+  const s = await servidorFalso((req, res) => {
+    res.writeHead(req.url === "/idioma" ? 200 : 504, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(req.url === "/idioma" ? { idioma: "en" } : { detail: "timeout" }));
+  });
+  try {
+    const r = await preguntar(s.url, "chat@s.whatsapp.net", "sales by store");
+    assert.equal(r.idioma, "en");
+    assert.equal(r.reply, texto("demasiado_lenta", "en"));
+    assert.ok(!r.reply.includes("cancele"));
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("si no se puede saber el idioma, se responde en espanol", async () => {
+  // El caso del servicio caido: /idioma tampoco contesta. Un fallback es
+  // obligatorio, si no el usuario se queda sin ningun aviso.
+  const r = await preguntar("http://127.0.0.1:1", "chat@s.whatsapp.net", "hola", 300);
+  assert.equal(r.reply, texto("servicio_caido", "es"));
+});
+
+test("idiomaDelChat: manda solo el chat_id", async () => {
+  // Mismo motivo que en /authorized: el texto del mensaje no cruza al
+  // servicio por un detalle de presentacion.
+  let recibido = null;
+  const s = await servidorFalso((req, res) => {
+    let cuerpo = "";
+    req.on("data", (t) => (cuerpo += t));
+    req.on("end", () => {
+      recibido = JSON.parse(cuerpo);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ idioma: "zh" }));
+    });
+  });
+  try {
+    assert.equal(await idiomaDelChat(s.url, "chat@s.whatsapp.net"), "zh");
+    assert.deepEqual(recibido, { chat_id: "chat@s.whatsapp.net" });
   } finally {
     await s.cerrar();
   }

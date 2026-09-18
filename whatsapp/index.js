@@ -10,10 +10,11 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 
-import { autorizado, preguntar } from "./agentClient.js";
+import { autorizado, idiomaDelChat, preguntar } from "./agentClient.js";
 import { calcularEsperaReconexion } from "./backoff.js";
 import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
+import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
 const MAX_FILE_MB = leerMaxFileMB();
@@ -25,9 +26,7 @@ const CARPETA_AUTH = "auth_info";
 // cruzan tablas grandes pasan del medio minuto y ahi el silencio se siente
 // como que el bot se cayo -- en los logs se ve al usuario reenviando.
 const AVISO_DE_ESPERA_MS = leerEnteroPositivo("WAIT_NOTICE_SECONDS", 12) * 1000;
-const TEXTO_DE_ESPERA =
-  "Esta consulta esta tardando mas de lo normal, sigo en ella. " +
-  "Si quieres, mandame otra pregunta y cancelo esta.";
+// El texto sale traducido segun el idioma del chat (ver textos.js).
 
 // WhatsApp expira el indicador de "escribiendo" solo, hay que renovarlo.
 const INTERVALO_PRESENCIA_MS = 8000;
@@ -149,21 +148,18 @@ async function enviarTexto(jid, texto) {
   }
 }
 
-async function enviarArchivo(jid, ruta) {
+async function enviarArchivo(jid, ruta, idioma) {
   let tamano;
   try {
     tamano = fs.statSync(ruta).size;
   } catch {
     console.error(`[whatsapp] archivo no encontrado: ${ruta}`);
-    await enviarMensajeSimple(jid, "Genere el archivo pero no lo pude leer para enviartelo.");
+    await enviarMensajeSimple(jid, traducir("archivo_ilegible", idioma));
     return;
   }
 
   if (tamano > MAX_FILE_MB * 1024 * 1024) {
-    await enviarMensajeSimple(
-      jid,
-      `El reporte pesa mas de ${MAX_FILE_MB} MB y no lo puedo mandar por aqui. Acota la consulta.`,
-    );
+    await enviarMensajeSimple(jid, textoArchivoMuyGrande(MAX_FILE_MB, idioma));
     return;
   }
 
@@ -176,7 +172,7 @@ async function enviarArchivo(jid, ruta) {
     // avisar de que el reporte no llego, a diferencia de los otros dos
     // casos de falla de esta funcion.
     console.error(`[whatsapp] el archivo desaparecio antes de poder leerlo: ${ruta}: ${error.message}`);
-    await enviarMensajeSimple(jid, "Genere el archivo pero no lo pude leer para enviartelo.");
+    await enviarMensajeSimple(jid, traducir("archivo_ilegible", idioma));
     return;
   }
 
@@ -264,8 +260,9 @@ async function atender(mensaje) {
     // y, si la consulta se alarga, un aviso para que el usuario sepa que
     // sigue viva y que puede cancelarla.
     const detener = mantenerEscribiendo(jid);
-    const avisoDeEspera = setTimeout(() => {
-      enviarMensajeSimple(jid, TEXTO_DE_ESPERA);
+    const avisoDeEspera = setTimeout(async () => {
+      const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+      enviarMensajeSimple(jid, traducir("espera", idioma));
     }, AVISO_DE_ESPERA_MS);
 
     try {
@@ -275,19 +272,22 @@ async function atender(mensaje) {
       // contestar). En ambos casos, silencio.
       if (resultado === null) return;
 
+      // El servicio dice en que idioma contesto; lo que agregue el sidecar
+      // (un archivo ilegible, "no tengo respuesta") va en el mismo.
+      const idioma = resultado.idioma;
       let enviadoAlgo = false;
       if (resultado.reply && resultado.reply.trim()) {
         await enviarTexto(jid, resultado.reply);
         enviadoAlgo = true;
       }
       if (resultado.files.length > 0) {
-        for (const ruta of resultado.files) await enviarArchivo(jid, ruta);
+        for (const ruta of resultado.files) await enviarArchivo(jid, ruta, idioma);
         enviadoAlgo = true;
       }
       // reply en blanco (trocear lo descarta) o {reply:"", files:[]}: sin
       // esto el usuario se queda sin nada, sin saber si el bot lo escucho.
       if (!enviadoAlgo) {
-        await enviarMensajeSimple(jid, "No tengo una respuesta para eso. Intenta reformular tu pregunta.");
+        await enviarMensajeSimple(jid, traducir("sin_respuesta", idioma));
       }
     } finally {
       clearTimeout(avisoDeEspera);

@@ -1,11 +1,13 @@
 // Traduce el contrato HTTP del servicio Python a algo que el usuario pueda
 // leer en un chat. Devolver null significa "no contestes nada".
 
+import { IDIOMA_POR_DEFECTO, texto as traducir } from "./textos.js";
+
 const MENSAJES = {
-  429: "Sigo trabajando en tu pregunta anterior. Dame un momento.",
-  504: "La consulta tardo demasiado y la cancele. Intenta acotarla, por ejemplo limitando el rango de fechas.",
-  caido: "El sistema no esta disponible en este momento. Avisale al administrador.",
-  desconocido: "No pude procesar tu pregunta. Intenta de nuevo en un momento.",
+  429: "ocupado",
+  504: "demasiado_lenta",
+  caido: "servicio_caido",
+  desconocido: "desconocido",
 };
 
 // Red de seguridad para cuando el servicio nunca contesta (proceso Python
@@ -53,15 +55,59 @@ export async function autorizado(baseUrl, chatId, timeoutMs = TIMEOUT_AUTORIZACI
 }
 
 /**
+ * En que idioma le esta hablando este chat al bot.
+ *
+ * El aviso de espera sale ANTES de que la respuesta exista, asi que su idioma
+ * no puede venir en ella. Se pregunta al servicio, que ya dedujo el idioma de
+ * la pregunta que esta corriendo. No se manda el texto del mensaje: la
+ * deteccion es cosa del lado Python (una sola copia de la heuristica) y a
+ * /authorized, que se contesta antes de mirar la allowlist, no debe cruzar el
+ * mensaje de un numero ajeno.
+ *
+ * Ante cualquier falla devuelve el idioma por defecto: es un detalle de
+ * presentacion, nunca vale la pena que tumbe la respuesta.
+ *
+ * @returns {Promise<string>}
+ */
+export async function idiomaDelChat(baseUrl, chatId, timeoutMs = TIMEOUT_AUTORIZACION_MS) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), timeoutMs);
+  try {
+    const respuesta = await fetch(`${baseUrl}/idioma`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId }),
+      signal: controlador.signal,
+    });
+    if (respuesta.status !== 200) return IDIOMA_POR_DEFECTO;
+    const cuerpo = await respuesta.json();
+    return typeof cuerpo?.idioma === "string" ? cuerpo.idioma : IDIOMA_POR_DEFECTO;
+  } catch (error) {
+    console.error(`[agentClient] no pude saber el idioma del chat: ${error.message}`);
+    return IDIOMA_POR_DEFECTO;
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/**
  * Le pregunta al agente SQL.
  * @param {string} baseUrl
  * @param {string} chatId
  * @param {string} texto
  * @param {number} [timeoutMs] - por defecto 120s (ver TIMEOUT_MS_DEFAULT).
  *   Parametro pensado para pruebas; la Tarea 9 no necesita pasarlo.
- * @returns {Promise<null | {reply: string, files: string[]}>}
+ * @returns {Promise<null | {reply: string, files: string[], idioma: string}>}
  */
 export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_DEFAULT) {
+  // Los mensajes de abajo los escribe el sidecar, no el modelo, asi que hay
+  // que traducirlos. El idioma se pregunta solo cuando hace falta -- es decir,
+  // casi nunca: son los caminos de error. Si el servicio no contesta, cae al
+  // idioma por defecto, que es justo lo unico razonable ahi.
+  const aviso = async (clave) => {
+    const idioma = await idiomaDelChat(baseUrl, chatId);
+    return { reply: traducir(clave, idioma), files: [], idioma };
+  };
   const controlador = new AbortController();
   const temporizador = setTimeout(() => controlador.abort(), timeoutMs);
 
@@ -79,7 +125,7 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
     } else {
       console.error(`[agentClient] sin conexion con el servicio: ${error.message}`);
     }
-    return { reply: MENSAJES.caido, files: [] };
+    return aviso(MENSAJES.caido);
   } finally {
     clearTimeout(temporizador);
   }
@@ -92,12 +138,12 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
   // seria ruido justo cuando el usuario ya cambio de tema.
   if (respuesta.status === 409) return null;
 
-  if (respuesta.status === 429) return { reply: MENSAJES[429], files: [] };
-  if (respuesta.status === 504) return { reply: MENSAJES[504], files: [] };
+  if (respuesta.status === 429) return aviso(MENSAJES[429]);
+  if (respuesta.status === 504) return aviso(MENSAJES[504]);
 
   if (!respuesta.ok) {
     console.error(`[agentClient] respuesta inesperada: ${respuesta.status}`);
-    return { reply: MENSAJES.desconocido, files: [] };
+    return aviso(MENSAJES.desconocido);
   }
 
   let cuerpo;
@@ -105,16 +151,17 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
     cuerpo = await respuesta.json();
   } catch (error) {
     console.error(`[agentClient] cuerpo de respuesta invalido: ${error.message}`);
-    return { reply: MENSAJES.desconocido, files: [] };
+    return aviso(MENSAJES.desconocido);
   }
 
   if (typeof cuerpo !== "object" || cuerpo === null) {
     console.error("[agentClient] cuerpo de respuesta no es un objeto");
-    return { reply: MENSAJES.desconocido, files: [] };
+    return aviso(MENSAJES.desconocido);
   }
 
-  const reply = typeof cuerpo.reply === "string" ? cuerpo.reply : MENSAJES.desconocido;
+  const idioma = typeof cuerpo.idioma === "string" ? cuerpo.idioma : IDIOMA_POR_DEFECTO;
+  if (typeof cuerpo.reply !== "string") return aviso(MENSAJES.desconocido);
   const files = Array.isArray(cuerpo.files) ? cuerpo.files : [];
 
-  return { reply, files };
+  return { reply: cuerpo.reply, files, idioma };
 }

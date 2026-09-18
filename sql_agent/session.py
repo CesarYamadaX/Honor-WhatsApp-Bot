@@ -92,6 +92,17 @@ class RegistroSesiones:
             self._sesiones[chat_id] = sesion
             return sesion
 
+    def existente(self, chat_id: str) -> Sesion | None:
+        """Devuelve la sesion de un chat SOLO si ya existe, sin crearla.
+
+        Crear una sesion construye un SQLAgent, que abre conexion a la base y
+        arma el modelo. Quien solo necesita mirar de reojo lo que la sesion ya
+        sabe -- por ejemplo, en que idioma venia hablando -- usa esto y no
+        `obtener`, para no pagar esa construccion antes de tiempo.
+        """
+        with self._candado:
+            return self._sesiones.get(chat_id)
+
     def purgar(self) -> int:
         """Elimina las sesiones inactivas. Devuelve cuantas se eliminaron."""
         limite = self._reloj() - self._ttl

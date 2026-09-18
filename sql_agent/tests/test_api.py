@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api
+import idioma as idiomas
 from api import crear_app
 from config import Config
 
@@ -57,7 +58,7 @@ class TestAutorizacion:
     def test_numero_autorizado_recibe_respuesta(self, cliente, agente):
         r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
         assert r.status_code == 200
-        assert r.json() == {"reply": "listo", "files": []}
+        assert r.json() == {"reply": "listo", "files": [], "idioma": "es"}
         assert agente.preguntas == ["hola"]
 
     def test_numero_no_autorizado_recibe_403(self, cliente, agente):
@@ -113,7 +114,7 @@ class TestRespuesta:
             r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
 
         cuerpo = r.json()["reply"]
-        assert cuerpo == api.MENSAJE_SERVICIO_CAIDO
+        assert cuerpo == idiomas.texto("servicio_caido", idiomas.ESPANOL)
         assert "base de datos" not in cuerpo
         assert "lauragabrielacastellanos" in cuerpo
         assert "Budget limit" not in cuerpo
@@ -150,7 +151,7 @@ class TestRespuesta:
         with TestClient(app) as cliente:
             r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
 
-        assert r.json()["reply"] == api.MENSAJE_ERROR_INTERNO
+        assert r.json()["reply"] == idiomas.texto("error_interno", idiomas.ESPANOL)
 
     def test_un_400_del_modelo_no_es_falla_de_cuenta(self):
         # Un prompt demasiado largo llega como 400 desde el mismo modulo.
@@ -351,3 +352,76 @@ class TestCancelacion:
             primera.join(timeout=10)
 
         assert r.status_code == 429
+
+
+class TestIdiomaDelChat:
+    def test_sin_sesion_previa_contesta_el_idioma_por_defecto(self, cliente):
+        r = cliente.post("/idioma", json={"chat_id": AUTORIZADO})
+        assert r.status_code == 200
+        assert r.json() == {"idioma": idiomas.POR_DEFECTO}
+
+    def test_devuelve_el_idioma_que_dedujo_la_sesion(self, cliente, agente):
+        # Para esto existe el endpoint: el aviso de espera del sidecar sale a
+        # los 12s, cuando todavia no hay respuesta de donde sacar el idioma,
+        # pero la sesion ya lo dedujo de la pregunta que esta corriendo.
+        agente.idioma = "en"
+        cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "sales by store"})
+
+        r = cliente.post("/idioma", json={"chat_id": AUTORIZADO})
+        assert r.json() == {"idioma": "en"}
+
+    def test_no_consulta_el_idioma_de_un_numero_ajeno(self, cliente):
+        r = cliente.post("/idioma", json={"chat_id": NO_AUTORIZADO})
+        assert r.status_code == 403
+
+    def test_no_crea_la_sesion_solo_por_preguntar(self, cliente):
+        # Crear una sesion construye un SQLAgent, que abre conexion a la base
+        # y arma el modelo. Un detalle de presentacion no puede pagar eso.
+        llamadas = []
+        app = crear_app(_config(), lambda: llamadas.append(1) or AgenteFalso())
+        with TestClient(app) as c:
+            c.post("/idioma", json={"chat_id": AUTORIZADO})
+        assert llamadas == []
+
+
+class TestMensajesEnElIdiomaDelUsuario:
+    def test_el_error_sale_en_ingles_si_la_pregunta_venia_en_ingles(self):
+        class AgenteQueFalla:
+            idioma = "en"
+
+            def responder(self, pregunta, cancelacion=None):
+                raise RuntimeError("timeout expired")
+
+        app = crear_app(_config(), AgenteQueFalla)
+        with TestClient(app) as cliente:
+            r = cliente.post(
+                "/ask",
+                json={"chat_id": AUTORIZADO, "text": "how many units did Coppel sell"},
+            )
+
+        assert r.json()["reply"] == idiomas.texto("error_interno", "en")
+        assert r.json()["idioma"] == "en"
+
+    def test_el_aviso_de_cancelacion_sale_en_el_idioma_de_la_orden(self, cliente):
+        r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "cancel"})
+        assert r.json()["reply"] == idiomas.texto(
+            "nada_que_cancelar", idiomas.POR_DEFECTO
+        )
+
+        r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "取消"})
+        assert r.json()["reply"] == idiomas.texto("nada_que_cancelar", "zh")
+
+    def test_cancelar_se_entiende_en_los_tres_idiomas(self):
+        # Si "cancel" o "取消" no se reconocieran como orden, se irian al
+        # agente como si fueran preguntas de negocio.
+        for orden in ["cancela", "cancel", "stop", "取消", "算了"]:
+            assert api.es_cancelacion(orden), orden
+        # Y lo de siempre: una pregunta que habla de cancelaciones no lo es.
+        assert not api.es_cancelacion("cuantas ventas se cancelaron en marzo")
+
+    def test_la_respuesta_dice_en_que_idioma_contesto(self, cliente, agente):
+        # El sidecar lo necesita para sus propios avisos posteriores (archivo
+        # ilegible, "no tengo respuesta").
+        agente.idioma = "zh"
+        r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "总销量"})
+        assert r.json()["idioma"] == "zh"
