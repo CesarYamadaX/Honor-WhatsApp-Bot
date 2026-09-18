@@ -43,6 +43,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/formatting.py` | Decide si el resultado va como texto o como Excel |
 | `sql_agent/main.py` | CLI interactiva, alternativa a WhatsApp |
 | `iniciar.py` | Arranca los dos procesos en orden y los baja juntos |
+| `apagar.py` | Apaga el bot desde otra terminal, WhatsApp primero |
 
 ## Seguridad
 
@@ -76,9 +77,17 @@ Un solo comando levanta los dos procesos:
     python iniciar.py
 
 (en Windows tambien sirve `iniciar.bat`, con doble clic). Arranca el servicio
-Python, espera a que conteste y recien entonces arranca el sidecar; Ctrl+C
-baja los dos, y si uno se cae, el otro se baja tambien. La primera vez imprime
-el QR para vincular WhatsApp.
+Python, espera a que conteste y recien entonces arranca el sidecar; si uno se
+cae, el otro se baja tambien. La primera vez imprime el QR para vincular
+WhatsApp.
+
+Para apagarlo: Ctrl+C en esa ventana, o desde cualquier otra terminal
+
+    python apagar.py
+
+(o `apagar.bat`), que baja primero WhatsApp y despues el servicio. Se guia por
+los PID que anota `iniciar.py` en `.bot-encendido.json`, y comprueba que cada
+proceso siga siendo el suyo antes de matarlo.
 
 Antes hay que copiar `sql_agent/.env.example` a `.env` y llenarlo
 (`DB_URI`, `OPENROUTER_API_KEY`, `WHATSAPP_ALLOWED_NUMBERS`), y correr

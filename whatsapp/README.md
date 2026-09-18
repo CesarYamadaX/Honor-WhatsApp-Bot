@@ -36,8 +36,9 @@ Lo normal es levantar los dos de una, desde la raiz del repo:
 python iniciar.py
 ```
 
-Ctrl+C baja los dos. Lo de abajo es el arranque manual, util para depurar uno
-sin el otro.
+Ctrl+C baja los dos, y `python apagar.py` hace lo mismo desde otra terminal.
+Lo de abajo es el arranque manual, util para depurar uno sin el otro (ojo:
+`apagar.py` no los encuentra, porque no quedan anotados en ningun lado).
 
 Terminal 1 — el servicio Python:
 

@@ -11,19 +11,28 @@ contra un servicio muerto le contesta a todo el mundo "el sistema no esta
 disponible", que parece que el bot atiende cuando no atiende.
 """
 
+import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent
 SERVICIO = RAIZ / "sql_agent"
 SIDECAR = RAIZ / "whatsapp"
+
+# Quien esta encendido, para que `apagar.py` lo pueda bajar desde otra
+# terminal. Se borra al salir; si queda huerfano (un corte de luz, la ventana
+# cerrada a lo bruto), la comprobacion de `sigue_siendo_el_nuestro` evita que
+# se mate a un proceso ajeno que haya heredado el numero.
+ARCHIVO_DE_PIDS = RAIZ / ".bot-encendido.json"
 
 # El QR de la primera vinculacion se dibuja con bloques. Esas lineas pasan
 # tal cual, sin prefijo: un QR con adornos no se escanea.
@@ -119,6 +128,108 @@ def formatear(prefijo: str, linea: str) -> str:
     return f"{prefijo} {linea}"
 
 
+def linea_de_comando(pid: int) -> str | None:
+    """Con que se lanzo el proceso `pid`, o None si ya no existe."""
+    if sys.platform == "win32":
+        comando = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            f"Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'"
+            " | Select-Object -ExpandProperty CommandLine",
+        ]
+    else:
+        comando = ["ps", "-p", str(pid), "-o", "args="]
+    try:
+        salida = subprocess.run(comando, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return salida.stdout.strip() or None
+
+
+def sigue_siendo_el_nuestro(pid: int, marca: str) -> bool:
+    """True si ese PID sigue vivo Y es el proceso que anotamos.
+
+    El sistema operativo reusa los numeros de proceso. Un archivo de PIDs
+    viejo mas un PID reciclado es la receta para que `apagar.py` mate algo
+    que no tiene nada que ver, asi que ademas del numero se comprueba una
+    marca de su linea de comando.
+    """
+    actual = linea_de_comando(pid)
+    return actual is not None and marca in actual
+
+
+def anotar_encendido(entradas: list[dict], archivo: Path = ARCHIVO_DE_PIDS) -> None:
+    """Deja por escrito que quedo encendido, para poder apagarlo despues."""
+    archivo.write_text(
+        json.dumps(
+            {"arrancado": datetime.now().isoformat(timespec="seconds"), "procesos": entradas},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def leer_encendido(archivo: Path = ARCHIVO_DE_PIDS) -> list[dict]:
+    """Los procesos anotados, o vacio si no hay nada anotado o esta ilegible."""
+    if not archivo.exists():
+        return []
+    try:
+        datos = json.loads(archivo.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    procesos = datos.get("procesos")
+    return procesos if isinstance(procesos, list) else []
+
+
+def olvidar_encendido(archivo: Path = ARCHIVO_DE_PIDS) -> None:
+    archivo.unlink(missing_ok=True)
+
+
+def detener_pid(pid: int, espera: float = 10.0) -> bool:
+    """Pide al proceso que termine y, si no lo hace, lo fuerza.
+
+    Devuelve False solo si ni siquiera forzandolo se murio. Primero se pide
+    por las buenas: uvicorn cierra sus conexiones y el sidecar suelta el
+    socket de WhatsApp en vez de dejarlo colgado del lado del servidor.
+    """
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid)], capture_output=True, timeout=20
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    limite = time.monotonic() + espera
+    while time.monotonic() < limite:
+        if linea_de_comando(pid) is None:
+            return True
+        time.sleep(0.3)
+
+    # Las consolas de Windows casi nunca se van por las buenas: taskkill sin
+    # /F les manda un mensaje de ventana que no atienden.
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=20
+            )
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    limite = time.monotonic() + 5
+    while time.monotonic() < limite:
+        if linea_de_comando(pid) is None:
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def _bombear(proceso: subprocess.Popen, prefijo: str, salida) -> None:
     """Vuelca la salida de un proceso a la consola, linea por linea."""
     for linea in proceso.stdout:
@@ -169,10 +280,16 @@ def main() -> int:
     if responde(salud):
         print(
             f"Ya hay un servicio contestando en {salud}. El bot parece estar "
-            "encendido; cierralo antes de volver a arrancarlo.",
+            "encendido; apagalo con `python apagar.py` antes de volver a "
+            "arrancarlo.",
             file=sys.stderr,
         )
         return 1
+
+    # Anotacion de un arranque anterior que no llego a borrarla (la ventana
+    # cerrada a lo bruto, un reinicio). Nadie contesta en el puerto, asi que
+    # no queda nada de aquello que valga la pena conservar.
+    olvidar_encendido()
 
     interprete = python_del_entorno()
     procesos: list[tuple[str, subprocess.Popen]] = []
@@ -214,7 +331,18 @@ def main() -> int:
             target=_bombear, args=(wa, "[whatsapp]", sys.stdout), daemon=True
         ).start()
 
-        print("[iniciar] los dos arriba. Ctrl+C para bajarlos.", flush=True)
+        # La marca es lo que `apagar.py` va a buscar en la linea de comando
+        # antes de matar nada: la ruta del interprete lleva el nombre del
+        # repo, y el sidecar es el unico `node index.js` que arrancamos.
+        # WhatsApp va primero porque asi hay que apagarlo.
+        anotar_encendido(
+            [
+                {"nombre": "el sidecar de WhatsApp", "pid": wa.pid, "marca": "index.js"},
+                {"nombre": "el servicio Python", "pid": api.pid, "marca": str(interprete)},
+            ]
+        )
+
+        print("[iniciar] los dos arriba. Ctrl+C aqui, o `python apagar.py`.", flush=True)
 
         while True:
             for nombre, proceso in procesos:
@@ -235,6 +363,7 @@ def main() -> int:
         # un mensaje justo cuando el servicio ya no esta para contestarlo.
         for nombre, proceso in reversed(procesos):
             _terminar(proceso, nombre)
+        olvidar_encendido()
 
 
 if __name__ == "__main__":

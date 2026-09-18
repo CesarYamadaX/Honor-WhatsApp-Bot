@@ -10,3 +10,5 @@ auth_info/
 exports/
 # Salida de los servicios cuando se levantan a mano para probar.
 *.log
+# PIDs de los procesos encendidos; los escribe iniciar.py.
+.bot-encendido.json

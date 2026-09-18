@@ -116,3 +116,47 @@ class TestSalidaDeLosProcesos:
         # unica salida del arranque que el usuario TIENE que poder usar.
         linea = "██▀▀██"
         assert iniciar.formatear("[whatsapp]", linea) == linea
+
+
+class TestAnotacionDeEncendido:
+    def test_sin_archivo_no_hay_nada_anotado(self, tmp_path):
+        assert iniciar.leer_encendido(tmp_path / "no-existe.json") == []
+
+    def test_un_archivo_corrupto_se_trata_como_vacio(self, tmp_path):
+        # Preferible a reventar: un archivo a medio escribir no puede dejar
+        # `apagar.py` inservible, que es justo cuando hace falta.
+        archivo = tmp_path / "pids.json"
+        archivo.write_text("{esto no es json", encoding="utf-8")
+        assert iniciar.leer_encendido(archivo) == []
+
+    def test_lo_anotado_se_lee_igual_y_en_el_mismo_orden(self, tmp_path):
+        # El orden importa: WhatsApp se apaga primero, para que no entre un
+        # mensaje cuando el servicio ya no esta para contestarlo.
+        archivo = tmp_path / "pids.json"
+        entradas = [
+            {"nombre": "el sidecar de WhatsApp", "pid": 11, "marca": "index.js"},
+            {"nombre": "el servicio Python", "pid": 22, "marca": "python.exe"},
+        ]
+        iniciar.anotar_encendido(entradas, archivo)
+        assert iniciar.leer_encendido(archivo) == entradas
+
+    def test_olvidar_no_se_queja_si_ya_no_estaba(self, tmp_path):
+        iniciar.olvidar_encendido(tmp_path / "no-existe.json")
+
+
+class TestIdentidadDelProceso:
+    def test_reconoce_un_proceso_vivo_por_su_marca(self):
+        import os
+
+        assert iniciar.sigue_siendo_el_nuestro(os.getpid(), "python")
+
+    def test_un_pid_vivo_con_otra_marca_no_es_el_nuestro(self):
+        # El caso que esto evita: el archivo de PIDs quedo de un arranque
+        # viejo, el sistema reciclo el numero, y apagar.py mataria a un
+        # proceso ajeno que no tiene nada que ver con el bot.
+        import os
+
+        assert not iniciar.sigue_siendo_el_nuestro(os.getpid(), "netscape-navigator")
+
+    def test_un_pid_que_no_existe_no_es_el_nuestro(self):
+        assert not iniciar.sigue_siendo_el_nuestro(999_999_999, "python")
