@@ -54,7 +54,12 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 
 Se abre solo al arrancar el bot, como **aplicacion**: ventana propia, sin
 barra de direcciones ni pestañas, con el logo del bot en la barra de tareas.
-Si ya hay una ventana abierta no abre otra. Para
+Si ya hay una ventana abierta no abre otra.
+
+La ventana usa un perfil propio en `sql_agent/datos/ventana`, y ahi el
+navegador se guarda el icono. Si algun dia se cambia el logo y la ventana
+sigue mostrando el anterior, hay que borrar esa carpeta: es desechable, se
+vuelve a crear sola al abrir el panel. Para
 abrirlo por separado (si se cerro la ventana, con el bot ya encendido):
 
     python panel.py
