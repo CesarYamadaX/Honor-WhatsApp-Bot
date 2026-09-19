@@ -382,9 +382,12 @@ def main(abrir_el_panel: bool = True) -> int:
         if abrir_el_panel and panel:
             # Import aqui y no arriba: panel.py importa de este modulo, y
             # arriba seria una importacion circular.
-            from panel import abrir as abrir_ventana
+            from panel import abrir as abrir_ventana, ya_esta_abierta
 
-            print(f"[iniciar] abriendo el panel {abrir_ventana(panel)}", flush=True)
+            if ya_esta_abierta(panel):
+                print("[iniciar] el panel ya estaba abierto", flush=True)
+            else:
+                print(f"[iniciar] abriendo el panel {abrir_ventana(panel)}", flush=True)
 
         while True:
             for nombre, proceso in procesos:

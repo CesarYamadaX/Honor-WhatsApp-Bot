@@ -41,6 +41,9 @@ class TestCuandoSiAbre:
         abiertos = []
         monkeypatch.setattr(panel, "responde", lambda url: True)
         monkeypatch.setattr(panel, "url_del_panel", lambda: "http://127.0.0.1:8000/panel")
+        # Sin esto la prueba mira las ventanas de ESTA maquina y cambia de
+        # resultado segun si el panel esta abierto mientras corre.
+        monkeypatch.setattr(panel, "ya_esta_abierta", lambda url: False)
         monkeypatch.setattr(panel, "abrir", lambda url: abiertos.append(url) or "de mentira")
 
         assert panel.main() == 0
@@ -61,3 +64,35 @@ class TestElegirNavegador:
         monkeypatch.setattr(panel, "NAVEGADORES", ())
         monkeypatch.setattr(panel.shutil, "which", lambda _: None)
         assert panel.navegador_para_app() is None
+
+
+class TestNoAbrirDosVeces:
+    def test_si_ya_hay_una_ventana_no_abre_otra(self, monkeypatch, capsys):
+        # Cada reinicio del bot abria otra ventana encima de la anterior.
+        abiertos = []
+        monkeypatch.setattr(panel, "responde", lambda url: True)
+        monkeypatch.setattr(panel, "url_del_panel", lambda: "http://127.0.0.1:8000/panel")
+        monkeypatch.setattr(panel, "ya_esta_abierta", lambda url: True)
+        monkeypatch.setattr(panel, "abrir", lambda url: abiertos.append(url))
+
+        assert panel.main() == 0
+        assert abiertos == []
+        assert "ya esta abierto" in capsys.readouterr().out
+
+    def test_reconoce_la_ventana_por_su_linea_de_comando(self, monkeypatch):
+        # `--app=<url>` es lo unico que distingue la ventana del panel de
+        # una ventana normal del navegador.
+        class Salida:
+            stdout = 'msedge.exe --app=http://127.0.0.1:8000/panel --user-data-dir=x'
+
+        monkeypatch.setattr(panel.subprocess, "run", lambda *a, **k: Salida())
+        assert panel.ya_esta_abierta("http://127.0.0.1:8000/panel")
+        assert not panel.ya_esta_abierta("http://127.0.0.1:9999/panel")
+
+    def test_si_no_se_puede_averiguar_se_abre(self, monkeypatch):
+        # Una ventana de mas molesta menos que ninguna.
+        def revienta(*a, **k):
+            raise OSError("no hay powershell")
+
+        monkeypatch.setattr(panel.subprocess, "run", revienta)
+        assert not panel.ya_esta_abierta("http://127.0.0.1:8000/panel")

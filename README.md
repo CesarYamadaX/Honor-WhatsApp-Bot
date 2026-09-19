@@ -53,7 +53,8 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 ## Panel de administracion
 
 Se abre solo al arrancar el bot, como **aplicacion**: ventana propia, sin
-barra de direcciones ni pestañas, con su icono en la barra de tareas. Para
+barra de direcciones ni pestañas, con el logo del bot en la barra de tareas.
+Si ya hay una ventana abierta no abre otra. Para
 abrirlo por separado (si se cerro la ventana, con el bot ya encendido):
 
     python panel.py

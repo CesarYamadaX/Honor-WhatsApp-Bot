@@ -46,6 +46,37 @@ def navegador_para_app() -> str | None:
     return None
 
 
+def ya_esta_abierta(url: str) -> bool:
+    """True si ya hay una ventana del panel en esta maquina.
+
+    Sin esto, cada reinicio del bot deja otra ventana encima de la anterior:
+    la de antes no se entera de que el servicio se fue y vuelve, y termina
+    uno con cuatro paneles identicos en la barra de tareas.
+
+    Se reconoce por la linea de comando -- `--app=<la url>` --, que es lo
+    unico que distingue a la ventana del panel de una ventana normal del
+    navegador.
+    """
+    marca = f"--app={url}"
+    if sys.platform == "win32":
+        comando = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
+        ]
+    else:
+        comando = ["ps", "-eo", "args="]
+    try:
+        salida = subprocess.run(comando, capture_output=True, text=True, timeout=25)
+    except (OSError, subprocess.SubprocessError):
+        # Si no se puede averiguar, se abre: una ventana de mas molesta
+        # menos que ninguna.
+        return False
+    return marca in (salida.stdout or "")
+
+
 def abrir(url: str) -> str:
     """Abre el panel. Devuelve como se abrio, para poder decirlo."""
     navegador = navegador_para_app()
@@ -94,6 +125,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    if ya_esta_abierta(url):
+        print("El panel ya esta abierto; buscalo en la barra de tareas.")
+        return 0
 
     print(f"Abriendo el panel {abrir(url)}: {url}")
     return 0
