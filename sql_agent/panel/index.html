@@ -4,304 +4,418 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panel del bot</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2300a884'/%3E%3Cpath d='M9 22l1-3.4A7.4 7.4 0 1 1 13 24z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-  /* Sin tipografias de internet a proposito: el panel se abre justo cuando
-     algo va mal, y a veces lo que va mal es la red. Pila del sistema y
-     numeros tabulares, que es lo que pide una pantalla de datos. */
+  /* Dos paneles como WhatsApp Web: la lista a la izquierda, la conversacion
+     a la derecha. Sin tipografias de internet: el panel se abre justo cuando
+     algo va mal, y a veces lo que va mal es la red. La pila del sistema en
+     Windows es Segoe UI, que es con la que se ve WhatsApp Web aqui. */
   :root {
     color-scheme: light;
-    --fondo: #f6f7f9;
-    --superficie: #ffffff;
-    --superficie-2: #eef1f5;
-    --borde: #dbe0e8;
-    --tinta: #161d2a;
-    --tinta-2: #55617a;
-    --tinta-3: #8b95a9;
-    --acento: #1d5fd6;
-    --acento-suave: #e7eefc;
-    --ok: #1a7f4b;
-    --ok-suave: #e1f3e9;
-    --aviso: #9a6206;
-    --aviso-suave: #fcf0da;
-    --alto: #b3261e;
-    --alto-suave: #fbe6e4;
-    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --fondo: #eae6df;
+    --panel: #ffffff;
+    --barra: #f0f2f5;
+    --borde: #e9edef;
+    --borde-fuerte: #d1d7db;
+    --tinta: #111b21;
+    --tinta-2: #667781;
+    --tinta-3: #8696a0;
+    --verde: #00a884;
+    --verde-oscuro: #008069;
+    --burbuja-entra: #ffffff;
+    --burbuja-sale: #d9fdd3;
+    --seleccion: #f0f2f5;
+    --alto: #ea0038;
+    --alto-suave: #ffe5ea;
+    --aviso: #b26b00;
+    --aviso-suave: #fff3e0;
+    --ok-suave: #e7f8ef;
+    --sombra: 0 1px 0.5px rgba(11,20,26,.13);
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    --trazo-doodle: rgba(17,27,33,.05);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --fondo: #0f1319;
-      --superficie: #161c25;
-      --superficie-2: #1d2531;
-      --borde: #2a3441;
-      --tinta: #e8ecf3;
-      --tinta-2: #a3aec1;
-      --tinta-3: #6d7a8f;
-      --acento: #6ea0ff;
-      --acento-suave: #1a2740;
-      --ok: #6cd39a;
-      --ok-suave: #14301f;
+      --fondo: #0b141a;
+      --panel: #111b21;
+      --barra: #202c33;
+      --borde: #202c33;
+      --borde-fuerte: #2a3942;
+      --tinta: #e9edef;
+      --tinta-2: #8696a0;
+      --tinta-3: #667781;
+      --verde: #00a884;
+      --verde-oscuro: #00a884;
+      --burbuja-entra: #202c33;
+      --burbuja-sale: #005c4b;
+      --seleccion: #2a3942;
+      --alto: #f15c6d;
+      --alto-suave: #3b1a21;
       --aviso: #e3ae5a;
       --aviso-suave: #33260f;
-      --alto: #f2867d;
-      --alto-suave: #351a18;
+      --ok-suave: #0f2e23;
+      --sombra: 0 1px 0.5px rgba(11,20,26,.38);
+      --trazo-doodle: rgba(233,237,239,.04);
     }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
-    background: var(--fondo);
+    font: 15px/1.45 var(--sans);
     color: var(--tinta);
-    font: 14px/1.5 var(--sans);
+    background: var(--barra);
     -webkit-font-smoothing: antialiased;
   }
-  .envoltorio { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
+  button { font: inherit; color: inherit; }
 
-  header.principal {
-    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
-    padding-bottom: 16px; border-bottom: 1px solid var(--borde); margin-bottom: 20px;
+  /* --- armazon de dos paneles --- */
+  .app {
+    /* Al alto de la ventana, no al 100% del padre: con el porcentaje, en
+       Edge el armazon quedaba mas corto que la ventana y el pie del panel
+       se salia de la vista. */
+    height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(300px, 31%) 1fr;
+    background: var(--panel);
   }
-  header.principal h1 {
-    margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em;
+  .lateral {
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--borde);
+    background: var(--panel);
+    min-width: 0;
   }
-  header.principal .sub { color: var(--tinta-3); font-size: 13px; }
-  .estado-servicio {
-    margin-left: auto; display: flex; align-items: center; gap: 8px;
-    font-size: 13px; color: var(--tinta-2);
-  }
-  .foco {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--tinta-3); flex: none;
-  }
-  .foco.vivo { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-suave); }
-  .foco.muerto { background: var(--alto); box-shadow: 0 0 0 3px var(--alto-suave); }
-
-  nav.pestanas { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; }
-  nav.pestanas button {
-    font: inherit; font-weight: 550; color: var(--tinta-2);
-    background: none; border: 1px solid transparent; border-radius: 7px;
-    padding: 7px 13px; cursor: pointer;
-  }
-  nav.pestanas button:hover { background: var(--superficie-2); color: var(--tinta); }
-  nav.pestanas button[aria-selected="true"] {
-    background: var(--acento-suave); color: var(--acento); border-color: var(--acento);
-  }
-  nav.pestanas button:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
-  .cuenta {
-    margin-left: 5px; font-variant-numeric: tabular-nums;
-    font-size: 12px; opacity: .75;
+  .principal {
+    display: flex; flex-direction: column;
+    background: var(--fondo);
+    min-width: 0;
   }
 
-  h2 { font-size: 14px; font-weight: 650; margin: 0 0 10px; letter-spacing: -0.005em; }
-  .nota { color: var(--tinta-3); font-size: 13px; margin: 0 0 16px; max-width: 62ch; }
+  /* --- barra superior, igual en los dos paneles --- */
+  .barra {
+    background: var(--barra);
+    padding: 9px 16px;
+    display: flex; align-items: center; gap: 12px;
+    min-height: 59px;
+    flex: none;
+    border-bottom: 1px solid var(--borde);
+  }
+  .marca { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .nombre { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lugar { color: var(--tinta-2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .tarjeta {
-    background: var(--superficie); border: 1px solid var(--borde);
-    border-radius: 10px; padding: 16px;
+  .pulso {
+    margin-left: auto; display: flex; align-items: center; gap: 7px;
+    color: var(--tinta-2); font-size: 12.5px; white-space: nowrap;
   }
-  .lista { display: flex; flex-direction: column; gap: 12px; }
+  .foco { width: 9px; height: 9px; border-radius: 50%; background: var(--tinta-3); flex: none; }
+  .foco.vivo { background: var(--verde); }
+  .foco.muerto { background: var(--alto); }
 
-  /* Actividad: lo que el bot esta haciendo ahora. */
-  .trabajo { border-left: 3px solid var(--acento); }
-  .trabajo .cabeza {
-    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline;
-    margin-bottom: 10px;
+  /* --- avatar --- */
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%; flex: none;
+    background: var(--borde-fuerte); color: var(--panel);
+    display: grid; place-items: center;
+    font-size: 13px; font-weight: 600; letter-spacing: .01em;
   }
-  .trabajo .quien { font-family: var(--mono); font-size: 12px; color: var(--tinta-2); }
-  .trabajo .pregunta { font-weight: 600; flex: 1 1 280px; }
-  .reloj {
-    font-variant-numeric: tabular-nums; font-size: 12px; color: var(--tinta-2);
-    background: var(--superficie-2); border-radius: 20px; padding: 2px 9px;
+  .avatar.chico { width: 38px; height: 38px; font-size: 12px; }
+  .avatar.verde { background: var(--verde); color: #fff; }
+
+  /* --- buscador y solapas --- */
+  .herramientas { padding: 8px 12px; display: flex; flex-direction: column; gap: 9px; flex: none; }
+  .buscador { position: relative; }
+  .buscador input {
+    width: 100%; border: none; border-radius: 8px;
+    background: var(--barra); color: var(--tinta);
+    padding: 9px 12px 9px 40px; font: inherit; font-size: 14px;
   }
-  .reloj.largo { background: var(--aviso-suave); color: var(--aviso); }
+  .buscador input:focus-visible { outline: 2px solid var(--verde); }
+  .buscador svg { position: absolute; left: 14px; top: 11px; fill: var(--tinta-3); }
+
+  .solapas { display: flex; gap: 8px; }
+  .solapas button {
+    border: none; background: var(--barra); color: var(--tinta-2);
+    border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .solapas button[aria-selected="true"] { background: var(--ok-suave); color: var(--verde-oscuro); font-weight: 600; }
+  .solapas button:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  .solapas .cuenta { font-variant-numeric: tabular-nums; opacity: .85; }
+
+  /* --- lista lateral --- */
+  .lista { overflow-y: auto; flex: 1; }
+  .renglon {
+    display: flex; gap: 13px; align-items: center; width: 100%;
+    padding: 10px 16px; border: none; background: none; cursor: pointer;
+    text-align: left; border-bottom: 1px solid var(--borde);
+  }
+  .renglon:hover { background: var(--seleccion); }
+  .renglon[aria-current="true"] { background: var(--seleccion); }
+  .renglon:focus-visible { outline: 2px solid var(--verde); outline-offset: -2px; }
+  .renglon .centro { flex: 1; min-width: 0; }
+  .renglon .arriba { display: flex; align-items: baseline; gap: 8px; }
+  .renglon .titulo {
+    font-size: 16px; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .renglon .hora { font-size: 12px; color: var(--tinta-2); flex: none; font-variant-numeric: tabular-nums; }
+  .renglon .abajo { display: flex; align-items: center; gap: 7px; color: var(--tinta-2); font-size: 14px; }
+  .renglon .vista-previa { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .renglon .globo {
+    background: var(--verde); color: #fff; border-radius: 11px; flex: none;
+    font-size: 12px; font-weight: 600; padding: 1px 7px; min-width: 21px; text-align: center;
+  }
+  .escribiendo { color: var(--verde); }
+  .fijado { background: var(--ok-suave); }
+
+  /* --- conversacion --- */
+  .doodle {
+    flex: 1; overflow-y: auto; padding: 18px 6% 22px;
+    background-color: var(--fondo);
+    background-image: var(--patron);
+    background-size: 340px;
+  }
+  .dia {
+    display: block; width: fit-content; margin: 0 auto 16px;
+    background: var(--barra); color: var(--tinta-2);
+    font-size: 12.5px; padding: 5px 12px; border-radius: 8px; box-shadow: var(--sombra);
+  }
+  .turno { margin-bottom: 16px; }
+  .burbuja {
+    max-width: min(76%, 700px); padding: 7px 10px 8px;
+    border-radius: 8px; box-shadow: var(--sombra); position: relative;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .burbuja.entra { background: var(--burbuja-entra); border-top-left-radius: 0; margin-right: auto; }
+  .burbuja.sale { background: var(--burbuja-sale); border-top-right-radius: 0; margin-left: auto; }
+  /* La colita de las burbujas. */
+  .burbuja::before { content: ""; position: absolute; top: 0; width: 9px; height: 13px; }
+  .burbuja.entra::before {
+    left: -9px;
+    background: radial-gradient(circle at 0 0, transparent 9px, var(--burbuja-entra) 9px);
+  }
+  .burbuja.sale::before {
+    right: -9px;
+    background: radial-gradient(circle at 100% 0, transparent 9px, var(--burbuja-sale) 9px);
+  }
+  .burbuja.fallo { background: var(--alto-suave); }
+  .burbuja.fallo::before {
+    background: radial-gradient(circle at 100% 0, transparent 9px, var(--alto-suave) 9px);
+  }
+
+  .pie-burbuja {
+    float: right; margin: 6px -2px -3px 12px;
+    font-size: 11px; color: var(--tinta-2);
+    display: flex; align-items: center; gap: 5px; white-space: nowrap;
+  }
+  .palomas { fill: var(--verde); }
+  .palomas.rojas { fill: var(--alto); }
+
+  details.tramoya { clear: both; margin-top: 7px; }
+  details.tramoya summary {
+    cursor: pointer; font-size: 12.5px; color: var(--tinta-2);
+    list-style: none; padding: 3px 0; user-select: none;
+  }
+  details.tramoya summary::-webkit-details-marker { display: none; }
+  details.tramoya summary::before { content: "⚙ "; }
+  details.tramoya summary:focus-visible { outline: 2px solid var(--verde); outline-offset: 2px; }
   .pasos {
-    margin: 0; padding: 0; list-style: none;
+    margin: 5px 0 0; padding: 9px 11px; list-style: none;
+    background: var(--panel); border-radius: 7px; box-shadow: var(--sombra);
     font-family: var(--mono); font-size: 12px; line-height: 1.7;
     color: var(--tinta-2); overflow-x: auto;
   }
-  .pasos li { white-space: pre-wrap; word-break: break-word; }
+  .pasos li { white-space: pre-wrap; overflow-wrap: anywhere; }
   .pasos li::before { content: "› "; color: var(--tinta-3); }
 
-  /* Usuarios */
-  .tabla-envuelta { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th {
-    text-align: left; font-size: 11px; text-transform: uppercase;
-    letter-spacing: .06em; color: var(--tinta-3); font-weight: 600;
-    padding: 0 10px 8px; white-space: nowrap;
+  .pie-panel {
+    flex: none; background: var(--barra); padding: 13px 16px;
+    color: var(--tinta-2); font-size: 13px; text-align: center;
+    border-top: 1px solid var(--borde);
   }
-  td { padding: 11px 10px; border-top: 1px solid var(--borde); vertical-align: middle; }
-  td.numero { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .pastilla {
-    display: inline-block; font-size: 12px; font-weight: 600;
-    padding: 2px 9px; border-radius: 20px; white-space: nowrap;
-  }
-  .pastilla.activo { background: var(--ok-suave); color: var(--ok); }
-  .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
-  .pastilla.bloqueado { background: var(--alto-suave); color: var(--alto); }
-  .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
-  button.accion {
-    font: inherit; font-size: 12px; font-weight: 550;
-    background: var(--superficie); color: var(--tinta-2);
-    border: 1px solid var(--borde); border-radius: 6px;
-    padding: 5px 10px; cursor: pointer; white-space: nowrap;
-  }
-  button.accion:hover { border-color: var(--tinta-3); color: var(--tinta); }
-  button.accion.peligro:hover { border-color: var(--alto); color: var(--alto); }
-  button.accion:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  /* --- vistas que no son conversacion --- */
+  .hoja { flex: 1; overflow-y: auto; background: var(--panel); }
+  .hoja-interior { max-width: 760px; margin: 0 auto; padding: 24px 22px 44px; }
+  .hoja h2 { font-size: 15px; font-weight: 600; margin: 0 0 5px; }
+  .hoja h2.separada { margin-top: 30px; }
+  .hoja p.nota { color: var(--tinta-2); font-size: 13.5px; margin: 0 0 18px; max-width: 62ch; }
 
-  form.alta { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-  label.campo { display: flex; flex-direction: column; gap: 5px; flex: 1 1 160px; }
-  label.campo span { font-size: 12px; color: var(--tinta-2); font-weight: 550; }
-  input {
-    font: inherit; padding: 8px 10px; border-radius: 7px;
-    border: 1px solid var(--borde); background: var(--fondo); color: var(--tinta);
-    width: 100%;
+  form.alta { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  label.campo { display: flex; flex-direction: column; gap: 5px; flex: 1 1 170px; }
+  label.campo span { font-size: 12px; color: var(--tinta-2); }
+  label.campo input {
+    border: none; border-bottom: 2px solid var(--borde-fuerte);
+    background: none; color: var(--tinta); padding: 7px 2px; font: inherit; width: 100%;
   }
-  input:focus-visible { outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento); }
+  label.campo input:focus-visible { outline: none; border-bottom-color: var(--verde); }
   button.principal {
-    font: inherit; font-weight: 600; background: var(--acento); color: #fff;
-    border: 1px solid var(--acento); border-radius: 7px; padding: 9px 16px; cursor: pointer;
+    background: var(--verde-oscuro); color: #fff; border: none; border-radius: 20px;
+    padding: 9px 22px; font-weight: 600; cursor: pointer; font-size: 14px;
   }
   button.principal:hover { filter: brightness(1.08); }
   button.principal:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
 
-  /* Conversaciones */
-  .chats { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
-  button.chat {
-    font: inherit; text-align: left; cursor: pointer; width: 100%;
-    background: none; border: 1px solid transparent; border-radius: 8px;
-    padding: 9px 11px; color: var(--tinta);
-    display: flex; gap: 12px; align-items: baseline;
+  .persona {
+    display: flex; align-items: center; gap: 13px;
+    padding: 12px 2px; border-bottom: 1px solid var(--borde);
   }
-  button.chat:hover { background: var(--superficie-2); }
-  button.chat[aria-current="true"] { background: var(--acento-suave); border-color: var(--acento); }
-  button.chat .num { font-family: var(--mono); font-size: 12px; }
-  button.chat .ult { color: var(--tinta-3); font-size: 12px; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .persona .datos { flex: 1; min-width: 0; }
+  .persona .quien { font-size: 15px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .persona .cuando { color: var(--tinta-2); font-size: 12.5px; }
+  .pastilla { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 11px; white-space: nowrap; }
+  .pastilla.activo { background: var(--ok-suave); color: var(--verde-oscuro); }
+  .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
+  .pastilla.bloqueado { background: var(--alto-suave); color: var(--alto); }
+  .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  button.accion {
+    font-size: 12.5px; background: none; color: var(--tinta-2);
+    border: 1px solid var(--borde-fuerte); border-radius: 15px;
+    padding: 4px 13px; cursor: pointer; white-space: nowrap;
+  }
+  button.accion:hover { border-color: var(--verde); color: var(--verde-oscuro); }
+  button.accion.peligro:hover { border-color: var(--alto); color: var(--alto); }
+  button.accion:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
 
-  .turno { border-left: 3px solid var(--borde); }
-  .turno.error { border-left-color: var(--alto); }
-  .turno.cancelado { border-left-color: var(--aviso); }
-  .turno .meta {
-    display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
-    font-size: 12px; color: var(--tinta-3); margin-bottom: 8px;
-    font-variant-numeric: tabular-nums;
+  /* --- actividad --- */
+  .trabajo {
+    background: var(--panel); border-radius: 8px; padding: 14px 16px;
+    box-shadow: var(--sombra); margin-bottom: 12px;
+    border-left: 4px solid var(--verde);
   }
-  .burbuja { padding: 9px 12px; border-radius: 9px; margin-bottom: 8px; }
-  .burbuja.pregunta { background: var(--superficie-2); }
-  .burbuja.respuesta { background: var(--acento-suave); white-space: pre-wrap; }
-  .etiqueta {
-    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--tinta-3); font-weight: 600; display: block; margin-bottom: 3px;
+  .trabajo .cabeza { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 9px; }
+  .trabajo .pregunta { font-weight: 600; flex: 1 1 260px; }
+  .trabajo .quien { color: var(--tinta-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .reloj {
+    font-size: 12px; color: var(--tinta-2); background: var(--barra);
+    border-radius: 12px; padding: 2px 9px; font-variant-numeric: tabular-nums;
   }
-  details.tramoya summary {
-    cursor: pointer; font-size: 12px; color: var(--tinta-2); font-weight: 550;
-    padding: 4px 0;
-  }
-  details.tramoya summary:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
-  details.tramoya[open] summary { margin-bottom: 6px; }
+  .reloj.largo { background: var(--aviso-suave); color: var(--aviso); }
 
-  .vacio {
-    color: var(--tinta-3); text-align: center; padding: 34px 16px;
-    border: 1px dashed var(--borde); border-radius: 10px;
+  .vacio { color: var(--tinta-2); text-align: center; padding: 46px 20px; font-size: 14px; }
+  .bienvenida {
+    flex: 1; display: grid; place-content: center; justify-items: center;
+    gap: 14px; text-align: center; padding: 30px; background: var(--panel);
+    border-bottom: 5px solid var(--verde);
   }
+  .bienvenida h2 { font-weight: 300; font-size: 31px; margin: 0; color: var(--tinta-2); }
+  .bienvenida p { color: var(--tinta-3); font-size: 14px; margin: 0; max-width: 48ch; }
+
   .aviso-error {
-    background: var(--alto-suave); color: var(--alto); border: 1px solid var(--alto);
-    border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; font-weight: 550;
+    background: var(--alto-suave); color: var(--alto);
+    padding: 10px 16px; font-size: 13.5px; font-weight: 500; flex: none;
   }
+  .volver { display: none; background: none; border: none; cursor: pointer; padding: 4px; }
+  .volver svg { fill: var(--tinta-2); display: block; }
+
   [hidden] { display: none !important; }
-  @media (prefers-reduced-motion: no-preference) {
-    .foco.vivo { animation: latir 2.4s ease-in-out infinite; }
-    @keyframes latir { 50% { opacity: .45; } }
+
+  @media (max-width: 820px) {
+    .app { grid-template-columns: 1fr; }
+    .lateral, .principal { grid-column: 1; grid-row: 1; }
+    .app.viendo-chat .lateral { display: none; }
+    .app:not(.viendo-chat) .principal { display: none; }
+    .volver { display: block; }
+    .doodle { padding-inline: 14px; }
+    .burbuja { max-width: 88%; }
   }
 </style>
 </head>
 <body>
-<div class="envoltorio">
+<div class="app" id="app">
 
-  <header class="principal">
-    <h1>Panel del bot</h1>
-    <span class="sub">GTM Honor México</span>
-    <div class="estado-servicio">
-      <span class="foco" id="foco"></span>
-      <span id="texto-estado">conectando…</span>
-    </div>
-  </header>
-
-  <div id="error" class="aviso-error" hidden></div>
-
-  <nav class="pestanas" role="tablist">
-    <button role="tab" id="tab-actividad" aria-selected="true" aria-controls="panel-actividad">
-      Ahora mismo<span class="cuenta" id="cuenta-actividad"></span>
-    </button>
-    <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="panel-usuarios">
-      Usuarios<span class="cuenta" id="cuenta-usuarios"></span>
-    </button>
-    <button role="tab" id="tab-conversaciones" aria-selected="false" aria-controls="panel-conversaciones">
-      Conversaciones
-    </button>
-  </nav>
-
-  <section id="panel-actividad" role="tabpanel" aria-labelledby="tab-actividad">
-    <p class="nota">
-      Lo que el bot está haciendo en este instante: qué le preguntaron, desde
-      hace cuánto y en qué paso va. Una consulta pesada puede tardar minutos, y
-      desde fuera eso se ve igual que si estuviera colgado.
-    </p>
-    <div id="actividad" class="lista"></div>
-
-    <h2 style="margin-top:26px">Últimas consultas</h2>
-    <div id="ultimos" class="lista"></div>
-  </section>
-
-  <section id="panel-usuarios" role="tabpanel" aria-labelledby="tab-usuarios" hidden>
-    <p class="nota">
-      Quién puede usar el bot. Los cambios entran de inmediato, sin reiniciar
-      nada. Un número que no esté <strong>activo</strong> recibe silencio total,
-      igual que uno que nunca estuvo: cualquier otra respuesta le confirmaría
-      que hay un bot del otro lado.
-    </p>
-
-    <div class="tarjeta" style="margin-bottom:16px">
-      <h2>Dar de alta</h2>
-      <form class="alta" id="form-alta">
-        <label class="campo">
-          <span>Número con lada de país</span>
-          <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
-        </label>
-        <label class="campo">
-          <span>Nombre (opcional)</span>
-          <input id="alta-nombre" placeholder="Laura, ventas">
-        </label>
-        <button class="principal" type="submit">Agregar</button>
-      </form>
-    </div>
-
-    <div class="tarjeta">
-      <div class="tabla-envuelta">
-        <table>
-          <thead>
-            <tr>
-              <th>Número</th><th>Nombre</th><th>Estado</th><th>Desde / hasta</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="usuarios"></tbody>
-        </table>
+  <aside class="lateral">
+    <div class="barra">
+      <div class="marca">
+        <div class="avatar verde" aria-hidden="true">
+          <svg width="23" height="23" viewBox="0 0 24 24" fill="#fff"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 2a8 8 0 1 1-4.2 14.8l-.4-.2-2.6.7.7-2.5-.3-.4A8 8 0 0 1 12 4z"/></svg>
+        </div>
+        <div style="min-width:0">
+          <div class="nombre">Panel del bot</div>
+          <div class="lugar">GTM Honor México</div>
+        </div>
       </div>
-      <div id="sin-usuarios" class="vacio" hidden>Todavía no hay nadie dado de alta.</div>
     </div>
-  </section>
 
-  <section id="panel-conversaciones" role="tabpanel" aria-labelledby="tab-conversaciones" hidden>
-    <p class="nota">
-      Cada turno con lo que contestó el bot y, debajo, lo que hizo para
-      contestarlo: el SQL que corrió, cuántas filas trajo y cuánto tardó.
-    </p>
-    <div id="chats" class="chats"></div>
-    <div id="turnos" class="lista"></div>
-  </section>
+    <div class="herramientas">
+      <div class="buscador">
+        <svg width="17" height="17" viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+        <input id="buscar" type="search" placeholder="Buscar un número" aria-label="Buscar un número">
+      </div>
+      <div class="solapas" role="tablist">
+        <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista">Conversaciones</button>
+        <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="lista">
+          Usuarios <span class="cuenta" id="cuenta-usuarios"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="lista" id="lista"></div>
+  </aside>
+
+  <main class="principal" id="principal">
+    <div class="barra">
+      <button class="volver" id="volver" type="button" aria-label="Volver a la lista">
+        <svg width="24" height="24" viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
+      </button>
+      <div class="avatar chico" id="avatar-principal" aria-hidden="true" hidden></div>
+      <div style="min-width:0">
+        <div class="nombre" id="titulo-principal">Panel del bot</div>
+        <div class="lugar" id="subtitulo-principal">Elige una conversación</div>
+      </div>
+      <div class="pulso">
+        <span class="foco" id="foco"></span>
+        <span id="texto-estado">conectando…</span>
+      </div>
+    </div>
+
+    <div id="error" class="aviso-error" hidden></div>
+
+    <div class="bienvenida" id="vista-bienvenida">
+      <h2>Panel del bot</h2>
+      <p>
+        Elige una conversación para ver qué le preguntaron al bot, qué contestó
+        y qué hizo para contestarlo. En <strong>Usuarios</strong> se da de alta,
+        se suspende o se bloquea a quien puede escribirle.
+      </p>
+      <p id="resumen-bienvenida" class="lugar"></p>
+    </div>
+
+    <div class="doodle" id="vista-chat" hidden></div>
+    <div class="pie-panel" id="pie-chat" hidden>
+      Solo lectura: desde aquí no se le escribe al usuario.
+    </div>
+
+    <div class="doodle" id="vista-actividad" hidden></div>
+
+    <div class="hoja" id="vista-usuarios" hidden>
+      <div class="hoja-interior">
+        <h2>Dar de alta</h2>
+        <p class="nota">
+          Los cambios entran de inmediato, sin reiniciar nada. Un número que no
+          esté <strong>activo</strong> recibe silencio total, igual que uno que
+          nunca estuvo: cualquier otra respuesta le confirmaría que hay un bot
+          del otro lado.
+        </p>
+        <form class="alta" id="form-alta">
+          <label class="campo">
+            <span>Número con lada de país</span>
+            <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
+          </label>
+          <label class="campo">
+            <span>Nombre (opcional)</span>
+            <input id="alta-nombre" placeholder="Laura, ventas">
+          </label>
+          <button class="principal" type="submit">Agregar</button>
+        </form>
+
+        <h2 class="separada">Quién puede usar el bot</h2>
+        <div id="personas"></div>
+      </div>
+    </div>
+  </main>
 
 </div>
 
@@ -309,15 +423,44 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const PESTANAS = ["actividad", "usuarios", "conversaciones"];
-let pestanaActual = "actividad";
-let chatElegido = null;
 
-function mostrarError(mensaje) {
-  const caja = $("error");
-  if (!mensaje) { caja.hidden = true; return; }
-  caja.textContent = mensaje;
-  caja.hidden = false;
+// El fondo de la conversacion: el mismo gesto que el papel tapiz de WhatsApp,
+// dibujado aqui para no depender de ninguna imagen externa.
+const DOODLE = `<svg xmlns="http://www.w3.org/2000/svg" width="340" height="340" fill="none" stroke="TRAZO" stroke-width="1.6" stroke-linecap="round">
+<circle cx="40" cy="45" r="11"/><path d="M95 30h26v22H95z"/><path d="M160 52l11-19 11 19z"/>
+<path d="M215 30c8 0 8 10 0 10s-8 10 0 10"/><circle cx="285" cy="42" r="8"/><path d="M300 55l14-14"/>
+<path d="M30 120h22v18H30z"/><circle cx="105" cy="128" r="13"/><path d="M155 140l14-22 14 22z"/>
+<path d="M215 118l18 18m0-18l-18 18"/><path d="M270 120c10 4 10 16 0 20"/><circle cx="315" cy="132" r="7"/>
+<path d="M45 215l12-20 12 20z"/><circle cx="120" cy="212" r="9"/><path d="M165 200h24v24h-24z"/>
+<path d="M230 205c8 0 8 9 0 9s-8 9 0 9"/><path d="M280 200l16 16m0-16l-16 16"/>
+<circle cx="35" cy="295" r="8"/><path d="M85 285h20v20H85z"/><path d="M145 305l13-21 13 21z"/>
+<path d="M205 288c10 3 10 15 0 18"/><circle cx="265" cy="296" r="12"/><path d="M305 285l14 14"/>
+</svg>`;
+document.documentElement.style.setProperty(
+  "--patron",
+  `url("data:image/svg+xml,${encodeURIComponent(
+    DOODLE.replace(
+      "TRAZO",
+      getComputedStyle(document.documentElement).getPropertyValue("--trazo-doodle").trim(),
+    ),
+  )}")`,
+);
+
+let solapa = "chats";      // que muestra la lista de la izquierda
+let vista = "bienvenida";  // que muestra el panel de la derecha
+let chatElegido = null;
+let filtro = "";
+let cacheChats = [];
+let cacheUsuarios = [];
+let enCursoPorChat = new Map();
+
+/* ------------------------------------------------------------------ utiles */
+
+function elemento(etiqueta, clase, contenido) {
+  const nodo = document.createElement(etiqueta);
+  if (clase) nodo.className = clase;
+  if (contenido !== undefined) nodo.textContent = contenido;
+  return nodo;
 }
 
 async function pedir(ruta, opciones) {
@@ -327,39 +470,280 @@ async function pedir(ruta, opciones) {
   return cuerpo;
 }
 
-function texto(nodo, valor) { nodo.textContent = valor ?? ""; return nodo; }
-function elemento(etiqueta, clase, contenido) {
-  const nodo = document.createElement(etiqueta);
-  if (clase) nodo.className = clase;
-  if (contenido !== undefined) nodo.textContent = contenido;
-  return nodo;
+function mostrarError(mensaje) {
+  const caja = $("error");
+  if (!mensaje) { caja.hidden = true; return; }
+  caja.textContent = mensaje;
+  caja.hidden = false;
 }
 
 const soloNumero = (chatId) => String(chatId || "").split("@")[0];
-function hora(iso) {
-  if (!iso) return "";
+
+function iniciales(numero) {
+  const limpio = soloNumero(numero);
+  return limpio.length >= 4 ? limpio.slice(-4) : limpio || "··";
+}
+
+const fecha = (iso) => {
   const t = new Date(iso);
-  return isNaN(t) ? iso : t.toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
+  return isNaN(t) ? null : t;
+};
+function horaCorta(iso) {
+  const t = fecha(iso);
+  return t ? t.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : "";
+}
+function diaLargo(iso) {
+  const t = fecha(iso);
+  if (!t) return "";
+  const hoy = new Date();
+  const ayer = new Date(hoy);
+  ayer.setDate(hoy.getDate() - 1);
+  const mismoDia = (a, b) => a.toDateString() === b.toDateString();
+  if (mismoDia(t, hoy)) return "HOY";
+  if (mismoDia(t, ayer)) return "AYER";
+  return t.toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" });
+}
+function cuandoEnLista(iso) {
+  const t = fecha(iso);
+  if (!t) return "";
+  return t.toDateString() === new Date().toDateString()
+    ? horaCorta(iso)
+    : t.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 function duracion(segundos) {
   const s = Math.max(0, Math.round(Number(segundos) || 0));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
-// --- Ahora mismo -----------------------------------------------------------
+function palomas(rojas) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 18 12");
+  svg.setAttribute("width", "17");
+  svg.setAttribute("height", "11");
+  svg.setAttribute("class", `palomas${rojas ? " rojas" : ""}`);
+  const trazo = document.createElementNS(NS, "path");
+  trazo.setAttribute(
+    "d",
+    "M6.6 11.1 1 5.6l1.3-1.3 4.3 4.2L15 0l1.3 1.3zM11.9 1.3 10.6 0 5.3 8.5l1.1 1.1z",
+  );
+  svg.append(trazo);
+  return svg;
+}
+
+const avatar = (numero, clase = "") =>
+  elemento("div", `avatar ${clase}`.trim(), iniciales(numero));
+
+/* ----------------------------------------------------------- lista lateral */
+
+function pintarLista() {
+  const caja = $("lista");
+  caja.replaceChildren();
+  if (solapa === "usuarios") pintarListaUsuarios(caja);
+  else pintarListaChats(caja);
+}
+
+function pintarListaChats(caja) {
+  // Lo que esta corriendo va fijado arriba, como un chat anclado.
+  if (enCursoPorChat.size > 0) {
+    const fijado = elemento("button", "renglon fijado");
+    fijado.type = "button";
+    const centro = elemento("div", "centro");
+    const arriba = elemento("div", "arriba");
+    arriba.append(elemento("span", "titulo", "Ahora mismo"));
+    const abajo = elemento("div", "abajo");
+    abajo.append(
+      elemento(
+        "span",
+        "vista-previa escribiendo",
+        `${enCursoPorChat.size} consulta${enCursoPorChat.size === 1 ? "" : "s"} corriendo`,
+      ),
+    );
+    centro.append(arriba, abajo);
+    const ico = elemento("div", "avatar verde", String(enCursoPorChat.size));
+    fijado.append(ico, centro);
+    if (vista === "actividad") fijado.setAttribute("aria-current", "true");
+    fijado.addEventListener("click", abrirActividad);
+    caja.append(fijado);
+  }
+
+  const visibles = cacheChats.filter((c) => soloNumero(c.chat_id).includes(filtro));
+  if (!visibles.length) {
+    caja.append(
+      elemento("div", "vacio", filtro ? "Ningún número coincide." : "Todavía no hay conversaciones."),
+    );
+    return;
+  }
+
+  for (const chat of visibles) {
+    const corriendo = enCursoPorChat.has(chat.chat_id);
+    const fila = elemento("button", "renglon");
+    fila.type = "button";
+    if (chat.chat_id === chatElegido && vista === "chat") fila.setAttribute("aria-current", "true");
+
+    const centro = elemento("div", "centro");
+    const arriba = elemento("div", "arriba");
+    arriba.append(
+      elemento("span", "titulo", soloNumero(chat.chat_id)),
+      elemento("span", "hora", cuandoEnLista(chat.ultimo)),
+    );
+    const abajo = elemento("div", "abajo");
+    abajo.append(
+      corriendo
+        ? elemento("span", "vista-previa escribiendo", "consultando…")
+        : elemento("span", "vista-previa", chat.ultima_pregunta),
+      elemento("span", "globo", String(chat.turnos)),
+    );
+    centro.append(arriba, abajo);
+    fila.append(avatar(chat.chat_id), centro);
+    fila.addEventListener("click", () => abrirChat(chat.chat_id).catch((e) => mostrarError(e.message)));
+    caja.append(fila);
+  }
+}
+
+function pintarListaUsuarios(caja) {
+  const visibles = cacheUsuarios.filter((u) => u.numero.includes(filtro));
+  if (!visibles.length) {
+    caja.append(
+      elemento("div", "vacio", filtro ? "Ningún número coincide." : "Todavía no hay nadie dado de alta."),
+    );
+    return;
+  }
+  for (const usuario of visibles) {
+    const fila = elemento("button", "renglon");
+    fila.type = "button";
+    const centro = elemento("div", "centro");
+    const arriba = elemento("div", "arriba");
+    arriba.append(elemento("span", "titulo", usuario.nombre || usuario.numero));
+    const abajo = elemento("div", "abajo");
+    // Sin nombre, el numero ya es el titulo: repetirlo o poner "sin nombre"
+    // no dice nada. Se muestra cuando entro a la lista.
+    abajo.append(
+      elemento(
+        "span",
+        "vista-previa",
+        usuario.nombre ? usuario.numero : `alta ${(usuario.creado || "").slice(0, 10)}`,
+      ),
+      elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
+    );
+    centro.append(arriba, abajo);
+    fila.append(avatar(usuario.numero), centro);
+    fila.addEventListener("click", abrirUsuarios);
+    caja.append(fila);
+  }
+}
+
+/* ------------------------------------------------------ panel de la derecha */
+
+function mostrarVista(cual) {
+  vista = cual;
+  $("vista-bienvenida").hidden = cual !== "bienvenida";
+  $("vista-chat").hidden = cual !== "chat";
+  $("pie-chat").hidden = cual !== "chat";
+  $("vista-actividad").hidden = cual !== "actividad";
+  $("vista-usuarios").hidden = cual !== "usuarios";
+  $("app").classList.toggle("viendo-chat", cual !== "bienvenida");
+}
+
+function encabezado(titulo, subtitulo, numeroParaAvatar) {
+  $("titulo-principal").textContent = titulo;
+  $("subtitulo-principal").textContent = subtitulo;
+  const ico = $("avatar-principal");
+  ico.textContent = numeroParaAvatar ? iniciales(numeroParaAvatar) : "";
+  ico.hidden = !numeroParaAvatar;
+}
+
+async function abrirChat(chatId) {
+  chatElegido = chatId;
+  mostrarVista("chat");
+  location.hash = `chat=${soloNumero(chatId)}`;
+  encabezado(
+    soloNumero(chatId),
+    enCursoPorChat.has(chatId) ? "consultando…" : "toca un turno para ver qué hizo",
+    chatId,
+  );
+  pintarLista();
+
+  const datos = await pedir(`/panel/conversaciones?chat_id=${encodeURIComponent(chatId)}`);
+  const caja = $("vista-chat");
+  caja.replaceChildren();
+
+  // Del mas viejo al mas nuevo, como se lee una conversacion.
+  const turnos = [...datos.turnos].reverse();
+  if (!turnos.length) {
+    caja.append(elemento("div", "vacio", "Sin turnos registrados."));
+    return;
+  }
+
+  let diaAnterior = null;
+  for (const turno of turnos) {
+    const dia = diaLargo(turno.inicio);
+    if (dia !== diaAnterior) {
+      caja.append(elemento("span", "dia", dia));
+      diaAnterior = dia;
+    }
+    caja.append(burbujaDeTurno(turno));
+  }
+  caja.scrollTop = caja.scrollHeight;
+}
+
+function burbujaDeTurno(turno) {
+  const grupo = elemento("div", "turno");
+
+  const pregunta = elemento("div", "burbuja entra");
+  pregunta.append(document.createTextNode(turno.pregunta));
+  const pie = elemento("div", "pie-burbuja");
+  pie.append(elemento("span", null, horaCorta(turno.inicio)));
+  pregunta.append(pie);
+  grupo.append(pregunta);
+
+  const fallo = turno.estado !== "listo";
+  const respuesta = elemento("div", `burbuja sale${fallo ? " fallo" : ""}`);
+  respuesta.style.marginTop = "7px";
+  respuesta.append(
+    document.createTextNode(
+      turno.respuesta ||
+        (turno.estado === "cancelado" ? "(cancelada por otra pregunta)" : "(sin respuesta)"),
+    ),
+  );
+
+  const pieBot = elemento("div", "pie-burbuja");
+  if (turno.archivos.length) pieBot.append(elemento("span", null, `📎 ${turno.archivos.length}`));
+  if (turno.idioma) pieBot.append(elemento("span", null, turno.idioma));
+  pieBot.append(elemento("span", null, duracion(turno.segundos)));
+  pieBot.append(elemento("span", null, horaCorta(turno.inicio)));
+  pieBot.append(palomas(fallo));
+  respuesta.append(pieBot);
+  grupo.append(respuesta);
+
+  if (turno.pasos.length) {
+    const detalle = elemento("details", "tramoya");
+    detalle.append(elemento("summary", null, `Qué hizo para contestar (${turno.pasos.length})`));
+    const pasos = elemento("ul", "pasos");
+    for (const paso of turno.pasos) pasos.append(elemento("li", null, paso));
+    detalle.append(pasos);
+    grupo.append(detalle);
+  }
+  return grupo;
+}
+
+function abrirActividad() {
+  mostrarVista("actividad");
+  location.hash = "actividad";
+  encabezado("Ahora mismo", "lo que el bot está haciendo en este instante", null);
+  pintarActividad([...enCursoPorChat.values()]);
+  pintarLista();
+}
 
 function pintarActividad(enCurso) {
-  const caja = $("actividad");
+  const caja = $("vista-actividad");
   caja.replaceChildren();
-  $("cuenta-actividad").textContent = enCurso.length ? `· ${enCurso.length}` : "";
-
   if (!enCurso.length) {
     caja.append(elemento("div", "vacio", "El bot está en reposo: ninguna consulta corriendo."));
     return;
   }
-
   for (const trabajo of enCurso) {
-    const tarjeta = elemento("article", "tarjeta trabajo");
+    const tarjeta = elemento("article", "trabajo");
     const cabeza = elemento("div", "cabeza");
     cabeza.append(
       elemento("span", "pregunta", trabajo.pregunta),
@@ -371,85 +755,60 @@ function pintarActividad(enCurso) {
     tarjeta.append(cabeza);
 
     const pasos = elemento("ul", "pasos");
-    if (!trabajo.pasos.length) {
-      pasos.append(elemento("li", null, "pensando cómo responder…"));
-    } else {
-      for (const paso of trabajo.pasos) pasos.append(elemento("li", null, paso));
-    }
+    if (!trabajo.pasos.length) pasos.append(elemento("li", null, "pensando cómo responder…"));
+    else for (const paso of trabajo.pasos) pasos.append(elemento("li", null, paso));
     tarjeta.append(pasos);
     caja.append(tarjeta);
   }
 }
 
-let cuantoCorria = -1;
+/* ----------------------------------------------------------------- usuarios */
 
-async function pintarUltimos() {
-  try {
-    const datos = await pedir("/panel/ultimos?limite=6");
-    const caja = $("ultimos");
-    caja.replaceChildren();
-    if (!datos.turnos.length) {
-      caja.append(elemento("div", "vacio", "Ninguna consulta registrada todavía."));
-      return;
-    }
-    for (const turno of datos.turnos) {
-      const fila = elemento("article", `tarjeta turno ${turno.estado}`);
-      const meta = elemento("div", "meta");
-      meta.append(
-        elemento("span", null, hora(turno.inicio)),
-        elemento("span", "quien", soloNumero(turno.chat_id)),
-        elemento("span", null, duracion(turno.segundos)),
-      );
-      if (turno.estado !== "listo") meta.append(elemento("span", null, turno.estado));
-      fila.append(meta, elemento("div", null, turno.pregunta));
-      fila.addEventListener("click", () => {
-        elegirPestana("conversaciones");
-        cargarTurnos(turno.chat_id).catch((e) => mostrarError(e.message));
-      });
-      fila.style.cursor = "pointer";
-      caja.append(fila);
-    }
-  } catch (error) {
-    // La actividad en vivo es lo importante de esta pestaña; si el historial
-    // no carga, no vale la pena tapar la pantalla con un error.
-  }
+function abrirUsuarios() {
+  mostrarVista("usuarios");
+  location.hash = "usuarios";
+  encabezado("Usuarios", "quién puede escribirle al bot", null);
+  pintarPersonas();
 }
 
-// --- Usuarios --------------------------------------------------------------
-
-function filaDeUsuario(usuario) {
-  const fila = document.createElement("tr");
-  fila.append(
-    texto(elemento("td", "numero"), usuario.numero),
-    texto(elemento("td"), usuario.nombre || "—"),
-  );
-
-  const celdaEstado = elemento("td");
-  celdaEstado.append(elemento("span", `pastilla ${usuario.estado}`, usuario.estado));
-  fila.append(celdaEstado);
-
-  const cuando = usuario.estado === "suspendido" && usuario.suspendido_hasta
-    ? `hasta el ${usuario.suspendido_hasta}`
-    : `alta ${(usuario.creado || "").slice(0, 10)}`;
-  fila.append(texto(elemento("td"), cuando));
-
-  const celdaAcciones = elemento("td");
-  const acciones = elemento("div", "acciones");
-
-  if (usuario.estado !== "activo") {
-    acciones.append(boton("Reactivar", () => cambiar("reactivar", { numero: usuario.numero })));
+function pintarPersonas() {
+  const caja = $("personas");
+  caja.replaceChildren();
+  if (!cacheUsuarios.length) {
+    caja.append(elemento("div", "vacio", "Todavía no hay nadie dado de alta."));
+    return;
   }
-  if (usuario.estado !== "suspendido") {
-    acciones.append(boton("Suspender", () => suspender(usuario)));
-  }
-  if (usuario.estado !== "bloqueado") {
-    acciones.append(boton("Bloquear", () => cambiar("bloquear", { numero: usuario.numero })));
-  }
-  acciones.append(boton("Eliminar", () => eliminar(usuario), true));
+  for (const usuario of cacheUsuarios) {
+    const fila = elemento("div", "persona");
+    const datos = elemento("div", "datos");
+    const quien = elemento("div", "quien");
+    quien.append(
+      elemento("span", null, usuario.nombre || usuario.numero),
+      elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
+    );
+    const cuando =
+      usuario.estado === "suspendido" && usuario.suspendido_hasta
+        ? `suspendido hasta el ${usuario.suspendido_hasta}`
+        : usuario.nombre
+          ? `${usuario.numero} · alta ${(usuario.creado || "").slice(0, 10)}`
+          : `alta ${(usuario.creado || "").slice(0, 10)}`;
+    datos.append(quien, elemento("div", "cuando", cuando));
 
-  celdaAcciones.append(acciones);
-  fila.append(celdaAcciones);
-  return fila;
+    const acciones = elemento("div", "acciones");
+    if (usuario.estado !== "activo") {
+      acciones.append(boton("Reactivar", () => cambiar("reactivar", { numero: usuario.numero })));
+    }
+    if (usuario.estado !== "suspendido") {
+      acciones.append(boton("Suspender", () => suspender(usuario)));
+    }
+    if (usuario.estado !== "bloqueado") {
+      acciones.append(boton("Bloquear", () => cambiar("bloquear", { numero: usuario.numero })));
+    }
+    acciones.append(boton("Eliminar", () => eliminar(usuario), true));
+
+    fila.append(avatar(usuario.numero), datos, acciones);
+    caja.append(fila);
+  }
 }
 
 function boton(etiqueta, alHacerClic, peligro) {
@@ -475,9 +834,8 @@ async function cambiar(accion, cuerpo) {
 
 function suspender(usuario) {
   const hasta = prompt(
-    `Suspender a ${usuario.numero}.\n\n` +
-    "¿Hasta qué día? (AAAA-MM-DD)\n" +
-    "Déjalo vacío para que la suspensión no venza sola.",
+    `Suspender a ${usuario.numero}.\n\n¿Hasta qué día? (AAAA-MM-DD)\n` +
+      "Déjalo vacío para que la suspensión no venza sola.",
     "",
   );
   if (hasta === null) return;
@@ -486,18 +844,15 @@ function suspender(usuario) {
 
 function eliminar(usuario) {
   const quien = usuario.nombre ? `${usuario.nombre} (${usuario.numero})` : usuario.numero;
-  if (!confirm(`Eliminar a ${quien} de la lista.\n\nSi vuelve a escribir será un desconocido más. Para dejarlo fuera pudiendo devolverle el acceso después, usa Bloquear.`)) return;
+  if (
+    !confirm(
+      `Eliminar a ${quien} de la lista.\n\nSi vuelve a escribir será un desconocido más. ` +
+        "Para dejarlo fuera pudiendo devolverle el acceso después, usa Bloquear.",
+    )
+  ) {
+    return;
+  }
   cambiar("eliminar", { numero: usuario.numero });
-}
-
-async function cargarUsuarios() {
-  const datos = await pedir("/panel/usuarios");
-  const cuerpo = $("usuarios");
-  cuerpo.replaceChildren();
-  for (const usuario of datos.usuarios) cuerpo.append(filaDeUsuario(usuario));
-  $("sin-usuarios").hidden = datos.usuarios.length > 0;
-  const activos = datos.usuarios.filter((u) => u.estado === "activo").length;
-  $("cuenta-usuarios").textContent = `· ${activos}/${datos.usuarios.length}`;
 }
 
 $("form-alta").addEventListener("submit", async (evento) => {
@@ -507,10 +862,7 @@ $("form-alta").addEventListener("submit", async (evento) => {
     await pedir("/panel/usuarios", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        numero: $("alta-numero").value,
-        nombre: $("alta-nombre").value,
-      }),
+      body: JSON.stringify({ numero: $("alta-numero").value, nombre: $("alta-nombre").value }),
     });
     $("alta-numero").value = "";
     $("alta-nombre").value = "";
@@ -520,144 +872,106 @@ $("form-alta").addEventListener("submit", async (evento) => {
   }
 });
 
-// --- Conversaciones --------------------------------------------------------
+/* -------------------------------------------------------------------- datos */
+
+async function cargarUsuarios() {
+  const datos = await pedir("/panel/usuarios");
+  cacheUsuarios = datos.usuarios;
+  const activos = cacheUsuarios.filter((u) => u.estado === "activo").length;
+  $("cuenta-usuarios").textContent = `${activos}/${cacheUsuarios.length}`;
+  if (vista === "usuarios") pintarPersonas();
+  if (solapa === "usuarios") pintarLista();
+  pintarResumen();
+}
 
 async function cargarChats() {
   const datos = await pedir("/panel/conversaciones");
-  const caja = $("chats");
-  caja.replaceChildren();
-
-  if (!datos.chats.length) {
-    caja.append(elemento("div", "vacio", "Todavía no hay conversaciones registradas."));
-    $("turnos").replaceChildren();
-    return;
-  }
-
-  for (const chat of datos.chats) {
-    const b = elemento("button", "chat");
-    b.type = "button";
-    b.append(
-      elemento("span", "num", soloNumero(chat.chat_id)),
-      elemento("span", "ult", chat.ultima_pregunta),
-      elemento("span", "reloj", `${chat.turnos} ${chat.turnos === 1 ? "turno" : "turnos"}`),
-    );
-    if (chat.chat_id === chatElegido) b.setAttribute("aria-current", "true");
-    b.addEventListener("click", () => cargarTurnos(chat.chat_id));
-    caja.append(b);
-  }
-
-  if (!chatElegido) await cargarTurnos(datos.chats[0].chat_id);
+  cacheChats = datos.chats;
+  if (solapa === "chats") pintarLista();
+  pintarResumen();
 }
 
-async function cargarTurnos(chatId) {
-  chatElegido = chatId;
-  for (const b of $("chats").querySelectorAll("button.chat")) {
-    const suyo = b.querySelector(".num").textContent === soloNumero(chatId);
-    if (suyo) b.setAttribute("aria-current", "true");
-    else b.removeAttribute("aria-current");
-  }
-
-  const datos = await pedir(`/panel/conversaciones?chat_id=${encodeURIComponent(chatId)}`);
-  const caja = $("turnos");
-  caja.replaceChildren();
-
-  for (const turno of datos.turnos) {
-    const tarjeta = elemento("article", `tarjeta turno ${turno.estado}`);
-
-    const meta = elemento("div", "meta");
-    meta.append(
-      elemento("span", null, hora(turno.inicio)),
-      elemento("span", null, `tardó ${duracion(turno.segundos)}`),
-    );
-    if (turno.idioma) meta.append(elemento("span", null, `respondió en ${turno.idioma}`));
-    if (turno.estado !== "listo") meta.append(elemento("span", null, turno.estado));
-    if (turno.archivos.length) {
-      meta.append(elemento("span", null, `${turno.archivos.length} archivo(s) enviados`));
-    }
-    tarjeta.append(meta);
-
-    const pregunta = elemento("div", "burbuja pregunta");
-    pregunta.append(elemento("span", "etiqueta", "Preguntó"), document.createTextNode(turno.pregunta));
-    tarjeta.append(pregunta);
-
-    if (turno.respuesta) {
-      const respuesta = elemento("div", "burbuja respuesta");
-      respuesta.append(elemento("span", "etiqueta", "Contestó el bot"), document.createTextNode(turno.respuesta));
-      tarjeta.append(respuesta);
-    }
-
-    if (turno.pasos.length) {
-      const detalle = elemento("details", "tramoya");
-      detalle.append(elemento("summary", null, `Qué hizo para contestar (${turno.pasos.length} pasos)`));
-      const pasos = elemento("ul", "pasos");
-      for (const paso of turno.pasos) pasos.append(elemento("li", null, paso));
-      detalle.append(pasos);
-      tarjeta.append(detalle);
-    }
-
-    caja.append(tarjeta);
-  }
+function pintarResumen() {
+  $("resumen-bienvenida").textContent =
+    `${cacheChats.length} conversación${cacheChats.length === 1 ? "" : "es"} registrada${cacheChats.length === 1 ? "" : "s"} · ` +
+    `${cacheUsuarios.length} usuario${cacheUsuarios.length === 1 ? "" : "s"} en la lista`;
 }
 
-// --- Pestañas y refresco ---------------------------------------------------
+/* -------------------------------------------------------- solapas y latido */
 
-function elegirPestana(nombre, cambiarUrl = true) {
-  pestanaActual = nombre;
-  // La pestaña va en la direccion: asi se puede guardar el panel
-  // directamente en Usuarios, y recargar no te devuelve al principio.
-  if (cambiarUrl && location.hash.slice(1) !== nombre) location.hash = nombre;
-  for (const otra of PESTANAS) {
-    $(`tab-${otra}`).setAttribute("aria-selected", String(otra === nombre));
-    $(`panel-${otra}`).hidden = otra !== nombre;
-  }
-  if (nombre === "usuarios") cargarUsuarios().catch((e) => mostrarError(e.message));
-  if (nombre === "conversaciones") cargarChats().catch((e) => mostrarError(e.message));
+function elegirSolapa(cual) {
+  solapa = cual;
+  $("tab-chats").setAttribute("aria-selected", String(cual === "chats"));
+  $("tab-usuarios").setAttribute("aria-selected", String(cual === "usuarios"));
+  $("buscar").placeholder = cual === "usuarios" ? "Buscar un usuario" : "Buscar un número";
+  pintarLista();
+  if (cual === "usuarios") abrirUsuarios();
 }
 
-for (const nombre of PESTANAS) {
-  $(`tab-${nombre}`).addEventListener("click", () => elegirPestana(nombre));
-}
-
-function pestanaDeLaUrl() {
-  const pedida = location.hash.slice(1);
-  return PESTANAS.includes(pedida) ? pedida : "actividad";
-}
-window.addEventListener("hashchange", () => elegirPestana(pestanaDeLaUrl(), false));
-elegirPestana(pestanaDeLaUrl(), false);
+$("tab-chats").addEventListener("click", () => elegirSolapa("chats"));
+$("tab-usuarios").addEventListener("click", () => elegirSolapa("usuarios"));
+$("buscar").addEventListener("input", (evento) => {
+  filtro = evento.target.value.replace(/\D/g, "");
+  pintarLista();
+});
+$("volver").addEventListener("click", () => {
+  mostrarVista("bienvenida");
+  location.hash = "";
+});
 
 async function latido() {
-  // Solo mientras la pestaña este a la vista: con el panel de fondo, esto
-  // seria una peticion cada dos segundos durante horas sin que nadie mire.
   if (document.hidden) return;
   try {
     const datos = await pedir("/panel/actividad");
     $("foco").className = "foco vivo";
-    const sesiones = datos.sesiones === 1 ? "1 conversación viva" : `${datos.sesiones} conversaciones vivas`;
-    $("texto-estado").textContent = `servicio arriba · ${sesiones}`;
-    if (pestanaActual === "actividad") {
-      pintarActividad(datos.en_curso);
-      // El historial solo se relee cuando algo empieza o termina, no cada
-      // dos segundos: son archivos en disco y nadie los cambia entre medias.
-      if (datos.en_curso.length !== cuantoCorria) {
-        cuantoCorria = datos.en_curso.length;
-        pintarUltimos();
+    $("texto-estado").textContent =
+      datos.sesiones === 1 ? "en línea · 1 conversación" : `en línea · ${datos.sesiones} conversaciones`;
+
+    const antes = enCursoPorChat.size;
+    enCursoPorChat = new Map(datos.en_curso.map((turno) => [turno.chat_id, turno]));
+    if (vista === "actividad") pintarActividad(datos.en_curso);
+    if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
+      $("subtitulo-principal").textContent = "consultando…";
+    }
+    // El historial solo se relee cuando algo empieza o termina: son archivos
+    // en disco y nadie los cambia entre medias.
+    if (enCursoPorChat.size !== antes) {
+      await cargarChats();
+      if (vista === "chat" && chatElegido && !enCursoPorChat.has(chatElegido)) {
+        await abrirChat(chatElegido);
       }
+    } else if (solapa === "chats") {
+      pintarLista();
     }
   } catch (error) {
     $("foco").className = "foco muerto";
-    $("texto-estado").textContent = "no contesta el servicio";
-    if (pestanaActual === "actividad") {
-      $("actividad").replaceChildren(
-        elemento("div", "vacio", "El servicio no contesta. ¿Sigue encendido el bot?"),
-      );
-    }
+    $("texto-estado").textContent = "sin conexión";
   }
 }
 
-latido();
-cargarUsuarios().catch(() => {});
-setInterval(latido, 2000);
+async function arranque() {
+  try {
+    await cargarUsuarios();
+    await cargarChats();
+  } catch (error) {
+    mostrarError(error.message);
+  }
+
+  const destino = location.hash.slice(1);
+  if (destino === "usuarios") elegirSolapa("usuarios");
+  else if (destino === "actividad") abrirActividad();
+  else if (destino.startsWith("chat=")) {
+    const numero = destino.slice(5);
+    const chat = cacheChats.find((c) => soloNumero(c.chat_id) === numero);
+    if (chat) await abrirChat(chat.chat_id).catch((e) => mostrarError(e.message));
+  }
+
+  await latido();
+  setInterval(latido, 2000);
+}
+
 document.addEventListener("visibilitychange", () => { if (!document.hidden) latido(); });
+arranque();
 </script>
 </body>
 </html>

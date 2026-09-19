@@ -47,14 +47,26 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/usuarios.py` | Quien puede usar el bot y en que estado esta |
 | `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
 | `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
+| `panel.py` | Abre el panel como aplicacion, en su propia ventana |
 
 ## Panel de administracion
 
-Se enciende con el bot, en <http://127.0.0.1:8000/panel>. Es una pagina web:
-hay que abrirla en el navegador de la maquina donde corre el bot -- el
-arranque escribe la direccion, y `python iniciar.py --abrir` la abre sola.
-Cada vista tiene su propia direccion (`#usuarios`, `#conversaciones`), asi que
-se puede guardar en favoritos la que se use mas.
+Se enciende con el bot. Para verlo:
+
+    python panel.py
+
+(o `panel.bat`, o `python iniciar.py --abrir` para que se abra al arrancar).
+Se abre como **aplicacion**: ventana propia, sin barra de direcciones ni
+pestañas, con su icono en la barra de tareas. Por dentro es la pagina que
+sirve el mismo servicio en <http://127.0.0.1:8000/panel>, abierta en modo
+aplicacion de Edge o Chrome; asi no hay que instalar ni mantener un
+empaquetado aparte. Si no hay ninguno de los dos, cae al navegador normal.
+
+La disposicion es la de WhatsApp Web: la lista de conversaciones a la
+izquierda, la conversacion a la derecha, con la pregunta del usuario y la
+respuesta del bot como burbujas. Cada vista tiene su direccion (`#usuarios`,
+`#actividad`, `#chat=<numero>`), asi que se puede guardar en favoritos la que
+se use mas.
 
 Tres vistas:
 

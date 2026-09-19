@@ -21,7 +21,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -369,7 +368,7 @@ def main(abrir_el_panel: bool = False) -> int:
         print("  El bot esta encendido.", flush=True)
         if panel:
             print(f"  Panel (usuarios y conversaciones):  {panel}", flush=True)
-            print("  Abrelo en el navegador de esta maquina.", flush=True)
+            print("  Abrelo como aplicacion con:  python panel.py", flush=True)
         else:
             print(
                 "  El panel esta apagado: API_HOST no es loopback y el "
@@ -380,7 +379,11 @@ def main(abrir_el_panel: bool = False) -> int:
         print("", flush=True)
 
         if abrir_el_panel and panel:
-            webbrowser.open(panel)
+            # Import aqui y no arriba: panel.py importa de este modulo, y
+            # arriba seria una importacion circular.
+            from panel import abrir as abrir_ventana
+
+            print(f"[iniciar] abriendo el panel {abrir_ventana(panel)}", flush=True)
 
         while True:
             for nombre, proceso in procesos:
