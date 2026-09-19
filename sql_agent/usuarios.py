@@ -24,7 +24,7 @@ confirma a quien escribe que hay un bot del otro lado.
 
 import json
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -68,6 +68,10 @@ class Usuario:
     numero: str
     nombre: str = ""
     estado: str = ACTIVO
+    # Nombre del archivo en la carpeta de fotos, no la imagen: el registro
+    # se lee entero en cada refresco del panel y se edita a mano cuando hace
+    # falta, y un base64 de 30 KB por usuario arruina las dos cosas.
+    foto: str = ""
     nota: str = ""
     creado: str = field(default_factory=_ahora)
     actualizado: str = field(default_factory=_ahora)
@@ -162,8 +166,17 @@ class RegistroUsuarios:
             return sorted(self._usuarios.values(), key=lambda u: (u.estado, u.numero))
 
     def obtener(self, numero: str) -> Usuario | None:
+        """Una COPIA del usuario, no el que vive en el registro.
+
+        Devolver el vivo es una trampa: quien lo guarda para comparar
+        despues de un cambio se encuentra con que ya cambio bajo sus pies.
+        Paso de verdad -- al quitar una foto, el nombre del archivo a borrar
+        se leia despues de vaciarlo, asi que la foto se quedaba en el disco
+        para siempre.
+        """
         with self._candado:
-            return self._usuarios.get(numero)
+            usuario = self._usuarios.get(numero)
+            return replace(usuario) if usuario is not None else None
 
     # --- altas y bajas ----------------------------------------------------
 
@@ -188,6 +201,21 @@ class RegistroUsuarios:
             usuario.actualizado = _ahora()
             self._guardar()
             return usuario
+
+    def renombrar(self, crudo: str, nombre: str) -> Usuario:
+        """Le cambia el nombre. Vacio lo deja sin nombre, que es valido.
+
+        El numero no se puede cambiar: es la identidad con la que llegan los
+        mensajes, asi que cambiarlo no es editar a alguien sino darlo de alta
+        otra vez.
+        """
+        return self._cambiar(crudo, nombre=nombre.strip())
+
+    def poner_foto(self, crudo: str, archivo: str) -> Usuario:
+        return self._cambiar(crudo, foto=archivo)
+
+    def quitar_foto(self, crudo: str) -> Usuario:
+        return self._cambiar(crudo, foto="")
 
     def suspender(self, crudo: str, nota: str = "") -> Usuario:
         """Le quita el acceso hasta que alguien lo reactive."""

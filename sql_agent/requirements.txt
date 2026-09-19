@@ -11,3 +11,6 @@ matplotlib==3.11.2
 python-dotenv==1.0.1
 fastapi==0.115.6
 uvicorn==0.34.0
+# Normaliza las fotos de los usuarios del panel (fotos.py). Ya entraba
+# como dependencia de matplotlib; se declara porque ahora se usa directo.
+Pillow>=10

@@ -45,6 +45,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `iniciar.py` | Arranca los dos procesos en orden y los baja juntos |
 | `apagar.py` | Apaga el bot desde otra terminal, WhatsApp primero |
 | `sql_agent/usuarios.py` | Quien puede usar el bot y en que estado esta |
+| `sql_agent/fotos.py` | Normaliza y guarda las fotos de los usuarios |
 | `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
 | `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
 | `panel.py` | Abre el panel como aplicacion, en su propia ventana |
@@ -74,8 +75,12 @@ Tres vistas:
   paso va (que SQL lanzo, cuantas filas trajo). Una consulta pesada tarda
   minutos y sin esto se ve igual que un bot colgado. En reposo muestra las
   ultimas consultas atendidas.
-- **Usuarios** — alta, suspension y baja. Los cambios entran de inmediato,
-  sin reiniciar.
+- **Usuarios** — alta, suspension y baja, mas nombre y foto. Los cambios
+  entran de inmediato, sin reiniciar. El nombre y la foto son para este lado:
+  el bot sigue hablandole al numero, pero en la lista de conversaciones se
+  reconoce a la persona sin memorizar diez digitos. Las fotos se recortan al
+  cuadrado del centro y se reducen a 256 px (una de 17 KB queda en 3), y
+  viven en `sql_agent/datos/fotos/`.
 - **Conversaciones** — cada turno con la respuesta del bot y, desplegable,
   lo que hizo para construirla. Se guardan TODAS: la lista mira la historia
   completa, y dentro de una conversacion se traen 50 turnos a la vez con un

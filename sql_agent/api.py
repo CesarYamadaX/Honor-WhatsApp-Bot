@@ -15,12 +15,16 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
+import base64
+import binascii
+
 import idioma as idiomas
 from agent import ConsultaCancelada
 from bitacora import Bitacora
+from fotos import AlmacenDeFotos, ErrorDeFoto
 from config import Config
 from session import RegistroSesiones
-from usuarios import ErrorDeUsuarios, RegistroUsuarios
+from usuarios import ErrorDeUsuarios, RegistroUsuarios, Usuario
 from config import normalizar_chat_id
 
 logger = logging.getLogger("sql_agent.api")
@@ -84,6 +88,11 @@ def es_cancelacion(texto: str) -> bool:
     return limpio in _PALABRAS_DE_CANCELACION
 
 
+def _solo_digitos(crudo: str) -> str:
+    """El numero como lo guarda el registro, para buscarlo antes de cambiarlo."""
+    return "".join(c for c in crudo if c.isdigit())
+
+
 def _idioma_de(sesion: Any, texto: str) -> str:
     """Idioma de este mensaje, o el que ya traia la conversacion.
 
@@ -120,6 +129,7 @@ def crear_app(
     fabrica_agente: Callable[[], Any],
     usuarios: RegistroUsuarios | None = None,
     bitacora: Bitacora | None = None,
+    fotos: AlmacenDeFotos | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sql_agent")
     registro = RegistroSesiones(
@@ -130,8 +140,10 @@ def crear_app(
     # el comportamiento es el de siempre y las pruebas no necesitan archivos.
     usuarios = usuarios if usuarios is not None else RegistroUsuarios(semilla=config.allowlist)
     diario = bitacora if bitacora is not None else Bitacora()
+    album = fotos if fotos is not None else AlmacenDeFotos()
     app.state.usuarios = usuarios
     app.state.bitacora = diario
+    app.state.fotos = album
 
     def autorizado(chat_id: str) -> bool:
         """Unico punto donde se decide si un chat existe para el bot.
@@ -352,6 +364,16 @@ def crear_app(
         numero: str
         nota: str = ""
 
+    class NuevoNombre(BaseModel):
+        numero: str
+        nombre: str = ""
+
+    class NuevaFoto(BaseModel):
+        numero: str
+        # La imagen en base64, tal cual la lee el navegador con FileReader.
+        # Se acepta con o sin el prefijo "data:image/...;base64,".
+        imagen: str
+
     def _respuesta_de_usuario(accion, *args, **kwargs) -> dict:
         """Ejecuta una operacion del registro y traduce su error a HTTP 400."""
         try:
@@ -383,6 +405,69 @@ def crear_app(
         _solo_local()
         logger.info("Panel: baja de %s", cambio.numero)
         return _respuesta_de_usuario(usuarios.eliminar, cambio.numero)
+
+    @app.post("/panel/usuarios/renombrar")
+    async def renombrar_usuario(cambio: NuevoNombre) -> dict:
+        _solo_local()
+        logger.info("Panel: %s ahora se llama %r", cambio.numero, cambio.nombre)
+        return _respuesta_de_usuario(usuarios.renombrar, cambio.numero, cambio.nombre)
+
+    @app.post("/panel/usuarios/foto")
+    async def poner_foto(cambio: NuevaFoto) -> dict:
+        """Guarda la foto de un usuario.
+
+        Llega en base64 y no como archivo adjunto para no sumar una
+        dependencia (multipart) por un formulario de dos campos.
+        """
+        _solo_local()
+        crudo = cambio.imagen.split(",", 1)[-1] if cambio.imagen.startswith("data:") else cambio.imagen
+        try:
+            datos = base64.b64decode(crudo, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(status_code=400, detail="La imagen llego corrupta.") from error
+
+        usuario = usuarios.obtener(_solo_digitos(cambio.numero))
+        try:
+            archivo = album.guardar(_solo_digitos(cambio.numero), datos)
+        except ErrorDeFoto as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        anterior = usuario.foto if usuario else ""
+        resultado = _respuesta_de_usuario(usuarios.poner_foto, cambio.numero, archivo)
+        # La de antes se borra DESPUES de que la nueva quedo registrada: al
+        # reves, un fallo al registrar dejaria al usuario sin ninguna.
+        if anterior and anterior != archivo:
+            album.borrar(anterior)
+        logger.info("Panel: foto nueva para %s", cambio.numero)
+        return resultado
+
+    @app.post("/panel/usuarios/quitar-foto")
+    async def quitar_foto(cambio: CambioUsuario) -> dict:
+        _solo_local()
+        # El nombre del archivo se lee ANTES de vaciarlo en el registro.
+        anterior = (usuarios.obtener(_solo_digitos(cambio.numero)) or Usuario("")).foto
+        resultado = _respuesta_de_usuario(usuarios.quitar_foto, cambio.numero)
+        if anterior:
+            album.borrar(anterior)
+        return resultado
+
+    @app.get("/panel/foto/{nombre}")
+    async def ver_foto(nombre: str) -> Any:
+        """Sirve una foto. El nombre viene del navegador, asi que se valida.
+
+        `AlmacenDeFotos.ruta` devuelve None para cualquier cosa que no tenga
+        la forma exacta de un archivo suyo -- un "../../.env" incluido.
+        """
+        _solo_local()
+        archivo = album.ruta(nombre)
+        if archivo is None:
+            raise HTTPException(status_code=404, detail="No hay esa foto")
+        # Un ano: el nombre lleva el resumen del contenido, asi que una foto
+        # distinta es una URL distinta y la cache nunca queda vieja.
+        return FileResponse(
+            archivo, media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/panel/actividad")
     async def actividad() -> dict:
@@ -447,8 +532,9 @@ def main() -> None:
     datos = Path(__file__).resolve().parent / "datos"
     usuarios = RegistroUsuarios(datos / "usuarios.json", semilla=config.allowlist)
     diario = Bitacora(datos / "bitacora")
+    album = AlmacenDeFotos(datos / "fotos")
 
-    app = crear_app(config, lambda: SQLAgent(engine=motor), usuarios, diario)
+    app = crear_app(config, lambda: SQLAgent(engine=motor), usuarios, diario, album)
 
     if config.api_host in ("127.0.0.1", "localhost", "::1"):
         logger.info(

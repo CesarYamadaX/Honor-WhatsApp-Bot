@@ -132,6 +132,15 @@
     font-size: 13px; font-weight: 600; letter-spacing: .01em;
   }
   .avatar.chico { width: 38px; height: 38px; font-size: 12px; }
+  .avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+  /* En la ficha del usuario el avatar se puede tocar para cambiar la foto. */
+  button.avatar { padding: 0; border: none; cursor: pointer; position: relative; }
+  button.avatar:hover::after {
+    content: "cambiar"; position: absolute; inset: 0; border-radius: 50%;
+    background: rgba(11,20,26,.62); color: #fff; font-size: 10px; font-weight: 600;
+    display: grid; place-items: center; letter-spacing: .02em;
+  }
+  button.avatar:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   .avatar.acento { background: var(--acento); color: #fff; }
 
   /* --- buscador y solapas --- */
@@ -291,6 +300,14 @@
   .pastilla.activo { background: var(--ok-suave); color: var(--acento-fuerte); }
   .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
   .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .persona.editando { background: var(--barra); border-radius: 8px; padding: 12px; }
+  .persona input.nombre {
+    font: inherit; font-size: 15px; width: 100%;
+    border: none; border-bottom: 2px solid var(--acento);
+    background: none; color: var(--tinta); padding: 4px 2px;
+  }
+  .persona input.nombre:focus-visible { outline: none; }
+  .persona .pista { color: var(--tinta-2); font-size: 12.5px; margin-top: 3px; }
   button.accion {
     font-size: 12.5px; background: none; color: var(--tinta-2);
     border: 1px solid var(--borde-fuerte); border-radius: 15px;
@@ -563,8 +580,30 @@ function palomas(rojas) {
   return svg;
 }
 
-const avatar = (numero, clase = "") =>
-  elemento("div", `avatar ${clase}`.trim(), iniciales(numero));
+function avatar(numero, clase = "", foto = "") {
+  const nodo = elemento("div", `avatar ${clase}`.trim());
+  if (foto) {
+    const imagen = document.createElement("img");
+    imagen.src = `/panel/foto/${encodeURIComponent(foto)}`;
+    imagen.alt = "";
+    // Si la foto se borro del disco a mano, quedan las iniciales en vez de
+    // un hueco con el icono de imagen rota.
+    imagen.addEventListener("error", () => {
+      nodo.replaceChildren(document.createTextNode(iniciales(numero)));
+    });
+    nodo.append(imagen);
+  } else {
+    nodo.textContent = iniciales(numero);
+  }
+  return nodo;
+}
+
+// Lo que se sabe de un numero: sirve para que la conversacion muestre el
+// nombre y la foto de quien escribe, y no solo su numero.
+function fichaDe(chatId) {
+  const numero = soloNumero(chatId);
+  return cacheUsuarios.find((u) => u.numero === numero) || null;
+}
 
 /* ----------------------------------------------------------- lista lateral */
 
@@ -613,10 +652,11 @@ function pintarListaChats(caja) {
     fila.type = "button";
     if (chat.chat_id === chatElegido && vista === "chat") fila.setAttribute("aria-current", "true");
 
+    const ficha = fichaDe(chat.chat_id);
     const centro = elemento("div", "centro");
     const arriba = elemento("div", "arriba");
     arriba.append(
-      elemento("span", "titulo", soloNumero(chat.chat_id)),
+      elemento("span", "titulo", ficha?.nombre || soloNumero(chat.chat_id)),
       elemento("span", "hora", cuandoEnLista(chat.ultimo)),
     );
     const abajo = elemento("div", "abajo");
@@ -627,7 +667,7 @@ function pintarListaChats(caja) {
       elemento("span", "globo", String(chat.turnos)),
     );
     centro.append(arriba, abajo);
-    fila.append(avatar(chat.chat_id), centro);
+    fila.append(avatar(chat.chat_id, "", ficha?.foto), centro);
     fila.addEventListener("click", () => abrirChat(chat.chat_id).catch((e) => mostrarError(e.message)));
     caja.append(fila);
   }
@@ -659,7 +699,7 @@ function pintarListaUsuarios(caja) {
       elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
     );
     centro.append(arriba, abajo);
-    fila.append(avatar(usuario.numero), centro);
+    fila.append(avatar(usuario.numero, "", usuario.foto), centro);
     fila.addEventListener("click", abrirUsuarios);
     caja.append(fila);
   }
@@ -680,18 +720,23 @@ function mostrarVista(cual) {
 function encabezado(titulo, subtitulo, numeroParaAvatar) {
   $("titulo-principal").textContent = titulo;
   $("subtitulo-principal").textContent = subtitulo;
-  const ico = $("avatar-principal");
-  ico.textContent = numeroParaAvatar ? iniciales(numeroParaAvatar) : "";
-  ico.hidden = !numeroParaAvatar;
+  const hueco = $("avatar-principal");
+  hueco.hidden = !numeroParaAvatar;
+  hueco.replaceChildren();
+  if (numeroParaAvatar) {
+    const ficha = fichaDe(numeroParaAvatar);
+    hueco.append(avatar(numeroParaAvatar, "chico", ficha?.foto));
+  }
 }
 
 async function abrirChat(chatId) {
   chatElegido = chatId;
   mostrarVista("chat");
   location.hash = `chat=${soloNumero(chatId)}`;
+  const ficha = fichaDe(chatId);
   encabezado(
-    soloNumero(chatId),
-    enCursoPorChat.has(chatId) ? "consultando…" : "toca un turno para ver qué hizo",
+    ficha?.nombre || soloNumero(chatId),
+    enCursoPorChat.has(chatId) ? "consultando…" : soloNumero(chatId),
     chatId,
   );
   pintarLista();
@@ -710,8 +755,8 @@ async function abrirChat(chatId) {
   }
 
   encabezado(
-    soloNumero(chatId),
-    `${datos.total} turno${datos.total === 1 ? "" : "s"} · toca uno para ver qué hizo`,
+    ficha?.nombre || soloNumero(chatId),
+    `${soloNumero(chatId)} · ${datos.total} turno${datos.total === 1 ? "" : "s"}`,
     chatId,
   );
   pintarTurnos(caja, datos.turnos, null);
@@ -859,6 +904,9 @@ function abrirUsuarios() {
   pintarPersonas();
 }
 
+// El numero del usuario que se esta editando, o null.
+let editando = null;
+
 function pintarPersonas() {
   const caja = $("personas");
   caja.replaceChildren();
@@ -867,42 +915,132 @@ function pintarPersonas() {
     return;
   }
   for (const usuario of cacheUsuarios) {
-    const fila = elemento("div", "persona");
-    const datos = elemento("div", "datos");
-    const quien = elemento("div", "quien");
-    quien.append(
-      elemento("span", null, usuario.nombre || usuario.numero),
-      elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
-    );
-    const cuando =
-      usuario.estado === "suspendido" && usuario.suspendido_hasta
-        ? `suspendido hasta el ${usuario.suspendido_hasta}`
-        : usuario.nombre
-          ? `${usuario.numero} · alta ${(usuario.creado || "").slice(0, 10)}`
-          : `alta ${(usuario.creado || "").slice(0, 10)}`;
-    datos.append(quien, elemento("div", "cuando", cuando));
-
-    // Dos acciones y no tres: suspender y bloquear hacian casi lo mismo y en
-    // la fila no se distinguian de un vistazo.
-    const acciones = elemento("div", "acciones");
-    if (usuario.estado === "activo") {
-      acciones.append(boton("Suspender", "alto", () => suspender(usuario)));
-    } else {
-      acciones.append(
-        boton(
-          "Reactivar",
-          "palomita",
-          () => cambiar("reactivar", { numero: usuario.numero }),
-          "buena",
-        ),
-      );
-    }
-    acciones.append(boton("Eliminar", "tache", () => eliminar(usuario), "peligro"));
-
-    fila.append(avatar(usuario.numero), datos, acciones);
-    caja.append(fila);
+    caja.append(usuario.numero === editando ? fichaEditable(usuario) : fichaDeUsuario(usuario));
   }
 }
+
+function fichaEditable(usuario) {
+  const fila = elemento("div", "persona editando");
+
+  const retrato = elemento("button", "avatar");
+  retrato.type = "button";
+  retrato.title = "Cambiar la foto";
+  retrato.append(avatar(usuario.numero, "", usuario.foto));
+  retrato.addEventListener("click", () => elegirFoto(usuario));
+
+  const datos = elemento("div", "datos");
+  const campo = document.createElement("input");
+  campo.className = "nombre";
+  campo.id = `nombre-${usuario.numero}`;
+  campo.value = usuario.nombre || "";
+  campo.placeholder = "Nombre y área, por ejemplo: Laura, ventas";
+  campo.setAttribute("aria-label", `Nombre de ${usuario.numero}`);
+  campo.addEventListener("keydown", (evento) => {
+    if (evento.key === "Enter") guardarNombre(usuario, campo.value);
+    if (evento.key === "Escape") { editando = null; pintarPersonas(); }
+  });
+  datos.append(
+    campo,
+    elemento("div", "pista", `${usuario.numero} · toca la foto para cambiarla`),
+  );
+
+  const acciones = elemento("div", "acciones");
+  acciones.append(boton("Guardar", "palomita", () => guardarNombre(usuario, campo.value), "buena"));
+  if (usuario.foto) {
+    acciones.append(boton("Quitar foto", "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
+  }
+  acciones.append(
+    boton("Cancelar", "tache", () => { editando = null; pintarPersonas(); }),
+  );
+
+  fila.append(retrato, datos, acciones);
+  // Enfocar despues de montar: sobre un nodo suelto no hace nada.
+  queueMicrotask(() => campo.focus());
+  return fila;
+}
+
+function fichaDeUsuario(usuario) {
+  const fila = elemento("div", "persona");
+  const datos = elemento("div", "datos");
+  const quien = elemento("div", "quien");
+  quien.append(
+    elemento("span", null, usuario.nombre || usuario.numero),
+    elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
+  );
+  const cuando =
+    usuario.estado === "suspendido" && usuario.suspendido_hasta
+      ? `suspendido hasta el ${usuario.suspendido_hasta}`
+      : usuario.nombre
+        ? `${usuario.numero} · alta ${(usuario.creado || "").slice(0, 10)}`
+        : `alta ${(usuario.creado || "").slice(0, 10)}`;
+  datos.append(quien, elemento("div", "cuando", cuando));
+
+  // Dos acciones y no tres: suspender y bloquear hacian casi lo mismo y en
+  // la fila no se distinguian de un vistazo.
+  const acciones = elemento("div", "acciones");
+  acciones.append(
+    boton("Editar", "lapiz", () => { editando = usuario.numero; pintarPersonas(); }),
+  );
+  if (usuario.estado === "activo") {
+    acciones.append(boton("Suspender", "alto", () => suspender(usuario)));
+  } else {
+    acciones.append(
+      boton(
+        "Reactivar",
+        "palomita",
+        () => cambiar("reactivar", { numero: usuario.numero }),
+        "buena",
+      ),
+    );
+  }
+  acciones.append(boton("Eliminar", "tache", () => eliminar(usuario), "peligro"));
+
+  fila.append(avatar(usuario.numero, "", usuario.foto), datos, acciones);
+  return fila;
+}
+
+async function guardarNombre(usuario, nombre) {
+  editando = null;
+  if ((nombre || "").trim() === (usuario.nombre || "")) return pintarPersonas();
+  await cambiar("renombrar", { numero: usuario.numero, nombre });
+}
+
+// El selector de archivos vive fuera de la fila: si se recrea con cada
+// repintado, el dialogo del navegador se queda sin dueño a medio abrir.
+const selectorDeFoto = document.createElement("input");
+selectorDeFoto.type = "file";
+selectorDeFoto.accept = "image/*";
+selectorDeFoto.hidden = true;
+document.body.append(selectorDeFoto);
+let usuarioDeLaFoto = null;
+
+function elegirFoto(usuario) {
+  usuarioDeLaFoto = usuario;
+  selectorDeFoto.value = "";
+  selectorDeFoto.click();
+}
+
+selectorDeFoto.addEventListener("change", async () => {
+  const archivo = selectorDeFoto.files?.[0];
+  if (!archivo || !usuarioDeLaFoto) return;
+  try {
+    mostrarError("");
+    const imagen = await new Promise((listo, falla) => {
+      const lector = new FileReader();
+      lector.onload = () => listo(String(lector.result));
+      lector.onerror = () => falla(new Error("No pude leer ese archivo."));
+      lector.readAsDataURL(archivo);
+    });
+    await pedir("/panel/usuarios/foto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ numero: usuarioDeLaFoto.numero, imagen }),
+    });
+    await cargarUsuarios();
+  } catch (error) {
+    mostrarError(error.message);
+  }
+});
 
 // Los iconos se dibujan aqui, con formas simples, por lo mismo que el papel
 // tapiz: el panel no depende de ninguna descarga para verse completo.
@@ -916,6 +1054,8 @@ const ICONOS = {
          <path d="M6.4 10.6h13.4v4.6a6 6 0 0 1-6 6h-1.4a6 6 0 0 1-6-6z"/>`,
   tache: `<path d="M18.3 7.1 16.9 5.7 12 10.6 7.1 5.7 5.7 7.1l4.9 4.9-4.9 4.9 1.4 1.4 4.9-4.9 4.9 4.9 1.4-1.4-4.9-4.9z"/>`,
   palomita: `<path d="M9.6 16.6 5.4 12.4 4 13.8l5.6 5.6L20 9l-1.4-1.4z"/>`,
+  // Lapiz, para editar.
+  lapiz: `<path d="M3 17.3V21h3.7L17.8 9.9l-3.7-3.7zm17.7-10.4a1 1 0 0 0 0-1.4l-2.2-2.2a1 1 0 0 0-1.4 0l-1.8 1.8 3.7 3.7z"/>`,
 };
 
 function icono(nombre) {

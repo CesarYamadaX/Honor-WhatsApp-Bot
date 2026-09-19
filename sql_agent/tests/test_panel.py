@@ -5,6 +5,8 @@ resto: que un cambio hecho aqui se note de inmediato en quien puede usar el
 bot, y que el panel no quede expuesto fuera de la maquina.
 """
 
+import base64
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -211,3 +213,121 @@ class TestVerTodoElHistorial:
             ).json()
             assert datos["hay_mas"] is False
             assert len(datos["turnos"]) == 3
+
+
+class TestEditarUsuarios:
+    def _cliente(self, tmp_path, usuarios):
+        from fotos import AlmacenDeFotos
+
+        app = crear_app(
+            _config(), AgenteFalso, usuarios, Bitacora(), AlmacenDeFotos(tmp_path / "fotos")
+        )
+        return TestClient(app)
+
+    def _imagen(self):
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (600, 400), (30, 120, 200)).save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    def test_se_le_puede_poner_nombre_a_un_numero(self, cliente):
+        cliente.post("/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": "Laura, ventas"})
+        usuario = cliente.get("/panel/usuarios").json()["usuarios"][0]
+        assert usuario["nombre"] == "Laura, ventas"
+
+    def test_el_nombre_se_puede_dejar_vacio(self, cliente):
+        # Quitar el nombre es una edicion valida, no un error de validacion.
+        cliente.post("/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": "Laura"})
+        cliente.post("/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": ""})
+        assert cliente.get("/panel/usuarios").json()["usuarios"][0]["nombre"] == ""
+
+    def test_renombrar_no_toca_el_estado(self, cliente):
+        # El nombre es una etiqueta; cambiarla no puede devolverle el acceso
+        # a alguien a quien se suspendio.
+        cliente.post("/panel/usuarios/suspender", json={"numero": "5215512345678"})
+        cliente.post("/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": "Laura"})
+
+        assert cliente.get("/panel/usuarios").json()["usuarios"][0]["estado"] == "suspendido"
+        assert cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "x"}).status_code == 403
+
+    def test_una_foto_se_guarda_y_se_sirve(self, tmp_path, usuarios):
+        with self._cliente(tmp_path, usuarios) as cliente:
+            respuesta = cliente.post(
+                "/panel/usuarios/foto",
+                json={"numero": "5215512345678", "imagen": self._imagen()},
+            )
+            assert respuesta.status_code == 200
+            archivo = respuesta.json()["usuario"]["foto"]
+            assert archivo.startswith("5215512345678-")
+
+            foto = cliente.get(f"/panel/foto/{archivo}")
+            assert foto.status_code == 200
+            assert foto.headers["content-type"] == "image/jpeg"
+
+    def test_cambiar_la_foto_borra_la_anterior(self, tmp_path, usuarios):
+        # Si no, la carpeta acumula una foto por cada vez que alguien
+        # cambio de opinion, y ninguna se puede distinguir de la buena.
+        import io
+
+        from PIL import Image
+
+        otra = io.BytesIO()
+        Image.new("RGB", (300, 300), (240, 10, 10)).save(otra, format="PNG")
+
+        with self._cliente(tmp_path, usuarios) as cliente:
+            primera = cliente.post(
+                "/panel/usuarios/foto",
+                json={"numero": "5215512345678", "imagen": self._imagen()},
+            ).json()["usuario"]["foto"]
+            segunda = cliente.post(
+                "/panel/usuarios/foto",
+                json={
+                    "numero": "5215512345678",
+                    "imagen": base64.b64encode(otra.getvalue()).decode(),
+                },
+            ).json()["usuario"]["foto"]
+
+            assert primera != segunda
+            assert cliente.get(f"/panel/foto/{primera}").status_code == 404
+            assert cliente.get(f"/panel/foto/{segunda}").status_code == 200
+
+    def test_quitar_la_foto_la_borra_del_disco(self, tmp_path, usuarios):
+        with self._cliente(tmp_path, usuarios) as cliente:
+            archivo = cliente.post(
+                "/panel/usuarios/foto",
+                json={"numero": "5215512345678", "imagen": self._imagen()},
+            ).json()["usuario"]["foto"]
+
+            cliente.post("/panel/usuarios/quitar-foto", json={"numero": "5215512345678"})
+            assert cliente.get("/panel/usuarios").json()["usuarios"][0]["foto"] == ""
+            assert cliente.get(f"/panel/foto/{archivo}").status_code == 404
+
+    def test_lo_que_no_es_una_imagen_se_explica(self, tmp_path, usuarios):
+        with self._cliente(tmp_path, usuarios) as cliente:
+            respuesta = cliente.post(
+                "/panel/usuarios/foto",
+                json={
+                    "numero": "5215512345678",
+                    "imagen": base64.b64encode(b"no soy una imagen").decode(),
+                },
+            )
+            assert respuesta.status_code == 400
+            assert "imagen" in respuesta.json()["detail"]
+
+    def test_un_nombre_de_foto_con_ruta_no_sirve_archivos_de_fuera(self, tmp_path, usuarios):
+        # El nombre viene del navegador. Sin la validacion del almacen,
+        # esto serviria cualquier archivo de la maquina.
+        with self._cliente(tmp_path, usuarios) as cliente:
+            for intento in ["..%2F..%2F.env", "....//....//.env", "cualquiera.jpg"]:
+                assert cliente.get(f"/panel/foto/{intento}").status_code in (404, 400), intento
+
+    def test_fuera_de_loopback_tampoco_se_editan_usuarios(self, usuarios, diario):
+        app = crear_app(_config(host="0.0.0.0"), AgenteFalso, usuarios, diario)
+        with TestClient(app) as cliente:
+            assert cliente.post(
+                "/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": "x"}
+            ).status_code == 403
+            assert cliente.get("/panel/foto/5215512345678-a1b2c3d4.jpg").status_code == 403
