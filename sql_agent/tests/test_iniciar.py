@@ -160,3 +160,18 @@ class TestIdentidadDelProceso:
 
     def test_un_pid_que_no_existe_no_es_el_nuestro(self):
         assert not iniciar.sigue_siendo_el_nuestro(999_999_999, "python")
+
+
+class TestElPanelSeAbreSolo:
+    def test_por_defecto_el_panel_se_abre(self):
+        # Es un programa con ventana: al arrancarlo uno espera ver algo, no
+        # una terminal con una direccion que hay que copiar.
+        assert iniciar.opciones([])["abrir_el_panel"] is True
+
+    def test_sin_panel_lo_evita(self):
+        # Para las vueltas de depuracion, donde el bot se reinicia cada
+        # minuto y una ventana nueva cada vez estorba.
+        assert iniciar.opciones(["--sin-panel"])["abrir_el_panel"] is False
+
+    def test_un_argumento_cualquiera_no_apaga_el_panel(self):
+        assert iniciar.opciones(["--otra-cosa"])["abrir_el_panel"] is True

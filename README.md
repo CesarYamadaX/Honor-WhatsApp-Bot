@@ -52,13 +52,14 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 
 ## Panel de administracion
 
-Se enciende con el bot. Para verlo:
+Se abre solo al arrancar el bot, como **aplicacion**: ventana propia, sin
+barra de direcciones ni pestañas, con su icono en la barra de tareas. Para
+abrirlo por separado (si se cerro la ventana, con el bot ya encendido):
 
     python panel.py
 
-(o `panel.bat`, o `python iniciar.py --abrir` para que se abra al arrancar).
-Se abre como **aplicacion**: ventana propia, sin barra de direcciones ni
-pestañas, con su icono en la barra de tareas. Por dentro es la pagina que
+Y `python iniciar.py --sin-panel` arranca sin abrirlo, para las vueltas de
+depuracion en las que el bot se reinicia cada minuto. Por dentro es la pagina que
 sirve el mismo servicio en <http://127.0.0.1:8000/panel>, abierta en modo
 aplicacion de Edge o Chrome; asi no hay que instalar ni mantener un
 empaquetado aparte. Si no hay ninguno de los dos, cae al navegador normal.
@@ -154,7 +155,7 @@ la empresa.
 
 ## Arranque
 
-Un solo comando levanta los dos procesos:
+Un solo comando levanta los dos procesos y abre el panel:
 
     python iniciar.py
 

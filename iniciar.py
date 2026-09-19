@@ -283,7 +283,7 @@ def _terminar(proceso: subprocess.Popen, nombre: str) -> None:
         proceso.kill()
 
 
-def main(abrir_el_panel: bool = False) -> int:
+def main(abrir_el_panel: bool = True) -> int:
     # El QR y los logs traen caracteres que la consola de Windows no imprime
     # en su codificacion por defecto.
     for flujo in (sys.stdout, sys.stderr):
@@ -368,7 +368,8 @@ def main(abrir_el_panel: bool = False) -> int:
         print("  El bot esta encendido.", flush=True)
         if panel:
             print(f"  Panel (usuarios y conversaciones):  {panel}", flush=True)
-            print("  Abrelo como aplicacion con:  python panel.py", flush=True)
+            if not abrir_el_panel:
+                print("  Abrelo como aplicacion con:  python panel.py", flush=True)
         else:
             print(
                 "  El panel esta apagado: API_HOST no es loopback y el "
@@ -407,8 +408,16 @@ def main(abrir_el_panel: bool = False) -> int:
         olvidar_encendido()
 
 
+def opciones(argumentos: list[str]) -> dict:
+    """Lee la linea de comandos. Un solo interruptor, y por si acaso.
+
+    El panel se abre solo al arrancar, que es lo que uno espera de un
+    programa con ventana. `--sin-panel` lo evita, para las vueltas de
+    depuracion en las que el bot se reinicia cada minuto y una ventana
+    nueva cada vez estorba.
+    """
+    return {"abrir_el_panel": "--sin-panel" not in argumentos}
+
+
 if __name__ == "__main__":
-    # `--abrir` abre el panel en el navegador al terminar de levantar. No es
-    # el comportamiento por defecto: el bot se reinicia a menudo mientras se
-    # depura, y una pestaña nueva cada vez estorba.
-    sys.exit(main(abrir_el_panel="--abrir" in sys.argv))
+    sys.exit(main(**opciones(sys.argv[1:])))
