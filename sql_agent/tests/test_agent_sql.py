@@ -649,7 +649,7 @@ class _EjecutorEspia:
         self.respuesta = respuesta
         self.invocaciones: list[dict] = []
 
-    def invoke(self, payload: dict) -> dict:
+    def invoke(self, payload, config=None, **kwargs):
         # Copia: `responder` pasa una lista nueva, pero el historial que
         # contiene se sigue mutando turno a turno.
         self.invocaciones.append(
@@ -727,7 +727,7 @@ class TestMemoriaConversacional:
         # intercambio que nunca ocurrio.
         agente = _agente_espiado(engine, monkeypatch)
 
-        def explotar(payload):
+        def explotar(payload, config=None, **kwargs):
             raise RuntimeError("el proveedor del modelo esta saturado")
 
         agente.agent_executor.invoke = explotar

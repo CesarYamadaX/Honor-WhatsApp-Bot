@@ -12,6 +12,7 @@ import pandas as pd
 import sqlparse
 from dotenv import load_dotenv
 from langchain.tools import tool
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
@@ -587,7 +588,7 @@ def buscar_modelos(texto: str) -> str:
     de forma suelta ("magic", "magic pro", "el X9", "los plegables"): te dice
     que modelos existen de verdad, de que marca son, y como filtrarlos.
     """
-    bitacora.paso(f"buscando el modelo {texto!r} en el catalogo")
+    bitacora.paso(f"buscando el modelo {texto!r} en el catalogo", bitacora.NOTA)
     tokens = _tokens_de_modelo(texto)
     if not tokens:
         return "Dame al menos una palabra o numero del modelo."
@@ -704,7 +705,7 @@ def valores_distintos(tabla: str, columna: str) -> str:
     final: los retailers, marcas y carriers no estan escritos de forma
     uniforme. Es solo para mirar -- no genera ningun reporte para el usuario.
     """
-    bitacora.paso(f"mirando como se escriben los valores de {tabla}.{columna}")
+    bitacora.paso(f"mirando como se escriben los valores de {tabla}.{columna}", bitacora.NOTA)
     encontrados = buscar(tabla)
     if not encontrados:
         return f"No conozco ninguna tabla o vista {tabla!r}."
@@ -854,7 +855,7 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
     `modelo` es el nombre del telefono ("magic 8 lite", "x9c"). `retailer`
     opcional para acotar a uno ("Coppel", "Elektra", "Liverpool").
     """
-    bitacora.paso(f"buscando el precio de {modelo!r} en el scraping de internet")
+    bitacora.paso(f"buscando el precio de {modelo!r} en el scraping de internet", bitacora.NOTA)
     tokens = _tokens_de_modelo(modelo)
     if not tokens:
         return "Dame al menos una palabra o numero del modelo."
@@ -949,7 +950,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     Trae la historia COMPLETA, sin filtrar por anio: el pronostico necesita el
     mismo mes del anio anterior para tener en cuenta la estacionalidad.
     """
-    bitacora.paso(f"proyectando los proximos {meses} meses")
+    bitacora.paso(f"proyectando los proximos {meses} meses", bitacora.NOTA)
     meses = max(1, min(int(meses), MAX_MESES_PRONOSTICO))
 
     es_valida, motivo = _evaluar_sql(sql_historico)
@@ -1063,7 +1064,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "concretos."
         )
     comenzo = time.monotonic()
-    bitacora.paso(f"SQL: {' '.join(query.split())}")
+    bitacora.paso(f"SQL: {' '.join(query.split())}", bitacora.SQL)
     try:
         with ctx.engine.connect() as conexion:
             with _presupuesto_de_tiempo(conexion, presupuesto):
@@ -1083,7 +1084,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             presupuesto,
             " ".join(query.split())[:400],
         )
-        bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}")
+        bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}", bitacora.ERROR)
         if _es_por_tiempo(error) or tardo >= presupuesto:
             # Se agoto el presupuesto, no es un error de sintaxis: decirselo
             # tal cual para que acote en vez de reintentar lo mismo.
@@ -1109,7 +1110,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         len(df),
         " ".join(query.split())[:400],
     )
-    bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s")
+    bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s", bitacora.RESULTADO)
     resultado = formatear_resultado(df)
     # `not df.empty`: sin filas no hay nada que exportar, y pedir el archivo
     # no puede convertir un "sin resultados" en un error de exportacion.
@@ -1171,6 +1172,79 @@ class _ToolkitSoloLectura(SQLDatabaseToolkit):
 
     def get_tools(self) -> list:
         return [t for t in super().get_tools() if t.name not in self._EXCLUIDAS]
+
+
+class Observador(BaseCallbackHandler):
+    """Escucha al agente y anota en la bitacora todo lo que va haciendo.
+
+    Antes solo se veia lo que las herramientas reportaban por su cuenta: el
+    SQL y poco mas. Entre una consulta y la siguiente el panel se quedaba en
+    silencio durante minutos, que es justo cuando uno se pregunta si el bot
+    sigue vivo. Con esto se ve la vuelta entera -- cuando le pregunta al
+    modelo, que decidio hacer, con que argumentos y que le contestaron --,
+    en vivo y guardado con el turno.
+
+    No interrumpe ni cambia nada: solo mira. Cualquier error suyo se traga,
+    porque una anotacion no puede tumbar una consulta que si esta
+    funcionando.
+    """
+
+    def __init__(self):
+        self._inicio_del_modelo: float | None = None
+
+    # --- el modelo ------------------------------------------------------
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self._inicio_del_modelo = time.monotonic()
+        bitacora.paso("preguntandole al modelo que hacer", bitacora.PENSAMIENTO)
+
+    on_llm_start = on_chat_model_start
+
+    def on_llm_end(self, response, **kwargs):
+        tardo = (
+            f" ({time.monotonic() - self._inicio_del_modelo:.0f}s)"
+            if self._inicio_del_modelo
+            else ""
+        )
+        texto = ""
+        try:
+            texto = (response.generations[0][0].text or "").strip()
+        except (AttributeError, IndexError):
+            pass
+        # Con las herramientas de OpenAI el modelo suele contestar solo con
+        # la llamada, sin texto; cuando si escribe algo, eso es lo mas
+        # parecido a su razonamiento y vale la pena verlo.
+        if texto:
+            bitacora.paso(f"el modelo dice{tardo}: {texto}", bitacora.PENSAMIENTO)
+        else:
+            bitacora.paso(f"el modelo decidio que hacer{tardo}", bitacora.PENSAMIENTO)
+
+    def on_llm_error(self, error, **kwargs):
+        bitacora.paso(f"el modelo fallo: {str(error)[:300]}", bitacora.ERROR)
+
+    # --- las herramientas -----------------------------------------------
+
+    def on_agent_action(self, action, **kwargs):
+        bitacora.paso(
+            f"usa {action.tool} con {_resumir(action.tool_input)}", bitacora.HERRAMIENTA
+        )
+
+    def on_tool_end(self, output, **kwargs):
+        bitacora.paso(f"le devolvio: {_resumir(output)}", bitacora.RESULTADO)
+
+    def on_tool_error(self, error, **kwargs):
+        bitacora.paso(f"la herramienta fallo: {str(error)[:300]}", bitacora.ERROR)
+
+    def on_agent_finish(self, finish, **kwargs):
+        bitacora.paso("ya tiene la respuesta", bitacora.PENSAMIENTO)
+
+
+def _resumir(valor) -> str:
+    """Un dict o un texto largo, en una linea legible."""
+    if isinstance(valor, dict):
+        return ", ".join(f"{k}={_resumir(v)}" for k, v in valor.items())
+    texto = " ".join(str(valor).split())
+    return texto if len(texto) <= 600 else texto[:600] + " [...]"
 
 
 class SQLAgent:
@@ -1396,7 +1470,10 @@ class SQLAgent:
                     "input": pregunta,
                     "chat_history": list(self.historial),
                     "instruccion_idioma": idiomas.INSTRUCCION[self.idioma],
-                }
+                },
+                # El observador solo mira: anota en la bitacora lo que el
+                # agente va haciendo, para poder seguirlo desde el panel.
+                config={"callbacks": [Observador()]},
             )
             texto = respuesta.get("output", "No se obtuvo respuesta.")
             self._recordar(pregunta, texto)

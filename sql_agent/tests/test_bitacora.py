@@ -42,8 +42,11 @@ class TestActividadEnCurso:
         # Es el punto de todo esto: una consulta de tres minutos se ve igual
         # que un bot colgado si no se puede mirar en que paso va.
         diario.comenzar("chat@s.whatsapp.net", "ventas por tienda")
-        paso("SQL: SELECT SUM([QTY]) FROM vw_ETL_Elektra")
-        assert "SELECT SUM" in diario.en_curso()[0]["pasos"][0]
+        paso("SQL: SELECT SUM([QTY]) FROM vw_ETL_Elektra", modulo.SQL)
+        anotado = diario.en_curso()[0]["pasos"][0]
+        assert "SELECT SUM" in anotado["texto"]
+        assert anotado["tipo"] == "sql"
+        assert anotado["hora"]
 
     def test_una_pregunta_cancelada_no_borra_a_la_que_la_reemplazo(self, diario):
         # La vieja termina DESPUES de que la nueva empezo (la cancelacion es
@@ -83,13 +86,13 @@ class TestPasosFueraDeUnTurno:
         diario.comenzar("chat@s.whatsapp.net", "algo")
         for i in range(200):
             paso(f"paso {i}")
-        assert len(diario.en_curso()[0]["pasos"]) <= 40
+        assert len(diario.en_curso()[0]["pasos"]) <= modulo.MAX_PASOS
 
 
 class TestHistorial:
     def test_los_turnos_terminados_quedan_en_el_archivo(self, diario, tmp_path):
         turno = diario.comenzar("chat@s.whatsapp.net", "ventas totales")
-        paso("SQL: SELECT 1")
+        paso("SQL: SELECT 1", modulo.SQL)
         diario.terminar(turno, respuesta="son 10", idioma="es", segundos=2.0)
 
         archivos = list((tmp_path / "bitacora").glob("*.jsonl"))
@@ -97,7 +100,7 @@ class TestHistorial:
         guardado = json.loads(archivos[0].read_text(encoding="utf-8").strip())
         assert guardado["pregunta"] == "ventas totales"
         assert guardado["respuesta"] == "son 10"
-        assert guardado["pasos"][0].endswith("SQL: SELECT 1")
+        assert guardado["pasos"][0]["texto"] == "SQL: SELECT 1"
 
     def test_se_leen_del_mas_nuevo_al_mas_viejo(self, diario):
         for i in range(3):
@@ -205,3 +208,65 @@ class TestHistorialCompleto:
         self._llenar(diario, chat, 1, desde=50)
         assert diario.chats()[0]["turnos"] == 3
         assert diario.chats()[0]["ultima_pregunta"] == "pregunta 50"
+
+
+class TestObservadorDelAgente:
+    """El observador anota lo que el agente va haciendo, para verlo en vivo."""
+
+    def _observador(self):
+        from agent import Observador
+
+        return Observador()
+
+    def test_anota_cuando_le_pregunta_al_modelo(self, diario):
+        diario.comenzar("chat@s.whatsapp.net", "ventas")
+        self._observador().on_chat_model_start({}, [])
+
+        anotado = diario.en_curso()[0]["pasos"]
+        assert anotado[0]["tipo"] == "pensamiento"
+        assert "modelo" in anotado[0]["texto"]
+
+    def test_anota_lo_que_el_modelo_escribio(self, diario):
+        # Con las herramientas de OpenAI el modelo suele contestar solo con
+        # la llamada; cuando ademas escribe algo, eso es lo mas parecido a
+        # su razonamiento y es lo que se queria ver.
+        from langchain_core.outputs import Generation, LLMResult
+
+        diario.comenzar("chat@s.whatsapp.net", "ventas")
+        observador = self._observador()
+        observador.on_chat_model_start({}, [])
+        observador.on_llm_end(LLMResult(generations=[[Generation(text="Voy por Elektra")]]))
+
+        assert "Voy por Elektra" in diario.en_curso()[0]["pasos"][-1]["texto"]
+
+    def test_anota_que_herramienta_uso_y_con_que(self, diario):
+        from langchain_core.agents import AgentAction
+
+        diario.comenzar("chat@s.whatsapp.net", "ventas")
+        self._observador().on_agent_action(
+            AgentAction(tool="consultar_sql", tool_input={"query": "SELECT 1"}, log="")
+        )
+
+        anotado = diario.en_curso()[0]["pasos"][-1]
+        assert anotado["tipo"] == "herramienta"
+        assert "consultar_sql" in anotado["texto"] and "SELECT 1" in anotado["texto"]
+
+    def test_anota_lo_que_le_devolvieron(self, diario):
+        diario.comenzar("chat@s.whatsapp.net", "ventas")
+        self._observador().on_tool_end("1,268,566 unidades")
+
+        anotado = diario.en_curso()[0]["pasos"][-1]
+        assert anotado["tipo"] == "resultado"
+        assert "1,268,566" in anotado["texto"]
+
+    def test_un_resultado_enorme_se_resume(self, diario):
+        # Una consulta puede devolver miles de filas; el panel muestra el
+        # razonamiento, no un volcado.
+        diario.comenzar("chat@s.whatsapp.net", "ventas")
+        self._observador().on_tool_end("fila\n" * 5000)
+
+        assert len(diario.en_curso()[0]["pasos"][-1]["texto"]) < 1000
+
+    def test_fuera_de_una_peticion_no_hace_nada(self):
+        # La CLI y las pruebas usan el mismo agente sin turno abierto.
+        self._observador().on_tool_end("lo que sea")

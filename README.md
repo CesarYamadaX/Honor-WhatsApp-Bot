@@ -106,7 +106,12 @@ Tres vistas:
   cuadrado del centro y se reducen a 256 px (una de 17 KB queda en 3), y
   viven en `sql_agent/datos/fotos/`.
 - **Conversaciones** — cada turno con la respuesta del bot y, desplegable,
-  lo que hizo para construirla. Se guardan TODAS: la lista mira la historia
+  **todo lo que penso e hizo**: cuando le pregunto al modelo y cuanto tardo,
+  lo que el modelo escribio, que herramienta decidio usar y con que
+  argumentos, el SQL, cuantas filas volvieron y que le devolvio cada
+  herramienta. Lo va anotando un observador enganchado al agente
+  (`Observador` en `agent.py`), asi que tambien se ve en vivo desde la vista
+  de actividad mientras la consulta corre. Se guardan TODAS: la lista mira la historia
   completa, y dentro de una conversacion se traen 50 turnos a la vez con un
   boton para ver los anteriores. No se guarda lo que no llega al agente (un
   numero no autorizado, un "cancela", un mensaje que rebota con 429), y las

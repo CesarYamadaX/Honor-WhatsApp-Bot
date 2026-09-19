@@ -306,13 +306,31 @@
   details.tramoya summary::before { content: "⚙ "; }
   details.tramoya summary:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   .pasos {
-    margin: 5px 0 0; padding: 9px 11px; list-style: none;
+    margin: 5px 0 0; padding: 9px 4px 9px 11px; list-style: none;
     background: var(--panel); border-radius: 7px; box-shadow: var(--sombra);
-    font-family: var(--mono); font-size: 12px; line-height: 1.7;
-    color: var(--tinta-2); overflow-x: auto;
+    font-size: 12px; line-height: 1.6; color: var(--tinta-2);
   }
-  .pasos li { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .pasos li::before { content: "› "; color: var(--tinta-3); }
+  .pasos li {
+    display: grid; grid-template-columns: 58px 16px 1fr; gap: 8px;
+    align-items: start; padding: 2px 0;
+  }
+  .pasos .hora { font-family: var(--mono); color: var(--tinta-3); font-variant-numeric: tabular-nums; }
+  .pasos .marca-paso { display: flex; justify-content: center; padding-top: 2px; }
+  .pasos .marca-paso svg { fill: currentColor; }
+  .pasos li.pensamiento .marca-paso { color: var(--tinta-3); }
+  .pasos li.herramienta .marca-paso { color: var(--tinta-2); }
+  .pasos li.sql .marca-paso { color: var(--tinta-2); }
+  .pasos li.resultado .marca-paso { color: var(--acento); }
+  .pasos li.error .marca-paso { color: var(--alto); }
+  .pasos .texto { overflow-wrap: anywhere; white-space: pre-wrap; }
+  /* Cada tipo de paso se reconoce de un vistazo sin leerlo. */
+  .pasos li.sql .texto { font-family: var(--mono); color: var(--tinta); }
+  .pasos li.pensamiento .texto { font-style: italic; }
+  .pasos li.herramienta .texto { color: var(--tinta); }
+  .pasos li.resultado .texto { color: var(--acento-fuerte); }
+  .pasos li.error .texto { color: var(--alto); }
+  /* Un renglon suelto, como los de las bitacoras viejas. */
+  .pasos li.plano { grid-template-columns: 1fr; font-family: var(--mono); }
 
   .pie-panel {
     flex: none; background: var(--barra); padding: 13px 16px;
@@ -556,7 +574,7 @@ const TEXTOS = {
     ver_anteriores: "Ver turnos anteriores",
     cargando: "cargando…",
     turnos: (n) => `${n} turno${n === 1 ? "" : "s"}`,
-    que_hizo: (n) => `Qué hizo para contestar (${n})`,
+    que_hizo: (n) => `Ver todo lo que pensó e hizo (${n} pasos)`,
     cancelada: "(cancelada por otra pregunta)",
     sin_respuesta: "(sin respuesta)",
     solo_lectura: "Solo lectura: desde aquí no se le escribe al usuario.",
@@ -628,7 +646,7 @@ const TEXTOS = {
     ver_anteriores: "Show earlier turns",
     cargando: "loading…",
     turnos: (n) => `${n} turn${n === 1 ? "" : "s"}`,
-    que_hizo: (n) => `What it did to answer (${n})`,
+    que_hizo: (n) => `See everything it thought and did (${n} steps)`,
     cancelada: "(cancelled by a later question)",
     sin_respuesta: "(no answer)",
     solo_lectura: "Read-only: you cannot message the user from here.",
@@ -1093,12 +1111,70 @@ function burbujaDeTurno(turno) {
   if (turno.pasos.length) {
     const detalle = elemento("details", "tramoya");
     detalle.append(elemento("summary", null, t("que_hizo", turno.pasos.length)));
-    const pasos = elemento("ul", "pasos");
-    for (const paso of turno.pasos) pasos.append(elemento("li", null, paso));
-    detalle.append(pasos);
+    detalle.append(listaDePasos(turno.pasos));
     grupo.append(detalle);
   }
   return grupo;
+}
+
+// La marca de cada tipo de paso, dibujada como el resto de los iconos del
+// panel: un emoji a 12 px se ve como una mancha de color, y ademas no toma
+// el color del tipo.
+const MARCAS = {
+  // Pensamiento: una burbuja con sus puntos, la misma idea que el logo.
+  pensamiento: `<path d="M12 3.5a7.5 6.5 0 1 0-6.2 6.4L5 14l4.2-2.2A7.5 6.5 0 0 0 12 3.5z"
+                       fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                <circle cx="8.6" cy="9.4" r="1"/><circle cx="12" cy="9.4" r="1"/><circle cx="15.4" cy="9.4" r="1"/>`,
+  // Herramienta: una llave de tuercas, simplificada a una barra con cabeza.
+  herramienta: `<path d="M15.6 3.6a4 4 0 0 0-5.1 5.1l-6 6a1.6 1.6 0 1 0 2.3 2.3l6-6a4 4 0 0 0 5.1-5.1l-2.4 2.4-1.9-.5-.5-1.9z"
+                       fill="currentColor"/>`,
+  // Resultado: la flecha que baja y entra.
+  resultado: `<path d="M7 4v7a2 2 0 0 0 2 2h7m0 0-3-3m3 3-3 3"
+                     fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round"/>`,
+  // SQL: el cilindro de una base de datos.
+  sql: `<ellipse cx="12" cy="6.4" rx="6" ry="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M6 6.4v11c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4v-11"
+              fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M6 12c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4"
+              fill="none" stroke="currentColor" stroke-width="1.6"/>`,
+  // Error: el triangulo de siempre.
+  error: `<path d="M12 4 21 19H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <path d="M12 9.5v4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="16.4" r="1.1" fill="currentColor"/>`,
+  nota: `<circle cx="12" cy="12" r="2.6" fill="currentColor"/>`,
+};
+
+function marcaDePaso(tipo) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = MARCAS[tipo] || MARCAS.nota;
+  return svg;
+}
+
+function listaDePasos(pasos) {
+  const lista = elemento("ul", "pasos");
+  for (const paso of pasos) {
+    // Las bitacoras de antes guardaban cada paso como un texto suelto; se
+    // siguen leyendo, en un solo renglon.
+    if (typeof paso === "string") {
+      lista.append(elemento("li", "plano", paso));
+      continue;
+    }
+    const renglon = elemento("li", paso.tipo || "nota");
+    const marca = elemento("span", "marca-paso");
+    marca.append(marcaDePaso(paso.tipo));
+    renglon.append(
+      elemento("span", "hora", paso.hora || ""),
+      marca,
+      elemento("span", "texto", paso.texto || ""),
+    );
+    lista.append(renglon);
+  }
+  return lista;
 }
 
 function abrirActividad() {
@@ -1128,10 +1204,13 @@ function pintarActividad(enCurso) {
     cabeza.append(reloj);
     tarjeta.append(cabeza);
 
-    const pasos = elemento("ul", "pasos");
-    if (!trabajo.pasos.length) pasos.append(elemento("li", null, t("pensando")));
-    else for (const paso of trabajo.pasos) pasos.append(elemento("li", null, paso));
-    tarjeta.append(pasos);
+    if (trabajo.pasos.length) {
+      tarjeta.append(listaDePasos(trabajo.pasos));
+    } else {
+      const esperando = elemento("ul", "pasos");
+      esperando.append(elemento("li", "plano", t("pensando")));
+      tarjeta.append(esperando);
+    }
     caja.append(tarjeta);
   }
 }

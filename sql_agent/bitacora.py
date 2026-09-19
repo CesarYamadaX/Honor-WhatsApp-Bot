@@ -24,11 +24,23 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-MAX_PASOS = 40
+# Un turno con el razonamiento entero son bastantes mas renglones que antes,
+# cuando solo se anotaba el SQL. El tope sigue existiendo para que un agente
+# atorado en un bucle no llene la memoria ni el panel.
+MAX_PASOS = 150
 # Recortes para que un turno no ocupe media pantalla del panel ni engorde el
 # archivo: la pregunta y la respuesta completas ya viajaron por WhatsApp.
 MAX_TEXTO = 4000
-MAX_PASO = 500
+MAX_PASO = 1500
+
+# Los tipos de paso, que el panel pinta distinto. Son lo que el bot hizo,
+# en el orden en que lo hizo.
+PENSAMIENTO = "pensamiento"   # lo que el modelo dijo antes de actuar
+HERRAMIENTA = "herramienta"   # que herramienta uso y con que
+RESULTADO = "resultado"       # lo que le devolvio
+SQL = "sql"                   # una consulta a la base
+ERROR = "error"
+NOTA = "nota"                 # cualquier otra cosa
 
 
 def _ahora() -> str:
@@ -254,19 +266,26 @@ class Bitacora:
         )
 
 
-def paso(texto: str) -> None:
+def paso(texto: str, tipo: str = NOTA) -> None:
     """Anota un paso en el turno en curso. Sin turno, no hace nada.
 
-    Lo llaman las herramientas del agente. Que sea inofensivo fuera de una
-    peticion es lo que permite que la CLI y las pruebas usen las mismas
-    herramientas sin montar nada alrededor.
+    Lo llaman las herramientas del agente y el observador que escucha al
+    modelo. Que sea inofensivo fuera de una peticion es lo que permite que
+    la CLI y las pruebas usen las mismas herramientas sin montar nada
+    alrededor.
     """
     turno = _turno_actual.get()
     if turno is None:
         return
     if len(turno.pasos) >= MAX_PASOS:
         return
-    turno.pasos.append(f"{datetime.now().strftime('%H:%M:%S')}  {_recortar(texto, MAX_PASO)}")
+    turno.pasos.append(
+        {
+            "hora": datetime.now().strftime("%H:%M:%S"),
+            "tipo": tipo,
+            "texto": _recortar(texto, MAX_PASO),
+        }
+    )
 
 
 def turno_actual() -> Turno | None:
