@@ -4,32 +4,37 @@ Antes la lista vivia en WHATSAPP_ALLOWED_NUMBERS y cambiarla era editar el
 .env y reiniciar los dos procesos. Aqui vive en un archivo que se puede
 cambiar en caliente desde el panel, sin tocar la conversacion de nadie.
 
-Los cuatro estados y que significan:
+Los estados y que significan:
 
 - activo       puede usar el bot.
-- suspendido   no puede, temporalmente. Si se le puso fecha, al pasar esa
-               fecha vuelve solo a activo sin que nadie haga nada.
-- bloqueado    no puede, y no se reactiva solo: alguien tiene que quitarlo.
+- suspendido   no puede, hasta que alguien lo reactive.
 - (eliminado)  no es un estado sino la baja: desaparece del registro. Si
                vuelve a escribir es un desconocido mas.
 
-Para el bot los tres primeros casos que no son `activo` son lo mismo:
-silencio total, igual que un numero que nunca estuvo. Esa es la unica
-propiedad de seguridad que da la lista -- cualquier respuesta, incluido un
-"estas suspendido", le confirma a quien escribe que hay un bot del otro lado.
+Hubo un tiempo un tercer estado, `bloqueado`, y una suspension con fecha de
+regreso. Se quitaron los dos: en el panel eran tres botones que hacian casi
+lo mismo, y no se distinguian de un vistazo. Los registros viejos que digan
+`bloqueado` se leen como suspendidos.
+
+Para el bot, no estar `activo` es lo mismo que no estar: silencio total,
+igual que un numero que nunca estuvo. Esa es la unica propiedad de seguridad
+que da la lista -- cualquier respuesta, incluido un "estas suspendido", le
+confirma a quien escribe que hay un bot del otro lado.
 """
 
 import json
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 ACTIVO = "activo"
 SUSPENDIDO = "suspendido"
-BLOQUEADO = "bloqueado"
-ESTADOS = (ACTIVO, SUSPENDIDO, BLOQUEADO)
+ESTADOS = (ACTIVO, SUSPENDIDO)
+
+# Como se llamaba antes lo que hoy es `suspendido`.
+_ESTADO_VIEJO = "bloqueado"
 
 
 class ErrorDeUsuarios(ValueError):
@@ -63,21 +68,9 @@ class Usuario:
     numero: str
     nombre: str = ""
     estado: str = ACTIVO
-    # Solo para suspendidos, en formato AAAA-MM-DD. None = sin fecha de
-    # regreso: la suspension dura hasta que alguien la levante.
-    suspendido_hasta: str | None = None
     nota: str = ""
     creado: str = field(default_factory=_ahora)
     actualizado: str = field(default_factory=_ahora)
-
-    def vencio_la_suspension(self, hoy: date | None = None) -> bool:
-        if self.estado != SUSPENDIDO or not self.suspendido_hasta:
-            return False
-        try:
-            hasta = date.fromisoformat(self.suspendido_hasta)
-        except ValueError:
-            return False
-        return (hoy or date.today()) > hasta
 
 
 class RegistroUsuarios:
@@ -107,6 +100,12 @@ class RegistroUsuarios:
             # atendiendo a cualquiera: se arranca vacio, que niega a todos.
             return
         for crudo in datos.get("usuarios", []):
+            # Los archivos de antes traen `bloqueado` y una fecha de regreso.
+            # Se leen igual: el estado se traduce y el campo sobrante se
+            # descarta, en vez de dejar al registro sin cargar.
+            crudo = {k: v for k, v in crudo.items() if k != "suspendido_hasta"}
+            if crudo.get("estado") == _ESTADO_VIEJO:
+                crudo["estado"] = SUSPENDIDO
             try:
                 usuario = Usuario(**crudo)
             except TypeError:
@@ -133,7 +132,7 @@ class RegistroUsuarios:
 
         Sirve para la primera vez, para que al estrenar esto nadie se quede
         fuera, y como respaldo: si el archivo se borra, los del .env vuelven.
-        Nunca revive a un bloqueado ni cambia a nadie que ya exista.
+        Nunca revive a un suspendido ni cambia a nadie que ya exista.
         """
         nuevos = False
         with self._candado:
@@ -156,16 +155,7 @@ class RegistroUsuarios:
         """La unica pregunta que le hace el bot a este registro."""
         with self._candado:
             usuario = self._usuarios.get(numero)
-            if usuario is None:
-                return False
-            if usuario.vencio_la_suspension():
-                # Se levanta sola y queda por escrito, para que el panel no
-                # muestre "suspendido hasta" una fecha que ya paso.
-                usuario.estado = ACTIVO
-                usuario.suspendido_hasta = None
-                usuario.actualizado = _ahora()
-                self._guardar()
-            return usuario.estado == ACTIVO
+            return usuario is not None and usuario.estado == ACTIVO
 
     def listar(self) -> list[Usuario]:
         with self._candado:
@@ -199,30 +189,12 @@ class RegistroUsuarios:
             self._guardar()
             return usuario
 
-    def bloquear(self, crudo: str, nota: str = "") -> Usuario:
-        return self._cambiar(
-            crudo, estado=BLOQUEADO, suspendido_hasta=None, nota=nota.strip()
-        )
-
-    def suspender(self, crudo: str, hasta: str | None = None, nota: str = "") -> Usuario:
-        """Suspende, opcionalmente hasta una fecha (AAAA-MM-DD)."""
-        if hasta:
-            try:
-                limite = date.fromisoformat(hasta)
-            except ValueError as error:
-                raise ErrorDeUsuarios(
-                    f"{hasta!r} no es una fecha valida; se espera AAAA-MM-DD."
-                ) from error
-            if limite < date.today():
-                raise ErrorDeUsuarios(
-                    f"La fecha {hasta} ya paso: la suspension nacería vencida."
-                )
-        return self._cambiar(
-            crudo, estado=SUSPENDIDO, suspendido_hasta=hasta or None, nota=nota.strip()
-        )
+    def suspender(self, crudo: str, nota: str = "") -> Usuario:
+        """Le quita el acceso hasta que alguien lo reactive."""
+        return self._cambiar(crudo, estado=SUSPENDIDO, nota=nota.strip())
 
     def reactivar(self, crudo: str) -> Usuario:
-        return self._cambiar(crudo, estado=ACTIVO, suspendido_hasta=None)
+        return self._cambiar(crudo, estado=ACTIVO)
 
     def eliminar(self, crudo: str) -> None:
         numero = normalizar_numero(crudo)

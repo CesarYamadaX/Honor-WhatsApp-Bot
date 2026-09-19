@@ -74,24 +74,29 @@ Tres vistas:
   paso va (que SQL lanzo, cuantas filas trajo). Una consulta pesada tarda
   minutos y sin esto se ve igual que un bot colgado. En reposo muestra las
   ultimas consultas atendidas.
-- **Usuarios** — alta, suspension, bloqueo y baja. Los cambios entran de
-  inmediato, sin reiniciar.
+- **Usuarios** — alta, suspension y baja. Los cambios entran de inmediato,
+  sin reiniciar.
 - **Conversaciones** — cada turno con la respuesta del bot y, desplegable,
   lo que hizo para construirla.
 
 Los estados de un usuario:
 
-| Estado | Puede usar el bot | Se levanta solo |
+| Estado | Puede usar el bot | Como se sale de ahi |
 |---|---|---|
 | activo | si | — |
-| suspendido | no | si se le puso fecha, al pasar esa fecha |
-| bloqueado | no | nunca; alguien tiene que reactivarlo |
+| suspendido | no | Reactivar, cuando alguien lo decida |
 | eliminado | no | no existe: si vuelve a escribir es un desconocido |
 
-Los tres casos que no son `activo` se comportan igual de cara a quien
-escribe: **silencio total**, como un numero que nunca estuvo. Contestarle
-"estas suspendido" le confirmaria que hay un bot del otro lado, que es
-justo lo que la allowlist evita.
+Hubo tambien un estado `bloqueado` y una suspension con fecha de regreso.
+Se quitaron los dos: en el panel eran tres botones que hacian casi lo mismo
+y no se distinguian de un vistazo. Los registros viejos que digan
+`bloqueado` se leen como suspendidos.
+
+Suspendido y eliminado se comportan igual de cara a quien escribe:
+**silencio total**, como un numero que nunca estuvo. Contestarle "estas
+suspendido" le confirmaria que hay un bot del otro lado, que es justo lo que
+la allowlist evita. La diferencia es de este lado: al suspendido se le
+conserva su historial y se le puede devolver el acceso con un clic.
 
 El panel **solo funciona con el servicio atado a loopback**. El servicio no
 tiene autenticacion propia, y el panel ademas da de alta usuarios y deja leer

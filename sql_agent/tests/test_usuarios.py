@@ -6,12 +6,10 @@ pruebas de aqui son sobre no dejar entrar a quien no debe.
 """
 
 import json
-from datetime import date, timedelta
 
 import pytest
 from usuarios import (
     ACTIVO,
-    BLOQUEADO,
     SUSPENDIDO,
     ErrorDeUsuarios,
     RegistroUsuarios,
@@ -71,59 +69,29 @@ class TestAltasYBajas:
 
 
 class TestEstados:
-    def test_un_bloqueado_no_puede_usar_el_bot(self, registro):
+    def test_un_suspendido_no_puede_usar_el_bot(self, registro):
         registro.agregar(NUMERO)
-        registro.bloquear(NUMERO, nota="mando consultas a las 3 am")
+        registro.suspender(NUMERO, nota="mando consultas a las 3 am")
         assert not registro.puede_usar(NUMERO)
-        assert registro.obtener(NUMERO).estado == BLOQUEADO
-
-    def test_un_suspendido_tampoco(self, registro):
-        registro.agregar(NUMERO)
-        registro.suspender(NUMERO)
-        assert not registro.puede_usar(NUMERO)
+        assert registro.obtener(NUMERO).estado == SUSPENDIDO
 
     def test_reactivar_devuelve_el_acceso(self, registro):
         registro.agregar(NUMERO)
-        registro.bloquear(NUMERO)
+        registro.suspender(NUMERO)
         registro.reactivar(NUMERO)
         assert registro.puede_usar(NUMERO)
 
-    def test_la_suspension_con_fecha_se_levanta_sola(self, registro):
-        # Es la diferencia con bloquear: se pone la fecha y nadie tiene que
-        # acordarse de volver a entrar al panel.
+    def test_la_suspension_no_se_levanta_sola(self, registro):
+        # Es una decision, no un plazo. Hubo una suspension con fecha de
+        # regreso y se quito: en el panel eran dos botones que no se
+        # distinguian de un vistazo.
         registro.agregar(NUMERO)
-        registro.suspender(NUMERO, hasta=(date.today() + timedelta(days=1)).isoformat())
-        assert not registro.puede_usar(NUMERO)
-
-        registro.obtener(NUMERO).suspendido_hasta = (
-            date.today() - timedelta(days=1)
-        ).isoformat()
-        assert registro.puede_usar(NUMERO)
-        assert registro.obtener(NUMERO).estado == ACTIVO
-
-    def test_un_bloqueo_no_se_levanta_solo_nunca(self, registro):
-        # Bloquear es una decision, no un plazo: sin esto, un bloqueado con
-        # fecha vieja de una suspension anterior volveria solo.
-        registro.agregar(NUMERO)
-        registro.suspender(NUMERO, hasta=(date.today() + timedelta(days=30)).isoformat())
-        registro.bloquear(NUMERO)
-        assert registro.obtener(NUMERO).suspendido_hasta is None
-        assert not registro.puede_usar(NUMERO)
-
-    def test_no_se_acepta_una_fecha_que_ya_paso(self, registro):
-        # Naceria vencida: el usuario seguiria entrando y quien la puso
-        # creeria que lo suspendio.
-        registro.agregar(NUMERO)
-        with pytest.raises(ErrorDeUsuarios):
-            registro.suspender(NUMERO, hasta=(date.today() - timedelta(days=1)).isoformat())
-
-    def test_una_fecha_con_formato_raro_se_rechaza(self, registro):
-        registro.agregar(NUMERO)
-        with pytest.raises(ErrorDeUsuarios):
-            registro.suspender(NUMERO, hasta="30/09/2026")
+        registro.suspender(NUMERO)
+        otra_vez = RegistroUsuarios(registro._archivo)
+        assert not otra_vez.puede_usar(NUMERO)
 
     def test_no_se_puede_cambiar_a_quien_no_existe(self, registro):
-        for accion in (registro.bloquear, registro.suspender, registro.reactivar):
+        for accion in (registro.suspender, registro.reactivar):
             with pytest.raises(ErrorDeUsuarios):
                 accion(NUMERO)
 
@@ -143,12 +111,12 @@ class TestPersistencia:
         archivo = tmp_path / "usuarios.json"
         primero = RegistroUsuarios(archivo)
         primero.agregar(NUMERO, nombre="Laura")
-        primero.bloquear(NUMERO, nota="prueba")
+        primero.suspender(NUMERO, nota="prueba")
 
         segundo = RegistroUsuarios(archivo)
         usuario = segundo.obtener(NUMERO)
         assert usuario.nombre == "Laura"
-        assert usuario.estado == BLOQUEADO
+        assert usuario.estado == SUSPENDIDO
         assert usuario.nota == "prueba"
 
     def test_un_archivo_corrupto_niega_a_todos_en_vez_de_reventar(self, tmp_path):
@@ -166,16 +134,35 @@ class TestPersistencia:
         assert registro.puede_usar(NUMERO)
         assert registro.puede_usar(OTRO)
 
-    def test_la_semilla_no_revive_a_un_bloqueado(self, tmp_path):
+    def test_la_semilla_no_revive_a_un_suspendido(self, tmp_path):
         # WHATSAPP_ALLOWED_NUMBERS se sigue leyendo en cada arranque. Si la
-        # semilla pisara lo guardado, bloquear a alguien duraria hasta el
+        # semilla pisara lo guardado, suspender a alguien duraria hasta el
         # siguiente reinicio y nadie entenderia por que volvio.
         archivo = tmp_path / "u.json"
         registro = RegistroUsuarios(archivo, semilla=[NUMERO])
-        registro.bloquear(NUMERO)
+        registro.suspender(NUMERO)
 
         otra_vez = RegistroUsuarios(archivo, semilla=[NUMERO])
         assert not otra_vez.puede_usar(NUMERO)
+
+    def test_un_archivo_viejo_con_bloqueados_se_sigue_leyendo(self, tmp_path):
+        # Los registros escritos antes traen estado "bloqueado" y un campo
+        # suspendido_hasta que ya no existe. Si eso tumbara la carga, el bot
+        # arrancaria sin allowlist y sin que nadie se entere.
+        archivo = tmp_path / "u.json"
+        archivo.write_text(
+            json.dumps({"usuarios": [{
+                "numero": NUMERO, "nombre": "Laura", "estado": "bloqueado",
+                "suspendido_hasta": "2026-01-01", "nota": "", 
+                "creado": "2026-01-01T00:00:00", "actualizado": "2026-01-01T00:00:00",
+            }]}),
+            encoding="utf-8",
+        )
+        registro = RegistroUsuarios(archivo)
+        usuario = registro.obtener(NUMERO)
+        assert usuario.nombre == "Laura"
+        assert usuario.estado == SUSPENDIDO
+        assert not registro.puede_usar(NUMERO)
 
     def test_la_semilla_ignora_basura_sin_tumbar_el_arranque(self, tmp_path):
         registro = RegistroUsuarios(tmp_path / "u.json", semilla=["", "x", NUMERO])
@@ -193,5 +180,5 @@ class TestPersistencia:
         # Asi lo usan las pruebas de la API y la CLI, sin dejar basura.
         registro = RegistroUsuarios(semilla=[NUMERO])
         assert registro.puede_usar(NUMERO)
-        registro.bloquear(NUMERO)
+        registro.suspender(NUMERO)
         assert not registro.puede_usar(NUMERO)

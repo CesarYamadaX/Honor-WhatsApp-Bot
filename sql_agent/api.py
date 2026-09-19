@@ -350,7 +350,6 @@ def crear_app(
 
     class CambioUsuario(BaseModel):
         numero: str
-        hasta: str | None = None
         nota: str = ""
 
     def _respuesta_de_usuario(accion, *args, **kwargs) -> dict:
@@ -367,19 +366,11 @@ def crear_app(
         logger.info("Panel: alta de %s", alta.numero)
         return _respuesta_de_usuario(usuarios.agregar, alta.numero, alta.nombre, alta.nota)
 
-    @app.post("/panel/usuarios/bloquear")
-    async def bloquear_usuario(cambio: CambioUsuario) -> dict:
-        _solo_local()
-        logger.info("Panel: bloqueo de %s", cambio.numero)
-        return _respuesta_de_usuario(usuarios.bloquear, cambio.numero, cambio.nota)
-
     @app.post("/panel/usuarios/suspender")
     async def suspender_usuario(cambio: CambioUsuario) -> dict:
         _solo_local()
-        logger.info("Panel: suspension de %s hasta %s", cambio.numero, cambio.hasta)
-        return _respuesta_de_usuario(
-            usuarios.suspender, cambio.numero, cambio.hasta, cambio.nota
-        )
+        logger.info("Panel: suspension de %s", cambio.numero)
+        return _respuesta_de_usuario(usuarios.suspender, cambio.numero, cambio.nota)
 
     @app.post("/panel/usuarios/reactivar")
     async def reactivar_usuario(cambio: CambioUsuario) -> dict:

@@ -77,17 +77,13 @@ class TestAdministracionDeUsuarios:
         cliente.post("/panel/usuarios", json={"numero": NUEVO, "nombre": "Laura"})
         assert cliente.post("/ask", json={"chat_id": chat, "text": "hola"}).status_code == 200
 
-    def test_bloquear_corta_el_acceso_de_inmediato(self, cliente):
-        cliente.post("/panel/usuarios/bloquear", json={"numero": "5215512345678"})
+    def test_suspender_corta_el_acceso_de_inmediato(self, cliente):
+        cliente.post("/panel/usuarios/suspender", json={"numero": "5215512345678"})
         respuesta = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
         assert respuesta.status_code == 403
 
-    def test_suspender_tambien(self, cliente):
-        cliente.post("/panel/usuarios/suspender", json={"numero": "5215512345678"})
-        assert cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "x"}).status_code == 403
-
     def test_reactivar_devuelve_el_acceso(self, cliente):
-        cliente.post("/panel/usuarios/bloquear", json={"numero": "5215512345678"})
+        cliente.post("/panel/usuarios/suspender", json={"numero": "5215512345678"})
         cliente.post("/panel/usuarios/reactivar", json={"numero": "5215512345678"})
         assert cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "x"}).status_code == 200
 
@@ -106,11 +102,11 @@ class TestAdministracionDeUsuarios:
         assert respuesta.status_code == 400
         assert "ya esta" in respuesta.json()["detail"]
 
-    def test_un_bloqueado_no_recibe_ni_el_indicador_de_escribiendo(self, cliente):
+    def test_un_suspendido_no_recibe_ni_el_indicador_de_escribiendo(self, cliente):
         # /authorized es lo que el sidecar consulta ANTES de mostrar señales
-        # de vida. Si aqui dijera que si, un bloqueado veria al bot
+        # de vida. Si aqui dijera que si, un suspendido veria al bot
         # "escribiendo" y sabria que sigue existiendo.
-        cliente.post("/panel/usuarios/bloquear", json={"numero": "5215512345678"})
+        cliente.post("/panel/usuarios/suspender", json={"numero": "5215512345678"})
         assert cliente.post("/authorized", json={"chat_id": AUTORIZADO}).status_code == 403
 
 
