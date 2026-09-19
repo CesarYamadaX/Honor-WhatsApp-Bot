@@ -65,9 +65,14 @@ sirve el mismo servicio en <http://127.0.0.1:8000/panel>, abierta en modo
 aplicacion de Edge o Chrome; asi no hay que instalar ni mantener un
 empaquetado aparte. Si no hay ninguno de los dos, cae al navegador normal.
 
-Arriba a la izquierda hay dos interruptores: **tema** (claro/oscuro) e
-**idioma** (ES/EN). Los dos recuerdan la eleccion. El tema arranca siguiendo
-al sistema y solo deja de hacerlo cuando alguien elige. El idioma es el de la
+Arriba a la izquierda hay dos interruptores: **tema** e **idioma** (ES/EN).
+Los dos recuerdan la eleccion. El tema tiene tres modos y el boton los cicla:
+
+- **automatico** (reloj, el de casa): oscuro de las 17:00 a las 07:00, hora
+  de Mexico -- la del negocio, no la del equipo, asi que se oscurece cuando
+  alla anochece aunque la maquina este en otro huso. El cambio entra solo al
+  dar la hora, sin recargar.
+- **siempre claro** (sol) y **siempre oscuro** (luna), que ignoran el reloj. El idioma es el de la
 pantalla, no el del bot: las preguntas y respuestas se muestran como se
 escribieron, y en que idioma contesta el bot lo decide cada mensaje de
 WhatsApp (ver `sql_agent/idioma.py`).

@@ -588,8 +588,9 @@ const TEXTOS = {
       "Para dejarlo fuera conservando su historial, usa Suspender.",
     no_pude_leer: "No pude leer ese archivo.",
     sin_servicio: "El servicio no contesta. ¿Sigue encendido el bot?",
-    a_oscuro: "Cambiar a modo oscuro",
-    a_claro: "Cambiar a modo claro",
+    modo_horario: "Automático: oscuro de 17:00 a 07:00, hora de México. Toca para dejarlo siempre claro.",
+    modo_claro: "Siempre claro. Toca para dejarlo siempre oscuro.",
+    modo_oscuro: "Siempre oscuro. Toca para volver al automático.",
     cambiar_idioma: "Switch to English",
   },
   en: {
@@ -659,8 +660,9 @@ const TEXTOS = {
       "To keep them out but keep their history, use Suspend.",
     no_pude_leer: "I could not read that file.",
     sin_servicio: "The service is not answering. Is the bot still running?",
-    a_oscuro: "Switch to dark mode",
-    a_claro: "Switch to light mode",
+    modo_horario: "Automatic: dark from 17:00 to 07:00, Mexico time. Tap to keep it always light.",
+    modo_claro: "Always light. Tap to keep it always dark.",
+    modo_oscuro: "Always dark. Tap to go back to automatic.",
     cambiar_idioma: "Cambiar a español",
   },
 };
@@ -1383,25 +1385,56 @@ function pintarResumen() {
 const ICONOS_AJUSTE = {
   sol: `<circle cx="12" cy="12" r="4.4"/><path d="M12 1.6v3M12 19.4v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1.6 12h3M19.4 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>`,
   luna: `<path d="M20.7 14.6A8.6 8.6 0 0 1 9.4 3.3a8.9 8.9 0 1 0 11.3 11.3z"/>`,
+  // Reloj: el modo que decide por la hora.
+  reloj: `<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 6.8V12l3.4 2" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>`,
 };
 
-// Tres estados, no dos: mientras nadie elija, el panel sigue al sistema. En
-// cuanto se toca el boton la eleccion manda, y se recuerda.
-let tema = recordado("tema") || "sistema";
+// La regla del modo automatico: oscuro de las 17:00 a las 07:00.
+const HORA_OSCURA = 17;
+const HORA_CLARA = 7;
 
-const oscuroAhora = () =>
-  tema === "oscuro" ||
-  (tema === "sistema" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+function horaEnMexico() {
+  // La hora de Mexico, no la del equipo: el bot es de GTM Honor Mexico y la
+  // regla es sobre el horario de alla. Si alguien abre el panel desde una
+  // maquina en otro huso, la ventana se oscurece cuando alla anochece.
+  try {
+    const partes = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Mexico_City",
+      hour: "numeric",
+      hourCycle: "h23",
+    }).formatToParts(new Date());
+    const hora = Number(partes.find((parte) => parte.type === "hour")?.value);
+    if (Number.isFinite(hora)) return hora % 24;
+  } catch (error) {
+    /* sin esa zona horaria, se usa la del equipo */
+  }
+  return new Date().getHours();
+}
+
+function esDeNoche() {
+  const hora = horaEnMexico();
+  return hora >= HORA_OSCURA || hora < HORA_CLARA;
+}
+
+// Tres modos: por la hora (el de casa), siempre claro y siempre oscuro. La
+// eleccion se recuerda; mientras nadie elija, manda el reloj.
+const MODOS = ["horario", "claro", "oscuro"];
+let tema = MODOS.includes(recordado("tema")) ? recordado("tema") : "horario";
+
+const oscuroAhora = () => tema === "oscuro" || (tema === "horario" && esDeNoche());
 
 function aplicarTema() {
-  const raiz = document.documentElement;
-  if (tema === "sistema") raiz.removeAttribute("data-theme");
-  else raiz.setAttribute("data-theme", tema === "oscuro" ? "dark" : "light");
+  // Siempre explicito, incluso en automatico: si se dejara sin atributo, la
+  // preferencia del sistema se colaria y pelearia con el reloj.
+  document.documentElement.setAttribute("data-theme", oscuroAhora() ? "dark" : "light");
 
   const boton = $("boton-tema");
-  const aOscuro = !oscuroAhora();
-  boton.replaceChildren(iconoAjuste(aOscuro ? "luna" : "sol"));
-  boton.title = t(aOscuro ? "a_oscuro" : "a_claro");
+  boton.replaceChildren(
+    iconoAjuste(tema === "horario" ? "reloj" : tema === "oscuro" ? "luna" : "sol"),
+  );
+  boton.title = t(`modo_${tema}`);
   boton.setAttribute("aria-label", boton.title);
   // El papel tapiz se dibuja con el color del tema: hay que rehacerlo.
   pintarPapelTapiz();
@@ -1477,6 +1510,11 @@ async function latido() {
     $("foco").className = "foco vivo";
     $("texto-estado").textContent = t("en_linea", datos.sesiones);
 
+    if (tema === "horario" && oscuroAhora() !== eraDeNoche) {
+      eraDeNoche = oscuroAhora();
+      aplicarTema();
+    }
+
     const antes = enCursoPorChat.size;
     enCursoPorChat = new Map(datos.en_curso.map((turno) => [turno.chat_id, turno]));
     if (vista === "actividad") pintarActividad(datos.en_curso);
@@ -1500,7 +1538,7 @@ async function latido() {
 }
 
 $("boton-tema").addEventListener("click", () => {
-  tema = oscuroAhora() ? "claro" : "oscuro";
+  tema = MODOS[(MODOS.indexOf(tema) + 1) % MODOS.length];
   recordar("tema", tema);
   aplicarTema();
 });
@@ -1512,11 +1550,9 @@ $("boton-idioma").addEventListener("click", () => {
   aplicarTema(); // los titulos de los botones tambien estan traducidos
 });
 
-// Mientras nadie elija tema, se sigue al sistema tambien cuando cambia solo
-// (Windows lo hace al anochecer).
-window
-  .matchMedia("(prefers-color-scheme: dark)")
-  .addEventListener("change", () => { if (tema === "sistema") aplicarTema(); });
+// En automatico, el panel se oscurece solo al dar la hora: se comprueba en
+// cada latido, que ya corre cada dos segundos, en vez de montar otro reloj.
+let eraDeNoche = oscuroAhora();
 
 async function arranque() {
   aplicarTema();
