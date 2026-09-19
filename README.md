@@ -63,6 +63,13 @@ sirve el mismo servicio en <http://127.0.0.1:8000/panel>, abierta en modo
 aplicacion de Edge o Chrome; asi no hay que instalar ni mantener un
 empaquetado aparte. Si no hay ninguno de los dos, cae al navegador normal.
 
+Arriba a la izquierda hay dos interruptores: **tema** (claro/oscuro) e
+**idioma** (ES/EN). Los dos recuerdan la eleccion. El tema arranca siguiendo
+al sistema y solo deja de hacerlo cuando alguien elige. El idioma es el de la
+pantalla, no el del bot: las preguntas y respuestas se muestran como se
+escribieron, y en que idioma contesta el bot lo decide cada mensaje de
+WhatsApp (ver `sql_agent/idioma.py`).
+
 La disposicion es la de WhatsApp Web: la lista de conversaciones a la
 izquierda, la conversacion a la derecha, con la pregunta del usuario y la
 respuesta del bot como burbujas. Cada vista tiene su direccion (`#usuarios`,

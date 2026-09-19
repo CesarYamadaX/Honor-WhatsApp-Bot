@@ -42,34 +42,65 @@
     --sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
     --trazo-doodle: rgba(17,27,33,.05);
   }
+  /* El tema tiene TRES estados, no dos: mientras nadie elija, se sigue al
+     sistema (el media query); en cuanto el boton elige, manda la eleccion
+     (el selector de abajo). Sin el segundo bloque, el boton cambia el
+     atributo y no pasa nada visible -- que es justo lo que pasaba. */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --fondo: #0b141a;
-      --panel: #111b21;
-      --barra: #202c33;
-      --borde: #202c33;
-      --borde-fuerte: #2a3942;
-      --tinta: #e9edef;
-      --tinta-2: #8696a0;
-      --tinta-3: #667781;
-      --acento: #53a6f0;
-      --acento-fuerte: #53a6f0;
-      --burbuja-entra: #202c33;
-      --burbuja-sale: #0b4a7a;
-      --palomas: #53bdeb;
-      --tinta-en-burbuja: #c2d3d8;
-      --tinta-en-fallo: #c2a8ae;
-      --seleccion: #2a3942;
-      --alto: #f15c6d;
-      --alto-suave: #3b1a21;
-      --aviso: #e3ae5a;
-      --aviso-suave: #33260f;
-      --ok-suave: #10283a;
-      --sombra: 0 1px 0.5px rgba(11,20,26,.38);
-      --trazo-doodle: rgba(233,237,239,.04);
+    color-scheme: dark;
+    --fondo: #0b141a;
+    --panel: #111b21;
+    --barra: #202c33;
+    --borde: #202c33;
+    --borde-fuerte: #2a3942;
+    --tinta: #e9edef;
+    --tinta-2: #8696a0;
+    --tinta-3: #667781;
+    --acento: #53a6f0;
+    --acento-fuerte: #53a6f0;
+    --burbuja-entra: #202c33;
+    --burbuja-sale: #0b4a7a;
+    --palomas: #53bdeb;
+    --tinta-en-burbuja: #c2d3d8;
+    --tinta-en-fallo: #c2a8ae;
+    --seleccion: #2a3942;
+    --alto: #f15c6d;
+    --alto-suave: #3b1a21;
+    --aviso: #e3ae5a;
+    --aviso-suave: #33260f;
+    --ok-suave: #10283a;
+    --sombra: 0 1px 0.5px rgba(11,20,26,.38);
+    --trazo-doodle: rgba(233,237,239,.04);
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --fondo: #0b141a;
+    --panel: #111b21;
+    --barra: #202c33;
+    --borde: #202c33;
+    --borde-fuerte: #2a3942;
+    --tinta: #e9edef;
+    --tinta-2: #8696a0;
+    --tinta-3: #667781;
+    --acento: #53a6f0;
+    --acento-fuerte: #53a6f0;
+    --burbuja-entra: #202c33;
+    --burbuja-sale: #0b4a7a;
+    --palomas: #53bdeb;
+    --tinta-en-burbuja: #c2d3d8;
+    --tinta-en-fallo: #c2a8ae;
+    --seleccion: #2a3942;
+    --alto: #f15c6d;
+    --alto-suave: #3b1a21;
+    --aviso: #e3ae5a;
+    --aviso-suave: #33260f;
+    --ok-suave: #10283a;
+    --sombra: 0 1px 0.5px rgba(11,20,26,.38);
+    --trazo-doodle: rgba(233,237,239,.04);
+  }
+
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -115,6 +146,20 @@
   .marca { display: flex; align-items: center; gap: 11px; min-width: 0; }
   .nombre { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lugar { color: var(--tinta-2); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Los dos interruptores de la barra: tema e idioma. */
+  .ajustes { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
+  .ajustes button {
+    border: 1px solid var(--borde-fuerte); background: none; color: var(--tinta-2);
+    border-radius: 15px; cursor: pointer; font-size: 12px; font-weight: 600;
+    padding: 4px 9px; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .ajustes button:hover { border-color: var(--acento); color: var(--acento-fuerte); }
+  .ajustes button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .ajustes button svg { fill: currentColor; }
+  .ajustes .lengua span { padding: 0 1px; }
+  .ajustes .lengua .activa { color: var(--acento-fuerte); }
+  .ajustes .lengua .apagada { opacity: .45; }
 
   .pulso {
     margin-left: auto; display: flex; align-items: center; gap: 7px;
@@ -374,21 +419,25 @@
           <svg width="23" height="23" viewBox="0 0 24 24" fill="#fff"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 2a8 8 0 1 1-4.2 14.8l-.4-.2-2.6.7.7-2.5-.3-.4A8 8 0 0 1 12 4z"/></svg>
         </div>
         <div style="min-width:0">
-          <div class="nombre">Panel del bot</div>
+          <div class="nombre" data-t="marca">Panel del bot</div>
           <div class="lugar">GTM Honor México</div>
         </div>
+      </div>
+      <div class="ajustes">
+        <button type="button" id="boton-tema" title="Cambiar a modo oscuro"></button>
+        <button type="button" id="boton-idioma" class="lengua" title="Switch to English"></button>
       </div>
     </div>
 
     <div class="herramientas">
       <div class="buscador">
         <svg width="17" height="17" viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
-        <input id="buscar" type="search" placeholder="Buscar un número" aria-label="Buscar un número">
+        <input id="buscar" type="search" placeholder="Buscar un número" aria-label="Buscar un número" data-t-ph="buscar_numero">
       </div>
       <div class="solapas" role="tablist">
-        <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista">Conversaciones</button>
+        <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista" data-t="tab_chats">Conversaciones</button>
         <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="lista">
-          Usuarios <span class="cuenta" id="cuenta-usuarios"></span>
+          <span data-t="tab_usuarios">Usuarios</span> <span class="cuenta" id="cuenta-usuarios"></span>
         </button>
       </div>
     </div>
@@ -398,61 +447,52 @@
 
   <main class="principal" id="principal">
     <div class="barra">
-      <button class="volver" id="volver" type="button" aria-label="Volver a la lista">
+      <button class="volver" id="volver" type="button" data-t-aria="volver">
         <svg width="24" height="24" viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
       </button>
       <div class="avatar chico" id="avatar-principal" aria-hidden="true" hidden></div>
       <div style="min-width:0">
-        <div class="nombre" id="titulo-principal">Panel del bot</div>
-        <div class="lugar" id="subtitulo-principal">Elige una conversación</div>
+        <div class="nombre" id="titulo-principal" data-t="marca">Panel del bot</div>
+        <div class="lugar" id="subtitulo-principal" data-t="elige">Elige una conversación</div>
       </div>
       <div class="pulso">
         <span class="foco" id="foco"></span>
-        <span id="texto-estado">conectando…</span>
+        <span id="texto-estado" data-t="conectando">conectando…</span>
       </div>
     </div>
 
     <div id="error" class="aviso-error" hidden></div>
 
     <div class="bienvenida" id="vista-bienvenida">
-      <h2>Panel del bot</h2>
-      <p>
-        Elige una conversación para ver qué le preguntaron al bot, qué contestó
-        y qué hizo para contestarlo. En <strong>Usuarios</strong> se da de alta,
-        se suspende o se bloquea a quien puede escribirle.
-      </p>
+      <h2 data-t="marca">Panel del bot</h2>
+      <p data-t="bienvenida"></p>
       <p id="resumen-bienvenida" class="lugar"></p>
     </div>
 
     <div class="doodle" id="vista-chat" hidden></div>
     <div class="pie-panel" id="pie-chat" hidden>
-      Solo lectura: desde aquí no se le escribe al usuario.
+      <span data-t="solo_lectura">Solo lectura: desde aquí no se le escribe al usuario.</span>
     </div>
 
     <div class="doodle" id="vista-actividad" hidden></div>
 
     <div class="hoja" id="vista-usuarios" hidden>
       <div class="hoja-interior">
-        <h2>Dar de alta</h2>
-        <p class="nota">
-          Los cambios entran de inmediato, sin reiniciar nada. Un número que no
-          esté <strong>activo</strong> recibe silencio total, igual que uno que
-          nunca estuvo: cualquier otra respuesta le confirmaría que hay un bot
-          del otro lado.
-        </p>
+        <h2 data-t="dar_de_alta">Dar de alta</h2>
+        <p class="nota" data-t="nota_usuarios"></p>
         <form class="alta" id="form-alta">
           <label class="campo">
-            <span>Número con lada de país</span>
+            <span data-t="campo_numero">Número con lada de país</span>
             <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
           </label>
           <label class="campo">
-            <span>Nombre (opcional)</span>
+            <span data-t="campo_nombre">Nombre (opcional)</span>
             <input id="alta-nombre" placeholder="Laura, ventas">
           </label>
-          <button class="principal" type="submit">Agregar</button>
+          <button class="principal" type="submit" data-t="agregar">Agregar</button>
         </form>
 
-        <h2 class="separada">Quién puede usar el bot</h2>
+        <h2 class="separada" data-t="quien_puede">Quién puede usar el bot</h2>
         <div id="personas"></div>
       </div>
     </div>
@@ -464,6 +504,191 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+
+/* ---------------------------------------------------------------- textos */
+
+// El panel se ve en español o en inglés. Es solo la cáscara: las preguntas y
+// las respuestas se muestran como se escribieron, y el idioma en que el bot
+// contesta lo decide cada mensaje de WhatsApp, no este botón.
+const TEXTOS = {
+  es: {
+    marca: "Panel del bot",
+    tab_chats: "Conversaciones",
+    tab_usuarios: "Usuarios",
+    buscar_numero: "Buscar un número",
+    buscar_usuario: "Buscar un usuario",
+    volver: "Volver a la lista",
+    elige: "Elige una conversación",
+    conectando: "conectando…",
+    en_linea: (n) => `en línea · ${n} conversación${n === 1 ? "" : "es"}`,
+    sin_conexion: "sin conexión",
+    bienvenida:
+      "Elige una conversación para ver qué le preguntaron al bot, qué contestó " +
+      "y qué hizo para contestarlo. En Usuarios se da de alta, se suspende o se " +
+      "elimina a quien puede escribirle.",
+    resumen: (chats, usuarios) =>
+      `${chats} conversación${chats === 1 ? "" : "es"} registrada${chats === 1 ? "" : "s"} · ` +
+      `${usuarios} usuario${usuarios === 1 ? "" : "s"} en la lista`,
+    ahora_mismo: "Ahora mismo",
+    corriendo: (n) => `${n} consulta${n === 1 ? "" : "s"} corriendo`,
+    consultando: "consultando…",
+    actividad_sub: "lo que el bot está haciendo en este instante",
+    reposo: "El bot está en reposo: ninguna consulta corriendo.",
+    pensando: "pensando cómo responder…",
+    sin_coincidencias: "Ningún número coincide.",
+    sin_conversaciones: "Todavía no hay conversaciones.",
+    sin_usuarios: "Todavía no hay nadie dado de alta.",
+    sin_turnos: "Sin turnos registrados.",
+    ver_anteriores: "Ver turnos anteriores",
+    cargando: "cargando…",
+    turnos: (n) => `${n} turno${n === 1 ? "" : "s"}`,
+    que_hizo: (n) => `Qué hizo para contestar (${n})`,
+    cancelada: "(cancelada por otra pregunta)",
+    sin_respuesta: "(sin respuesta)",
+    solo_lectura: "Solo lectura: desde aquí no se le escribe al usuario.",
+    hoy: "HOY",
+    ayer: "AYER",
+    usuarios_sub: "quién puede escribirle al bot",
+    dar_de_alta: "Dar de alta",
+    nota_usuarios:
+      "Los cambios entran de inmediato, sin reiniciar nada. Un número que no " +
+      "esté activo recibe silencio total, igual que uno que nunca estuvo: " +
+      "cualquier otra respuesta le confirmaría que hay un bot del otro lado.",
+    campo_numero: "Número con lada de país",
+    campo_nombre: "Nombre (opcional)",
+    agregar: "Agregar",
+    quien_puede: "Quién puede usar el bot",
+    editar: "Editar",
+    guardar: "Guardar",
+    cancelar: "Cancelar",
+    quitar_foto: "Quitar foto",
+    suspender: "Suspender",
+    reactivar: "Reactivar",
+    eliminar: "Eliminar",
+    cambiar_foto: "Cambiar la foto",
+    ph_nombre: "Nombre y área, por ejemplo: Laura, ventas",
+    pista_foto: (numero) => `${numero} · toca la foto para cambiarla`,
+    alta: (fecha) => `alta ${fecha}`,
+    estado: { activo: "activo", suspendido: "suspendido" },
+    confirmar_suspender: (quien) =>
+      `Suspender a ${quien}.\n\nDeja de recibir respuestas del bot, en silencio: ` +
+      "no se entera de que fue suspendido. Puedes devolverle el acceso cuando quieras.",
+    confirmar_eliminar: (quien) =>
+      `Eliminar a ${quien} de la lista.\n\nSi vuelve a escribir será un desconocido más. ` +
+      "Para dejarlo fuera conservando su historial, usa Suspender.",
+    no_pude_leer: "No pude leer ese archivo.",
+    sin_servicio: "El servicio no contesta. ¿Sigue encendido el bot?",
+    a_oscuro: "Cambiar a modo oscuro",
+    a_claro: "Cambiar a modo claro",
+    cambiar_idioma: "Switch to English",
+  },
+  en: {
+    marca: "Bot panel",
+    tab_chats: "Conversations",
+    tab_usuarios: "Users",
+    buscar_numero: "Search a number",
+    buscar_usuario: "Search a user",
+    volver: "Back to the list",
+    elige: "Pick a conversation",
+    conectando: "connecting…",
+    en_linea: (n) => `online · ${n} conversation${n === 1 ? "" : "s"}`,
+    sin_conexion: "offline",
+    bienvenida:
+      "Pick a conversation to see what the bot was asked, what it answered and " +
+      "what it did to answer it. Under Users you add, suspend or remove whoever " +
+      "can message it.",
+    resumen: (chats, usuarios) =>
+      `${chats} conversation${chats === 1 ? "" : "s"} recorded · ` +
+      `${usuarios} user${usuarios === 1 ? "" : "s"} on the list`,
+    ahora_mismo: "Right now",
+    corriendo: (n) => `${n} quer${n === 1 ? "y" : "ies"} running`,
+    consultando: "querying…",
+    actividad_sub: "what the bot is doing at this very moment",
+    reposo: "The bot is idle: no query running.",
+    pensando: "working out how to answer…",
+    sin_coincidencias: "No number matches.",
+    sin_conversaciones: "No conversations yet.",
+    sin_usuarios: "Nobody has been added yet.",
+    sin_turnos: "No turns recorded.",
+    ver_anteriores: "Show earlier turns",
+    cargando: "loading…",
+    turnos: (n) => `${n} turn${n === 1 ? "" : "s"}`,
+    que_hizo: (n) => `What it did to answer (${n})`,
+    cancelada: "(cancelled by a later question)",
+    sin_respuesta: "(no answer)",
+    solo_lectura: "Read-only: you cannot message the user from here.",
+    hoy: "TODAY",
+    ayer: "YESTERDAY",
+    usuarios_sub: "who can message the bot",
+    dar_de_alta: "Add someone",
+    nota_usuarios:
+      "Changes take effect immediately, with no restart. A number that is not " +
+      "active gets total silence, just like one that was never there: any other " +
+      "reply would confirm there is a bot on this end.",
+    campo_numero: "Phone number with country code",
+    campo_nombre: "Name (optional)",
+    agregar: "Add",
+    quien_puede: "Who can use the bot",
+    editar: "Edit",
+    guardar: "Save",
+    cancelar: "Cancel",
+    quitar_foto: "Remove photo",
+    suspender: "Suspend",
+    reactivar: "Reactivate",
+    eliminar: "Remove",
+    cambiar_foto: "Change the photo",
+    ph_nombre: "Name and team, for example: Laura, sales",
+    pista_foto: (numero) => `${numero} · tap the photo to change it`,
+    alta: (fecha) => `added ${fecha}`,
+    estado: { activo: "active", suspendido: "suspended" },
+    confirmar_suspender: (quien) =>
+      `Suspend ${quien}.\n\nThey stop getting answers from the bot, silently: ` +
+      "they are not told they were suspended. You can give the access back whenever you want.",
+    confirmar_eliminar: (quien) =>
+      `Remove ${quien} from the list.\n\nIf they write again they will be a stranger. ` +
+      "To keep them out but keep their history, use Suspend.",
+    no_pude_leer: "I could not read that file.",
+    sin_servicio: "The service is not answering. Is the bot still running?",
+    a_oscuro: "Switch to dark mode",
+    a_claro: "Switch to light mode",
+    cambiar_idioma: "Cambiar a español",
+  },
+};
+
+const GUARDADO = "panel-del-bot";
+
+// localStorage falla en una ventana privada o con los datos del sitio
+// bloqueados. Recordar la preferencia es una comodidad, no puede tumbar el
+// panel, asi que las dos puntas van envueltas.
+function recordar(clave, valor) {
+  try {
+    window.localStorage.setItem(`${GUARDADO}:${clave}`, valor);
+  } catch (error) {
+    /* sin memoria entre visitas; todo lo demas sigue igual */
+  }
+}
+
+function recordado(clave) {
+  try {
+    return window.localStorage.getItem(`${GUARDADO}:${clave}`);
+  } catch (error) {
+    return null;
+  }
+}
+
+let idioma = recordado("idioma") === "en" ? "en" : "es";
+
+function t(clave, ...argumentos) {
+  const valor = TEXTOS[idioma][clave];
+  return typeof valor === "function" ? valor(...argumentos) : valor;
+}
+
+const localeDeFecha = () => (idioma === "es" ? "es-MX" : "en-US");
+
+// Dentro de las funciones de fecha, `t` ya es la fecha: ahi se traduce con t2.
+const t2 = t;
+
+
 
 // El fondo de la conversacion: el mismo gesto que el papel tapiz de WhatsApp,
 // dibujado aqui para no depender de ninguna imagen externa.
@@ -477,15 +702,15 @@ const DOODLE = `<svg xmlns="http://www.w3.org/2000/svg" width="340" height="340"
 <circle cx="35" cy="295" r="8"/><path d="M85 285h20v20H85z"/><path d="M145 305l13-21 13 21z"/>
 <path d="M205 288c10 3 10 15 0 18"/><circle cx="265" cy="296" r="12"/><path d="M305 285l14 14"/>
 </svg>`;
-document.documentElement.style.setProperty(
-  "--patron",
-  `url("data:image/svg+xml,${encodeURIComponent(
-    DOODLE.replace(
-      "TRAZO",
-      getComputedStyle(document.documentElement).getPropertyValue("--trazo-doodle").trim(),
-    ),
-  )}")`,
-);
+function pintarPapelTapiz() {
+  const trazo = getComputedStyle(document.documentElement)
+    .getPropertyValue("--trazo-doodle")
+    .trim();
+  document.documentElement.style.setProperty(
+    "--patron",
+    `url("data:image/svg+xml,${encodeURIComponent(DOODLE.replace("TRAZO", trazo))}")`,
+  );
+}
 
 // Cuantos turnos se traen de golpe. Una conversacion de meses no se pinta
 // entera cada vez que el panel se refresca.
@@ -539,7 +764,7 @@ const fecha = (iso) => {
 };
 function horaCorta(iso) {
   const t = fecha(iso);
-  return t ? t.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : "";
+  return t ? t.toLocaleTimeString(localeDeFecha(), { hour: "2-digit", minute: "2-digit" }) : "";
 }
 function diaLargo(iso) {
   const t = fecha(iso);
@@ -548,16 +773,16 @@ function diaLargo(iso) {
   const ayer = new Date(hoy);
   ayer.setDate(hoy.getDate() - 1);
   const mismoDia = (a, b) => a.toDateString() === b.toDateString();
-  if (mismoDia(t, hoy)) return "HOY";
-  if (mismoDia(t, ayer)) return "AYER";
-  return t.toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric" });
+  if (mismoDia(t, hoy)) return t2("hoy");
+  if (mismoDia(t, ayer)) return t2("ayer");
+  return t.toLocaleDateString(localeDeFecha(), { day: "numeric", month: "long", year: "numeric" });
 }
 function cuandoEnLista(iso) {
   const t = fecha(iso);
   if (!t) return "";
   return t.toDateString() === new Date().toDateString()
     ? horaCorta(iso)
-    : t.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    : t.toLocaleDateString(localeDeFecha(), { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 function duracion(segundos) {
   const s = Math.max(0, Math.round(Number(segundos) || 0));
@@ -621,13 +846,13 @@ function pintarListaChats(caja) {
     fijado.type = "button";
     const centro = elemento("div", "centro");
     const arriba = elemento("div", "arriba");
-    arriba.append(elemento("span", "titulo", "Ahora mismo"));
+    arriba.append(elemento("span", "titulo", t("ahora_mismo")));
     const abajo = elemento("div", "abajo");
     abajo.append(
       elemento(
         "span",
         "vista-previa escribiendo",
-        `${enCursoPorChat.size} consulta${enCursoPorChat.size === 1 ? "" : "s"} corriendo`,
+        t("corriendo", enCursoPorChat.size),
       ),
     );
     centro.append(arriba, abajo);
@@ -641,7 +866,7 @@ function pintarListaChats(caja) {
   const visibles = cacheChats.filter((c) => soloNumero(c.chat_id).includes(filtro));
   if (!visibles.length) {
     caja.append(
-      elemento("div", "vacio", filtro ? "Ningún número coincide." : "Todavía no hay conversaciones."),
+      elemento("div", "vacio", filtro ? t("sin_coincidencias") : t("sin_conversaciones")),
     );
     return;
   }
@@ -662,7 +887,7 @@ function pintarListaChats(caja) {
     const abajo = elemento("div", "abajo");
     abajo.append(
       corriendo
-        ? elemento("span", "vista-previa escribiendo", "consultando…")
+        ? elemento("span", "vista-previa escribiendo", t("consultando"))
         : elemento("span", "vista-previa", chat.ultima_pregunta),
       elemento("span", "globo", String(chat.turnos)),
     );
@@ -677,7 +902,7 @@ function pintarListaUsuarios(caja) {
   const visibles = cacheUsuarios.filter((u) => u.numero.includes(filtro));
   if (!visibles.length) {
     caja.append(
-      elemento("div", "vacio", filtro ? "Ningún número coincide." : "Todavía no hay nadie dado de alta."),
+      elemento("div", "vacio", filtro ? t("sin_coincidencias") : t("sin_usuarios")),
     );
     return;
   }
@@ -694,9 +919,9 @@ function pintarListaUsuarios(caja) {
       elemento(
         "span",
         "vista-previa",
-        usuario.nombre ? usuario.numero : `alta ${(usuario.creado || "").slice(0, 10)}`,
+        usuario.nombre ? usuario.numero : t("alta", (usuario.creado || "").slice(0, 10)),
       ),
-      elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
+      elemento("span", `pastilla ${usuario.estado}`, t("estado")[usuario.estado] || usuario.estado),
     );
     centro.append(arriba, abajo);
     fila.append(avatar(usuario.numero, "", usuario.foto), centro);
@@ -736,7 +961,7 @@ async function abrirChat(chatId) {
   const ficha = fichaDe(chatId);
   encabezado(
     ficha?.nombre || soloNumero(chatId),
-    enCursoPorChat.has(chatId) ? "consultando…" : soloNumero(chatId),
+    enCursoPorChat.has(chatId) ? t("consultando") : soloNumero(chatId),
     chatId,
   );
   pintarLista();
@@ -750,13 +975,13 @@ async function abrirChat(chatId) {
   quedanAnteriores = Boolean(datos.hay_mas);
 
   if (!turnosCargados) {
-    caja.append(elemento("div", "vacio", "Sin turnos registrados."));
+    caja.append(elemento("div", "vacio", t("sin_turnos")));
     return;
   }
 
   encabezado(
     ficha?.nombre || soloNumero(chatId),
-    `${soloNumero(chatId)} · ${datos.total} turno${datos.total === 1 ? "" : "s"}`,
+    `${soloNumero(chatId)} · ${t("turnos", datos.total)}`,
     chatId,
   );
   pintarTurnos(caja, datos.turnos, null);
@@ -786,7 +1011,7 @@ function pintarBotonDeAnteriores(caja) {
   if (viejo) viejo.remove();
   if (!quedanAnteriores) return;
 
-  const boton = elemento("button", "anteriores", "Ver turnos anteriores");
+  const boton = elemento("button", "anteriores", t("ver_anteriores"));
   boton.type = "button";
   boton.addEventListener("click", () => cargarAnteriores(boton));
   caja.prepend(boton);
@@ -795,7 +1020,7 @@ function pintarBotonDeAnteriores(caja) {
 async function cargarAnteriores(boton) {
   const caja = $("vista-chat");
   boton.disabled = true;
-  boton.textContent = "cargando…";
+  boton.textContent = t("cargando");
   try {
     const datos = await pedir(
       `/panel/conversaciones?chat_id=${encodeURIComponent(chatElegido)}` +
@@ -816,7 +1041,7 @@ async function cargarAnteriores(boton) {
   } catch (error) {
     mostrarError(error.message);
     boton.disabled = false;
-    boton.textContent = "Ver turnos anteriores";
+    boton.textContent = t("ver_anteriores");
   }
 }
 
@@ -836,7 +1061,7 @@ function burbujaDeTurno(turno) {
   respuesta.append(
     document.createTextNode(
       turno.respuesta ||
-        (turno.estado === "cancelado" ? "(cancelada por otra pregunta)" : "(sin respuesta)"),
+        (turno.estado === "cancelado" ? t("cancelada") : t("sin_respuesta")),
     ),
   );
 
@@ -851,7 +1076,7 @@ function burbujaDeTurno(turno) {
 
   if (turno.pasos.length) {
     const detalle = elemento("details", "tramoya");
-    detalle.append(elemento("summary", null, `Qué hizo para contestar (${turno.pasos.length})`));
+    detalle.append(elemento("summary", null, t("que_hizo", turno.pasos.length)));
     const pasos = elemento("ul", "pasos");
     for (const paso of turno.pasos) pasos.append(elemento("li", null, paso));
     detalle.append(pasos);
@@ -863,7 +1088,7 @@ function burbujaDeTurno(turno) {
 function abrirActividad() {
   mostrarVista("actividad");
   location.hash = "actividad";
-  encabezado("Ahora mismo", "lo que el bot está haciendo en este instante", null);
+  encabezado(t("ahora_mismo"), t("actividad_sub"), null);
   pintarActividad([...enCursoPorChat.values()]);
   pintarLista();
 }
@@ -872,7 +1097,7 @@ function pintarActividad(enCurso) {
   const caja = $("vista-actividad");
   caja.replaceChildren();
   if (!enCurso.length) {
-    caja.append(elemento("div", "vacio", "El bot está en reposo: ninguna consulta corriendo."));
+    caja.append(elemento("div", "vacio", t("reposo")));
     return;
   }
   for (const trabajo of enCurso) {
@@ -888,7 +1113,7 @@ function pintarActividad(enCurso) {
     tarjeta.append(cabeza);
 
     const pasos = elemento("ul", "pasos");
-    if (!trabajo.pasos.length) pasos.append(elemento("li", null, "pensando cómo responder…"));
+    if (!trabajo.pasos.length) pasos.append(elemento("li", null, t("pensando")));
     else for (const paso of trabajo.pasos) pasos.append(elemento("li", null, paso));
     tarjeta.append(pasos);
     caja.append(tarjeta);
@@ -900,7 +1125,7 @@ function pintarActividad(enCurso) {
 function abrirUsuarios() {
   mostrarVista("usuarios");
   location.hash = "usuarios";
-  encabezado("Usuarios", "quién puede escribirle al bot", null);
+  encabezado(t("tab_usuarios"), t("usuarios_sub"), null);
   pintarPersonas();
 }
 
@@ -911,7 +1136,7 @@ function pintarPersonas() {
   const caja = $("personas");
   caja.replaceChildren();
   if (!cacheUsuarios.length) {
-    caja.append(elemento("div", "vacio", "Todavía no hay nadie dado de alta."));
+    caja.append(elemento("div", "vacio", t("sin_usuarios")));
     return;
   }
   for (const usuario of cacheUsuarios) {
@@ -924,7 +1149,7 @@ function fichaEditable(usuario) {
 
   const retrato = elemento("button", "avatar");
   retrato.type = "button";
-  retrato.title = "Cambiar la foto";
+  retrato.title = t("cambiar_foto");
   retrato.append(avatar(usuario.numero, "", usuario.foto));
   retrato.addEventListener("click", () => elegirFoto(usuario));
 
@@ -933,7 +1158,7 @@ function fichaEditable(usuario) {
   campo.className = "nombre";
   campo.id = `nombre-${usuario.numero}`;
   campo.value = usuario.nombre || "";
-  campo.placeholder = "Nombre y área, por ejemplo: Laura, ventas";
+  campo.placeholder = t("ph_nombre");
   campo.setAttribute("aria-label", `Nombre de ${usuario.numero}`);
   campo.addEventListener("keydown", (evento) => {
     if (evento.key === "Enter") guardarNombre(usuario, campo.value);
@@ -941,16 +1166,16 @@ function fichaEditable(usuario) {
   });
   datos.append(
     campo,
-    elemento("div", "pista", `${usuario.numero} · toca la foto para cambiarla`),
+    elemento("div", "pista", t("pista_foto", usuario.numero)),
   );
 
   const acciones = elemento("div", "acciones");
-  acciones.append(boton("Guardar", "palomita", () => guardarNombre(usuario, campo.value), "buena"));
+  acciones.append(boton(t("guardar"), "palomita", () => guardarNombre(usuario, campo.value), "buena"));
   if (usuario.foto) {
-    acciones.append(boton("Quitar foto", "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
+    acciones.append(boton(t("quitar_foto"), "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
   }
   acciones.append(
-    boton("Cancelar", "tache", () => { editando = null; pintarPersonas(); }),
+    boton(t("cancelar"), "tache", () => { editando = null; pintarPersonas(); }),
   );
 
   fila.append(retrato, datos, acciones);
@@ -965,35 +1190,35 @@ function fichaDeUsuario(usuario) {
   const quien = elemento("div", "quien");
   quien.append(
     elemento("span", null, usuario.nombre || usuario.numero),
-    elemento("span", `pastilla ${usuario.estado}`, usuario.estado),
+    elemento("span", `pastilla ${usuario.estado}`, t("estado")[usuario.estado] || usuario.estado),
   );
   const cuando =
     usuario.estado === "suspendido" && usuario.suspendido_hasta
       ? `suspendido hasta el ${usuario.suspendido_hasta}`
       : usuario.nombre
-        ? `${usuario.numero} · alta ${(usuario.creado || "").slice(0, 10)}`
-        : `alta ${(usuario.creado || "").slice(0, 10)}`;
+        ? `${usuario.numero} · ${t("alta", (usuario.creado || "").slice(0, 10))}`
+        : t("alta", (usuario.creado || "").slice(0, 10));
   datos.append(quien, elemento("div", "cuando", cuando));
 
   // Dos acciones y no tres: suspender y bloquear hacian casi lo mismo y en
   // la fila no se distinguian de un vistazo.
   const acciones = elemento("div", "acciones");
   acciones.append(
-    boton("Editar", "lapiz", () => { editando = usuario.numero; pintarPersonas(); }),
+    boton(t("editar"), "lapiz", () => { editando = usuario.numero; pintarPersonas(); }),
   );
   if (usuario.estado === "activo") {
-    acciones.append(boton("Suspender", "alto", () => suspender(usuario)));
+    acciones.append(boton(t("suspender"), "alto", () => suspender(usuario)));
   } else {
     acciones.append(
       boton(
-        "Reactivar",
+        t("reactivar"),
         "palomita",
         () => cambiar("reactivar", { numero: usuario.numero }),
         "buena",
       ),
     );
   }
-  acciones.append(boton("Eliminar", "tache", () => eliminar(usuario), "peligro"));
+  acciones.append(boton(t("eliminar"), "tache", () => eliminar(usuario), "peligro"));
 
   fila.append(avatar(usuario.numero, "", usuario.foto), datos, acciones);
   return fila;
@@ -1028,7 +1253,7 @@ selectorDeFoto.addEventListener("change", async () => {
     const imagen = await new Promise((listo, falla) => {
       const lector = new FileReader();
       lector.onload = () => listo(String(lector.result));
-      lector.onerror = () => falla(new Error("No pude leer ese archivo."));
+      lector.onerror = () => falla(new Error(t("no_pude_leer")));
       lector.readAsDataURL(archivo);
     });
     await pedir("/panel/usuarios/foto", {
@@ -1092,29 +1317,13 @@ async function cambiar(accion, cuerpo) {
 
 function suspender(usuario) {
   const quien = usuario.nombre ? `${usuario.nombre} (${usuario.numero})` : usuario.numero;
-  if (
-    !confirm(
-      `Suspender a ${quien}.
-
-Deja de recibir respuestas del bot, en silencio: ` +
-        "no se entera de que fue suspendido. Puedes devolverle el acceso cuando quieras.",
-    )
-  ) {
-    return;
-  }
+  if (!confirm(t("confirmar_suspender", quien))) return;
   cambiar("suspender", { numero: usuario.numero });
 }
 
 function eliminar(usuario) {
   const quien = usuario.nombre ? `${usuario.nombre} (${usuario.numero})` : usuario.numero;
-  if (
-    !confirm(
-      `Eliminar a ${quien} de la lista.\n\nSi vuelve a escribir será un desconocido más. ` +
-        "Para dejarlo fuera conservando su historial, usa Suspender.",
-    )
-  ) {
-    return;
-  }
+  if (!confirm(t("confirmar_eliminar", quien))) return;
   cambiar("eliminar", { numero: usuario.numero });
 }
 
@@ -1155,9 +1364,78 @@ async function cargarChats() {
 }
 
 function pintarResumen() {
-  $("resumen-bienvenida").textContent =
-    `${cacheChats.length} conversación${cacheChats.length === 1 ? "" : "es"} registrada${cacheChats.length === 1 ? "" : "s"} · ` +
-    `${cacheUsuarios.length} usuario${cacheUsuarios.length === 1 ? "" : "s"} en la lista`;
+  $("resumen-bienvenida").textContent = t("resumen", cacheChats.length, cacheUsuarios.length);
+}
+
+
+/* --------------------------------------------------- tema e idioma */
+
+const ICONOS_AJUSTE = {
+  sol: `<circle cx="12" cy="12" r="4.4"/><path d="M12 1.6v3M12 19.4v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1.6 12h3M19.4 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>`,
+  luna: `<path d="M20.7 14.6A8.6 8.6 0 0 1 9.4 3.3a8.9 8.9 0 1 0 11.3 11.3z"/>`,
+};
+
+// Tres estados, no dos: mientras nadie elija, el panel sigue al sistema. En
+// cuanto se toca el boton la eleccion manda, y se recuerda.
+let tema = recordado("tema") || "sistema";
+
+const oscuroAhora = () =>
+  tema === "oscuro" ||
+  (tema === "sistema" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+function aplicarTema() {
+  const raiz = document.documentElement;
+  if (tema === "sistema") raiz.removeAttribute("data-theme");
+  else raiz.setAttribute("data-theme", tema === "oscuro" ? "dark" : "light");
+
+  const boton = $("boton-tema");
+  const aOscuro = !oscuroAhora();
+  boton.replaceChildren(iconoAjuste(aOscuro ? "luna" : "sol"));
+  boton.title = t(aOscuro ? "a_oscuro" : "a_claro");
+  boton.setAttribute("aria-label", boton.title);
+  // El papel tapiz se dibuja con el color del tema: hay que rehacerlo.
+  pintarPapelTapiz();
+}
+
+function iconoAjuste(nombre) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = ICONOS_AJUSTE[nombre];
+  return svg;
+}
+
+function aplicarIdioma() {
+  document.documentElement.lang = idioma;
+  for (const nodo of document.querySelectorAll("[data-t]")) {
+    nodo.textContent = t(nodo.dataset.t);
+  }
+  for (const nodo of document.querySelectorAll("[data-t-ph]")) {
+    nodo.placeholder = t(nodo.dataset.tPh);
+  }
+  for (const nodo of document.querySelectorAll("[data-t-aria]")) {
+    nodo.setAttribute("aria-label", t(nodo.dataset.tAria));
+  }
+  $("buscar").placeholder = t(solapa === "usuarios" ? "buscar_usuario" : "buscar_numero");
+  $("alta-nombre").placeholder = idioma === "es" ? "Laura, ventas" : "Laura, sales";
+
+  const boton = $("boton-idioma");
+  boton.replaceChildren();
+  for (const cual of ["es", "en"]) {
+    boton.append(elemento("span", cual === idioma ? "activa" : "apagada", cual.toUpperCase()));
+  }
+  boton.title = t("cambiar_idioma");
+  boton.setAttribute("aria-label", boton.title);
+
+  // Lo ya pintado se rehace: la lista, el encabezado y la vista abierta.
+  pintarLista();
+  pintarResumen();
+  if (vista === "usuarios") abrirUsuarios();
+  else if (vista === "actividad") abrirActividad();
+  else if (vista === "chat" && chatElegido) abrirChat(chatElegido).catch(() => {});
+  else $("subtitulo-principal").textContent = t("elige");
 }
 
 /* -------------------------------------------------------- solapas y latido */
@@ -1166,7 +1444,7 @@ function elegirSolapa(cual) {
   solapa = cual;
   $("tab-chats").setAttribute("aria-selected", String(cual === "chats"));
   $("tab-usuarios").setAttribute("aria-selected", String(cual === "usuarios"));
-  $("buscar").placeholder = cual === "usuarios" ? "Buscar un usuario" : "Buscar un número";
+  $("buscar").placeholder = cual === "usuarios" ? t("buscar_usuario") : t("buscar_numero");
   pintarLista();
   if (cual === "usuarios") abrirUsuarios();
 }
@@ -1187,14 +1465,13 @@ async function latido() {
   try {
     const datos = await pedir("/panel/actividad");
     $("foco").className = "foco vivo";
-    $("texto-estado").textContent =
-      datos.sesiones === 1 ? "en línea · 1 conversación" : `en línea · ${datos.sesiones} conversaciones`;
+    $("texto-estado").textContent = t("en_linea", datos.sesiones);
 
     const antes = enCursoPorChat.size;
     enCursoPorChat = new Map(datos.en_curso.map((turno) => [turno.chat_id, turno]));
     if (vista === "actividad") pintarActividad(datos.en_curso);
     if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
-      $("subtitulo-principal").textContent = "consultando…";
+      $("subtitulo-principal").textContent = t("consultando");
     }
     // El historial solo se relee cuando algo empieza o termina: son archivos
     // en disco y nadie los cambia entre medias.
@@ -1208,11 +1485,32 @@ async function latido() {
     }
   } catch (error) {
     $("foco").className = "foco muerto";
-    $("texto-estado").textContent = "sin conexión";
+    $("texto-estado").textContent = t("sin_conexion");
   }
 }
 
+$("boton-tema").addEventListener("click", () => {
+  tema = oscuroAhora() ? "claro" : "oscuro";
+  recordar("tema", tema);
+  aplicarTema();
+});
+
+$("boton-idioma").addEventListener("click", () => {
+  idioma = idioma === "es" ? "en" : "es";
+  recordar("idioma", idioma);
+  aplicarIdioma();
+  aplicarTema(); // los titulos de los botones tambien estan traducidos
+});
+
+// Mientras nadie elija tema, se sigue al sistema tambien cuando cambia solo
+// (Windows lo hace al anochecer).
+window
+  .matchMedia("(prefers-color-scheme: dark)")
+  .addEventListener("change", () => { if (tema === "sistema") aplicarTema(); });
+
 async function arranque() {
+  aplicarTema();
+  aplicarIdioma();
   try {
     await cargarUsuarios();
     await cargarChats();
