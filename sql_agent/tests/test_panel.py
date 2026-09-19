@@ -331,3 +331,28 @@ class TestEditarUsuarios:
                 "/panel/usuarios/renombrar", json={"numero": "5215512345678", "nombre": "x"}
             ).status_code == 403
             assert cliente.get("/panel/foto/5215512345678-a1b2c3d4.jpg").status_code == 403
+
+
+class TestIconoDeLaApp:
+    def test_se_sirve_el_tamaño_que_se_pide(self, cliente):
+        respuesta = cliente.get("/panel/icono/icono-32.png")
+        assert respuesta.status_code == 200
+        assert respuesta.headers["content-type"] == "image/png"
+        assert len(respuesta.content) > 200
+
+    def test_el_html_ofrece_varios_tamaños(self, cliente):
+        # El navegador elige; a 16 px quiere el de 16, no uno de 256
+        # reducido a la carrera.
+        pagina = cliente.get("/panel").text
+        for lado in (16, 32, 48):
+            assert f'sizes="{lado}x{lado}"' in pagina
+
+    def test_un_nombre_inventado_no_sirve_archivos_de_fuera(self, cliente):
+        # El nombre viene del navegador, como el de las fotos.
+        for intento in ["../../.env", "icono-32.png.txt", "cualquiera.png"]:
+            assert cliente.get(f"/panel/icono/{intento}").status_code in (404, 400), intento
+
+    def test_fuera_de_loopback_tampoco(self, usuarios, diario):
+        app = crear_app(_config(host="0.0.0.0"), AgenteFalso, usuarios, diario)
+        with TestClient(app) as c:
+            assert c.get("/panel/icono/icono-32.png").status_code == 403

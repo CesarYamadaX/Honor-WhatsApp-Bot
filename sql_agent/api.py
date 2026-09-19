@@ -6,6 +6,7 @@ solo en loopback. Nunca exponerlo en 0.0.0.0.
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -346,6 +347,24 @@ def crear_app(
         if not archivo.exists():
             raise HTTPException(status_code=404, detail="Falta panel/index.html")
         return FileResponse(archivo)
+
+    @app.get("/panel/icono/{nombre}")
+    async def ver_icono(nombre: str) -> Any:
+        """Sirve el icono de la aplicacion en el tamaño que pida el navegador.
+
+        Son PNG dibujados aparte (panel/hacer_iconos.py) y no el SVG: a 16 o
+        32 px, que es donde vive el icono, el rasterizado del navegador saca
+        el borde con escalones. Estos estan reducidos con Lanczos desde ocho
+        veces su tamaño.
+        """
+        _solo_local()
+        if not re.fullmatch(r"icono-\d{1,4}\.png|icono\.ico", nombre):
+            raise HTTPException(status_code=404, detail="No hay ese icono")
+        archivo = Path(__file__).resolve().parent / "panel" / "iconos" / nombre
+        if not archivo.exists():
+            raise HTTPException(status_code=404, detail="No hay ese icono")
+        tipo = "image/png" if nombre.endswith(".png") else "image/x-icon"
+        return FileResponse(archivo, media_type=tipo)
 
     @app.get("/panel/usuarios")
     async def listar_usuarios() -> dict:

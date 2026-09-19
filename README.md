@@ -56,6 +56,11 @@ Se abre solo al arrancar el bot, como **aplicacion**: ventana propia, sin
 barra de direcciones ni pestañas, con el logo del bot en la barra de tareas.
 Si ya hay una ventana abierta no abre otra.
 
+El icono son PNG dibujados aparte (`sql_agent/panel/hacer_iconos.py`, que
+los regenera) y no el SVG: a 16 o 32 px, que es donde vive el icono, el
+rasterizado del navegador saca el borde con escalones. Estos se dibujan ocho
+veces mas grandes y se reducen con Lanczos.
+
 La ventana usa un perfil propio en `sql_agent/datos/ventana`, y ahi el
 navegador se guarda el icono. Si algun dia se cambia el logo y la ventana
 sigue mostrando el anterior, hay que borrar esa carpeta: es desechable, se
