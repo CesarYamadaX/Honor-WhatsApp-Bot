@@ -400,12 +400,31 @@ def crear_app(
         return {"turnos": diario.turnos(limite=max(1, min(limite, 50)))}
 
     @app.get("/panel/conversaciones")
-    async def conversaciones(chat_id: str | None = None, limite: int = 50) -> dict:
+    async def conversaciones(
+        chat_id: str | None = None, limite: int = 50, salto: int = 0
+    ) -> dict:
+        """La lista de conversaciones, o una pagina de turnos de una de ellas.
+
+        Los turnos van por paginas y no todos de golpe: una conversacion de
+        meses se pintaria entera cada vez que el panel se refresca. `salto`
+        es lo que ya tiene el panel, y `hay_mas` le dice si vale la pena
+        ofrecer el boton de ver los anteriores.
+        """
         _solo_local()
         limite = max(1, min(limite, 500))
-        if chat_id:
-            return {"turnos": diario.turnos(limite=limite, chat_id=chat_id)}
-        return {"chats": diario.chats(limite=limite)}
+        if not chat_id:
+            return {"chats": diario.chats()}
+
+        salto = max(0, salto)
+        # Se pide uno de mas para saber si quedan anteriores, sin contar todo.
+        pagina = diario.turnos(limite=limite + 1, chat_id=chat_id, salto=salto)
+        hay_mas = len(pagina) > limite
+        return {
+            "turnos": pagina[:limite],
+            "salto": salto,
+            "hay_mas": hay_mas,
+            "total": diario.cuantos(chat_id),
+        }
 
     return app
 

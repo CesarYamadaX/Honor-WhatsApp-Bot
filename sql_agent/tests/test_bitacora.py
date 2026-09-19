@@ -132,3 +132,76 @@ class TestHistorial:
         diario.terminar(diario.comenzar("chat@s.whatsapp.net", "hola"), respuesta="hey")
         assert diario.turnos() == []
         assert diario.en_curso() == []
+
+
+class TestHistorialCompleto:
+    def _llenar(self, diario, chat, cuantos, desde=0):
+        for i in range(desde, desde + cuantos):
+            diario.terminar(diario.comenzar(chat, f"pregunta {i}"), respuesta=f"r{i}")
+
+    def test_se_pueden_pedir_los_turnos_anteriores(self, diario):
+        # El panel trae 50 y ofrece "ver anteriores"; sin `salto` no habria
+        # forma de llegar al turno 51 de una conversacion.
+        chat = "uno@s.whatsapp.net"
+        self._llenar(diario, chat, 120)
+
+        primera = diario.turnos(limite=50, chat_id=chat)
+        segunda = diario.turnos(limite=50, chat_id=chat, salto=50)
+
+        assert [t["pregunta"] for t in primera][:2] == ["pregunta 119", "pregunta 118"]
+        assert [t["pregunta"] for t in segunda][:2] == ["pregunta 69", "pregunta 68"]
+        # Sin repetir ni saltarse ninguno entre una pagina y la siguiente.
+        assert not set(t["inicio"] + t["pregunta"] for t in primera) & set(
+            t["inicio"] + t["pregunta"] for t in segunda
+        )
+
+    def test_el_salto_cuenta_solo_los_del_chat_pedido(self, diario):
+        # Si contara turnos de otras conversaciones, la segunda pagina se
+        # saltaria turnos que el usuario nunca llego a ver.
+        self._llenar(diario, "uno@s.whatsapp.net", 3)
+        self._llenar(diario, "dos@s.whatsapp.net", 10)
+        self._llenar(diario, "uno@s.whatsapp.net", 3, desde=100)
+
+        segunda = diario.turnos(limite=2, chat_id="uno@s.whatsapp.net", salto=2)
+        assert [t["pregunta"] for t in segunda] == ["pregunta 100", "pregunta 2"]
+
+    def test_la_lista_ve_conversaciones_viejas(self, diario, tmp_path):
+        # Antes la lista se armaba con los ultimos 2000 turnos y una
+        # conversacion sin actividad reciente desaparecia, aunque sus datos
+        # siguieran en disco.
+        import json
+
+        carpeta = tmp_path / "bitacora"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "2020-01-01.jsonl").write_text(
+            json.dumps({
+                "chat_id": "viejo@s.whatsapp.net", "pregunta": "de hace años",
+                "inicio": "2020-01-01T10:00:00", "pasos": [], "respuesta": "r",
+                "archivos": [], "idioma": "es", "segundos": 1, "estado": "listo",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self._llenar(diario, "nuevo@s.whatsapp.net", 60)
+
+        chats = {c["chat_id"]: c for c in diario.chats()}
+        assert "viejo@s.whatsapp.net" in chats
+        assert chats["viejo@s.whatsapp.net"]["ultima_pregunta"] == "de hace años"
+        assert chats["nuevo@s.whatsapp.net"]["turnos"] == 60
+
+    def test_cuantos_cuenta_todos_los_turnos_del_chat(self, diario):
+        self._llenar(diario, "uno@s.whatsapp.net", 7)
+        self._llenar(diario, "dos@s.whatsapp.net", 2)
+        assert diario.cuantos("uno@s.whatsapp.net") == 7
+        assert diario.cuantos("nadie@s.whatsapp.net") == 0
+
+    def test_el_resumen_se_recalcula_cuando_el_archivo_crece(self, diario):
+        # El resumen por archivo se recuerda para no releer la historia en
+        # cada refresco. Si no se invalidara al crecer el archivo de hoy, el
+        # panel se quedaria con la cuenta vieja toda la jornada.
+        chat = "uno@s.whatsapp.net"
+        self._llenar(diario, chat, 2)
+        assert diario.chats()[0]["turnos"] == 2
+
+        self._llenar(diario, chat, 1, desde=50)
+        assert diario.chats()[0]["turnos"] == 3
+        assert diario.chats()[0]["ultima_pregunta"] == "pregunta 50"

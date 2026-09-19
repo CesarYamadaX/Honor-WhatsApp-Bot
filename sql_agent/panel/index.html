@@ -177,6 +177,16 @@
     background-image: var(--patron);
     background-size: 340px;
   }
+  .anteriores {
+    display: block; margin: 0 auto 16px; cursor: pointer;
+    background: var(--barra); color: var(--verde-oscuro); font-weight: 600;
+    border: none; border-radius: 8px; padding: 7px 16px; font-size: 13px;
+    box-shadow: var(--sombra);
+  }
+  .anteriores:hover { filter: brightness(.97); }
+  .anteriores:focus-visible { outline: 2px solid var(--verde); outline-offset: 2px; }
+  .anteriores[disabled] { cursor: default; color: var(--tinta-2); }
+
   .dia {
     display: block; width: fit-content; margin: 0 auto 16px;
     background: var(--barra); color: var(--tinta-2);
@@ -448,9 +458,17 @@ document.documentElement.style.setProperty(
   )}")`,
 );
 
+// Cuantos turnos se traen de golpe. Una conversacion de meses no se pinta
+// entera cada vez que el panel se refresca.
+const POR_PAGINA = 50;
+
 let solapa = "chats";      // que muestra la lista de la izquierda
 let vista = "bienvenida";  // que muestra el panel de la derecha
 let chatElegido = null;
+// Cuantos turnos de la conversacion abierta ya estan pintados, para poder
+// pedir los anteriores sin repetirlos.
+let turnosCargados = 0;
+let quedanAnteriores = false;
 let filtro = "";
 let cacheChats = [];
 let cacheUsuarios = [];
@@ -666,27 +684,83 @@ async function abrirChat(chatId) {
   );
   pintarLista();
 
-  const datos = await pedir(`/panel/conversaciones?chat_id=${encodeURIComponent(chatId)}`);
+  const datos = await pedir(
+    `/panel/conversaciones?chat_id=${encodeURIComponent(chatId)}&limite=${POR_PAGINA}`,
+  );
   const caja = $("vista-chat");
   caja.replaceChildren();
+  turnosCargados = datos.turnos.length;
+  quedanAnteriores = Boolean(datos.hay_mas);
 
-  // Del mas viejo al mas nuevo, como se lee una conversacion.
-  const turnos = [...datos.turnos].reverse();
-  if (!turnos.length) {
+  if (!turnosCargados) {
     caja.append(elemento("div", "vacio", "Sin turnos registrados."));
     return;
   }
 
+  encabezado(
+    soloNumero(chatId),
+    `${datos.total} turno${datos.total === 1 ? "" : "s"} · toca uno para ver qué hizo`,
+    chatId,
+  );
+  pintarTurnos(caja, datos.turnos, null);
+  pintarBotonDeAnteriores(caja);
+  caja.scrollTop = caja.scrollHeight;
+}
+
+// Del mas viejo al mas nuevo, como se lee una conversacion. Devuelve el dia
+// del primer turno pintado, para no repetir el separador al cargar mas.
+function pintarTurnos(caja, turnos, antesDe) {
+  const trozo = document.createDocumentFragment();
   let diaAnterior = null;
-  for (const turno of turnos) {
+  for (const turno of [...turnos].reverse()) {
     const dia = diaLargo(turno.inicio);
     if (dia !== diaAnterior) {
-      caja.append(elemento("span", "dia", dia));
+      trozo.append(elemento("span", "dia", dia));
       diaAnterior = dia;
     }
-    caja.append(burbujaDeTurno(turno));
+    trozo.append(burbujaDeTurno(turno));
   }
-  caja.scrollTop = caja.scrollHeight;
+  if (antesDe) caja.insertBefore(trozo, antesDe);
+  else caja.append(trozo);
+}
+
+function pintarBotonDeAnteriores(caja) {
+  const viejo = caja.querySelector(".anteriores");
+  if (viejo) viejo.remove();
+  if (!quedanAnteriores) return;
+
+  const boton = elemento("button", "anteriores", "Ver turnos anteriores");
+  boton.type = "button";
+  boton.addEventListener("click", () => cargarAnteriores(boton));
+  caja.prepend(boton);
+}
+
+async function cargarAnteriores(boton) {
+  const caja = $("vista-chat");
+  boton.disabled = true;
+  boton.textContent = "cargando…";
+  try {
+    const datos = await pedir(
+      `/panel/conversaciones?chat_id=${encodeURIComponent(chatElegido)}` +
+        `&limite=${POR_PAGINA}&salto=${turnosCargados}`,
+    );
+    turnosCargados += datos.turnos.length;
+    quedanAnteriores = Boolean(datos.hay_mas);
+
+    // Los nuevos entran ARRIBA, asi que la pagina crece hacia atras y lo que
+    // el usuario estaba mirando se le iria de la pantalla. Se compensa el
+    // scroll con lo que crecio.
+    const altoAntes = caja.scrollHeight;
+    const arribaAntes = caja.scrollTop;
+    pintarTurnos(caja, datos.turnos, caja.firstChild);
+    caja.scrollTop = arribaAntes + (caja.scrollHeight - altoAntes);
+
+    pintarBotonDeAnteriores(caja);
+  } catch (error) {
+    mostrarError(error.message);
+    boton.disabled = false;
+    boton.textContent = "Ver turnos anteriores";
+  }
 }
 
 function burbujaDeTurno(turno) {

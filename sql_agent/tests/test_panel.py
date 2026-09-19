@@ -169,3 +169,45 @@ class TestNoQuedaExpuesto:
         app = crear_app(_config(host="0.0.0.0"), AgenteFalso, usuarios, diario)
         with TestClient(app) as c:
             assert c.post("/ask", json={"chat_id": AUTORIZADO, "text": "x"}).status_code == 200
+
+
+class TestVerTodoElHistorial:
+    def _conversacion(self, tmp_path, usuarios, cuantos):
+        diario = Bitacora(tmp_path / "bitacora")
+        app = crear_app(_config(), AgenteFalso, usuarios, diario)
+        cliente = TestClient(app)
+        with cliente:
+            for i in range(cuantos):
+                cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": f"pregunta {i}"})
+            yield cliente
+
+    def test_una_conversacion_larga_se_trae_por_paginas(self, tmp_path, usuarios):
+        # Traerla entera dejaria al panel pintando meses de historia cada vez
+        # que se refresca.
+        for cliente in self._conversacion(tmp_path, usuarios, 60):
+            datos = cliente.get(
+                f"/panel/conversaciones?chat_id={AUTORIZADO}&limite=50"
+            ).json()
+            assert len(datos["turnos"]) == 50
+            assert datos["hay_mas"] is True
+            assert datos["total"] == 60
+
+    def test_la_segunda_pagina_trae_los_anteriores(self, tmp_path, usuarios):
+        for cliente in self._conversacion(tmp_path, usuarios, 60):
+            segunda = cliente.get(
+                f"/panel/conversaciones?chat_id={AUTORIZADO}&limite=50&salto=50"
+            ).json()
+            assert [t["pregunta"] for t in segunda["turnos"]] == [
+                f"pregunta {i}" for i in range(9, -1, -1)
+            ]
+            assert segunda["hay_mas"] is False
+
+    def test_sin_mas_turnos_no_se_ofrece_seguir(self, tmp_path, usuarios):
+        # `hay_mas` es lo que decide si el panel muestra "ver anteriores";
+        # un boton que no trae nada es peor que no tenerlo.
+        for cliente in self._conversacion(tmp_path, usuarios, 3):
+            datos = cliente.get(
+                f"/panel/conversaciones?chat_id={AUTORIZADO}&limite=50"
+            ).json()
+            assert datos["hay_mas"] is False
+            assert len(datos["turnos"]) == 3

@@ -77,6 +77,8 @@ class Bitacora:
         self.carpeta = Path(carpeta) if carpeta else None
         self._candado = threading.Lock()
         self._en_curso: dict[str, Turno] = {}
+        # archivo -> (tamaño cuando se leyo, resumen por chat)
+        self._resumenes: dict[Path, tuple[int, dict[str, dict]]] = {}
 
     # --- lo que esta pasando ahora ---------------------------------------
 
@@ -150,44 +152,106 @@ class Bitacora:
             # igual debe recibir su respuesta.
             pass
 
-    def turnos(self, limite: int = 100, chat_id: str | None = None) -> list[dict]:
-        """Los turnos mas recientes primero, opcionalmente de un solo chat."""
+    def _archivos(self) -> list[Path]:
+        """Los archivos de la bitacora, del dia mas reciente al mas viejo."""
         if self.carpeta is None or not self.carpeta.exists():
             return []
-        # De atras hacia adelante por dia: casi siempre lo que se busca esta
-        # en el archivo de hoy y no hay que leer meses de historia.
-        encontrados: list[dict] = []
-        for archivo in sorted(self.carpeta.glob("*.jsonl"), reverse=True):
+        return sorted(self.carpeta.glob("*.jsonl"), reverse=True)
+
+    @staticmethod
+    def _leer(archivo: Path) -> list[dict]:
+        try:
+            lineas = archivo.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        turnos = []
+        for linea in lineas:
             try:
-                lineas = archivo.read_text(encoding="utf-8").splitlines()
-            except OSError:
+                turnos.append(json.loads(linea))
+            except json.JSONDecodeError:
                 continue
-            for linea in reversed(lineas):
-                try:
-                    turno = json.loads(linea)
-                except json.JSONDecodeError:
-                    continue
+        return turnos
+
+    def turnos(
+        self, limite: int = 100, chat_id: str | None = None, salto: int = 0
+    ) -> list[dict]:
+        """Los turnos mas recientes primero, opcionalmente de un solo chat.
+
+        `salto` descarta los N mas recientes antes de empezar a contar, que es
+        como el panel pide "los anteriores a los que ya tengo". De atras hacia
+        adelante por dia: para la primera pagina basta con abrir el archivo de
+        hoy, aunque haya meses de historia detras.
+        """
+        encontrados: list[dict] = []
+        descartados = 0
+        for archivo in self._archivos():
+            for turno in reversed(self._leer(archivo)):
                 if chat_id and turno.get("chat_id") != chat_id:
+                    continue
+                if descartados < salto:
+                    descartados += 1
                     continue
                 encontrados.append(turno)
                 if len(encontrados) >= limite:
                     return encontrados
         return encontrados
 
-    def chats(self, limite: int = 50) -> list[dict]:
-        """Un renglon por conversacion: cuantos turnos y cuando fue el ultimo."""
+    def _resumen_de(self, archivo: Path) -> dict[str, dict]:
+        """Cuantos turnos y cual fue el ultimo, por chat, dentro de UN archivo.
+
+        El de un dia ya pasado no vuelve a cambiar nunca, asi que se recuerda
+        lo calculado y solo se relee el de hoy, y solo cuando creció. Sin esto
+        habria que releer toda la historia cada vez que el panel se refresca.
+        """
+        try:
+            firma = archivo.stat().st_size
+        except OSError:
+            return {}
+        with self._candado:
+            guardado = self._resumenes.get(archivo)
+            if guardado is not None and guardado[0] == firma:
+                return guardado[1]
+
         resumen: dict[str, dict] = {}
-        for turno in self.turnos(limite=2000):
+        for turno in self._leer(archivo):
             chat = turno.get("chat_id", "")
-            if chat not in resumen:
-                resumen[chat] = {
-                    "chat_id": chat,
-                    "turnos": 0,
-                    "ultimo": turno.get("inicio", ""),
-                    "ultima_pregunta": turno.get("pregunta", ""),
-                }
-            resumen[chat]["turnos"] += 1
-        return sorted(resumen.values(), key=lambda c: c["ultimo"], reverse=True)[:limite]
+            fila = resumen.setdefault(
+                chat, {"chat_id": chat, "turnos": 0, "ultimo": "", "ultima_pregunta": ""}
+            )
+            fila["turnos"] += 1
+            if turno.get("inicio", "") >= fila["ultimo"]:
+                fila["ultimo"] = turno.get("inicio", "")
+                fila["ultima_pregunta"] = turno.get("pregunta", "")
+
+        with self._candado:
+            self._resumenes[archivo] = (firma, resumen)
+        return resumen
+
+    def chats(self, limite: int = 500) -> list[dict]:
+        """Un renglon por conversacion, mirando TODA la historia.
+
+        Antes solo se miraban los ultimos 2000 turnos, y una conversacion sin
+        actividad reciente desaparecia de la lista aunque sus datos siguieran
+        en disco. Leerlo todo cuesta poco: un turno ocupa unos 330 bytes.
+        """
+        total: dict[str, dict] = {}
+        for archivo in self._archivos():
+            for chat, fila in self._resumen_de(archivo).items():
+                acumulado = total.setdefault(
+                    chat, {"chat_id": chat, "turnos": 0, "ultimo": "", "ultima_pregunta": ""}
+                )
+                acumulado["turnos"] += fila["turnos"]
+                if fila["ultimo"] >= acumulado["ultimo"]:
+                    acumulado["ultimo"] = fila["ultimo"]
+                    acumulado["ultima_pregunta"] = fila["ultima_pregunta"]
+        return sorted(total.values(), key=lambda c: c["ultimo"], reverse=True)[:limite]
+
+    def cuantos(self, chat_id: str) -> int:
+        """Cuantos turnos tiene una conversacion en total."""
+        return sum(
+            resumen.get(chat_id, {}).get("turnos", 0)
+            for resumen in (self._resumen_de(a) for a in self._archivos())
+        )
 
 
 def paso(texto: str) -> None:

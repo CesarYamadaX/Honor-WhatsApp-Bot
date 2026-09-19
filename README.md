@@ -77,7 +77,12 @@ Tres vistas:
 - **Usuarios** — alta, suspension y baja. Los cambios entran de inmediato,
   sin reiniciar.
 - **Conversaciones** — cada turno con la respuesta del bot y, desplegable,
-  lo que hizo para construirla.
+  lo que hizo para construirla. Se guardan TODAS: la lista mira la historia
+  completa, y dentro de una conversacion se traen 50 turnos a la vez con un
+  boton para ver los anteriores. No se guarda lo que no llega al agente (un
+  numero no autorizado, un "cancela", un mensaje que rebota con 429), y las
+  preguntas y respuestas se recortan a 4000 caracteres: el texto entero ya
+  viajo por WhatsApp. Un turno ocupa unos 330 bytes.
 
 Los estados de un usuario:
 
