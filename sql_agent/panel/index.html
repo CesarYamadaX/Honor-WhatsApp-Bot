@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panel del bot</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2300a884'/%3E%3Cpath d='M9 22l1-3.4A7.4 7.4 0 1 1 13 24z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%231877c9'/%3E%3Cpath d='M9 22l1-3.4A7.4 7.4 0 1 1 13 24z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   /* Dos paneles como WhatsApp Web: la lista a la izquierda, la conversacion
      a la derecha. Sin tipografias de internet: el panel se abre justo cuando
@@ -20,16 +20,23 @@
     --tinta: #111b21;
     --tinta-2: #667781;
     --tinta-3: #8696a0;
-    --verde: #00a884;
-    --verde-oscuro: #008069;
+    /* El acento es azul, no el verde de WhatsApp: se toma prestada la
+       disposicion, no la marca -- y el azul es el de Honor. */
+    --acento: #1877c9;
+    --acento-fuerte: #0f5ba6;
     --burbuja-entra: #ffffff;
-    --burbuja-sale: #d9fdd3;
+    --burbuja-sale: #d6e9fb;
+    /* Las palomitas y el texto dentro de una burbuja de color llevan su
+       propio tono: el gris neutro se apaga sobre el fondo teñido. */
+    --palomas: #1877c9;
+    --tinta-en-burbuja: #667781;
+    --tinta-en-fallo: #667781;
     --seleccion: #f0f2f5;
     --alto: #ea0038;
     --alto-suave: #ffe5ea;
     --aviso: #b26b00;
     --aviso-suave: #fff3e0;
-    --ok-suave: #e7f8ef;
+    --ok-suave: #e6f0fb;
     --sombra: 0 1px 0.5px rgba(11,20,26,.13);
     --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
     --sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
@@ -46,16 +53,19 @@
       --tinta: #e9edef;
       --tinta-2: #8696a0;
       --tinta-3: #667781;
-      --verde: #00a884;
-      --verde-oscuro: #00a884;
+      --acento: #53a6f0;
+      --acento-fuerte: #53a6f0;
       --burbuja-entra: #202c33;
-      --burbuja-sale: #005c4b;
+      --burbuja-sale: #0b4a7a;
+      --palomas: #53bdeb;
+      --tinta-en-burbuja: #c2d3d8;
+      --tinta-en-fallo: #c2a8ae;
       --seleccion: #2a3942;
       --alto: #f15c6d;
       --alto-suave: #3b1a21;
       --aviso: #e3ae5a;
       --aviso-suave: #33260f;
-      --ok-suave: #0f2e23;
+      --ok-suave: #10283a;
       --sombra: 0 1px 0.5px rgba(11,20,26,.38);
       --trazo-doodle: rgba(233,237,239,.04);
     }
@@ -111,7 +121,7 @@
     color: var(--tinta-2); font-size: 12.5px; white-space: nowrap;
   }
   .foco { width: 9px; height: 9px; border-radius: 50%; background: var(--tinta-3); flex: none; }
-  .foco.vivo { background: var(--verde); }
+  .foco.vivo { background: var(--acento); }
   .foco.muerto { background: var(--alto); }
 
   /* --- avatar --- */
@@ -122,7 +132,7 @@
     font-size: 13px; font-weight: 600; letter-spacing: .01em;
   }
   .avatar.chico { width: 38px; height: 38px; font-size: 12px; }
-  .avatar.verde { background: var(--verde); color: #fff; }
+  .avatar.acento { background: var(--acento); color: #fff; }
 
   /* --- buscador y solapas --- */
   .herramientas { padding: 8px 12px; display: flex; flex-direction: column; gap: 9px; flex: none; }
@@ -132,7 +142,7 @@
     background: var(--barra); color: var(--tinta);
     padding: 9px 12px 9px 40px; font: inherit; font-size: 14px;
   }
-  .buscador input:focus-visible { outline: 2px solid var(--verde); }
+  .buscador input:focus-visible { outline: 2px solid var(--acento); }
   .buscador svg { position: absolute; left: 14px; top: 11px; fill: var(--tinta-3); }
 
   .solapas { display: flex; gap: 8px; }
@@ -140,8 +150,8 @@
     border: none; background: var(--barra); color: var(--tinta-2);
     border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer;
   }
-  .solapas button[aria-selected="true"] { background: var(--ok-suave); color: var(--verde-oscuro); font-weight: 600; }
-  .solapas button:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  .solapas button[aria-selected="true"] { background: var(--ok-suave); color: var(--acento-fuerte); font-weight: 600; }
+  .solapas button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
   .solapas .cuenta { font-variant-numeric: tabular-nums; opacity: .85; }
 
   /* --- lista lateral --- */
@@ -153,7 +163,7 @@
   }
   .renglon:hover { background: var(--seleccion); }
   .renglon[aria-current="true"] { background: var(--seleccion); }
-  .renglon:focus-visible { outline: 2px solid var(--verde); outline-offset: -2px; }
+  .renglon:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }
   .renglon .centro { flex: 1; min-width: 0; }
   .renglon .arriba { display: flex; align-items: baseline; gap: 8px; }
   .renglon .titulo {
@@ -164,10 +174,10 @@
   .renglon .abajo { display: flex; align-items: center; gap: 7px; color: var(--tinta-2); font-size: 14px; }
   .renglon .vista-previa { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
   .renglon .globo {
-    background: var(--verde); color: #fff; border-radius: 11px; flex: none;
+    background: var(--acento); color: #fff; border-radius: 11px; flex: none;
     font-size: 12px; font-weight: 600; padding: 1px 7px; min-width: 21px; text-align: center;
   }
-  .escribiendo { color: var(--verde); }
+  .escribiendo { color: var(--acento); }
   .fijado { background: var(--ok-suave); }
 
   /* --- conversacion --- */
@@ -179,12 +189,12 @@
   }
   .anteriores {
     display: block; margin: 0 auto 16px; cursor: pointer;
-    background: var(--barra); color: var(--verde-oscuro); font-weight: 600;
+    background: var(--barra); color: var(--acento-fuerte); font-weight: 600;
     border: none; border-radius: 8px; padding: 7px 16px; font-size: 13px;
     box-shadow: var(--sombra);
   }
   .anteriores:hover { filter: brightness(.97); }
-  .anteriores:focus-visible { outline: 2px solid var(--verde); outline-offset: 2px; }
+  .anteriores:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   .anteriores[disabled] { cursor: default; color: var(--tinta-2); }
 
   .dia {
@@ -200,6 +210,8 @@
   }
   .burbuja.entra { background: var(--burbuja-entra); border-top-left-radius: 0; margin-right: auto; }
   .burbuja.sale { background: var(--burbuja-sale); border-top-right-radius: 0; margin-left: auto; }
+  .burbuja.sale .pie-burbuja { color: var(--tinta-en-burbuja); }
+  .burbuja.fallo .pie-burbuja { color: var(--tinta-en-fallo); }
   /* La colita de las burbujas. */
   .burbuja::before { content: ""; position: absolute; top: 0; width: 9px; height: 13px; }
   .burbuja.entra::before {
@@ -220,7 +232,7 @@
     font-size: 11px; color: var(--tinta-2);
     display: flex; align-items: center; gap: 5px; white-space: nowrap;
   }
-  .palomas { fill: var(--verde); }
+  .palomas { fill: var(--palomas); }
   .palomas.rojas { fill: var(--alto); }
 
   details.tramoya { clear: both; margin-top: 7px; }
@@ -230,7 +242,7 @@
   }
   details.tramoya summary::-webkit-details-marker { display: none; }
   details.tramoya summary::before { content: "⚙ "; }
-  details.tramoya summary:focus-visible { outline: 2px solid var(--verde); outline-offset: 2px; }
+  details.tramoya summary:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   .pasos {
     margin: 5px 0 0; padding: 9px 11px; list-style: none;
     background: var(--panel); border-radius: 7px; box-shadow: var(--sombra);
@@ -260,9 +272,9 @@
     border: none; border-bottom: 2px solid var(--borde-fuerte);
     background: none; color: var(--tinta); padding: 7px 2px; font: inherit; width: 100%;
   }
-  label.campo input:focus-visible { outline: none; border-bottom-color: var(--verde); }
+  label.campo input:focus-visible { outline: none; border-bottom-color: var(--acento); }
   button.principal {
-    background: var(--verde-oscuro); color: #fff; border: none; border-radius: 20px;
+    background: var(--acento-fuerte); color: #fff; border: none; border-radius: 20px;
     padding: 9px 22px; font-weight: 600; cursor: pointer; font-size: 14px;
   }
   button.principal:hover { filter: brightness(1.08); }
@@ -276,7 +288,7 @@
   .persona .quien { font-size: 15px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
   .persona .cuando { color: var(--tinta-2); font-size: 12.5px; }
   .pastilla { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 11px; white-space: nowrap; }
-  .pastilla.activo { background: var(--ok-suave); color: var(--verde-oscuro); }
+  .pastilla.activo { background: var(--ok-suave); color: var(--acento-fuerte); }
   .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
   .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   button.accion {
@@ -288,14 +300,14 @@
   button.accion svg { fill: currentColor; flex: none; }
   button.accion:hover { border-color: var(--aviso); color: var(--aviso); }
   button.accion.peligro:hover { border-color: var(--alto); color: var(--alto); }
-  button.accion.buena:hover { border-color: var(--verde); color: var(--verde-oscuro); }
-  button.accion:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  button.accion.buena:hover { border-color: var(--acento); color: var(--acento-fuerte); }
+  button.accion:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
 
   /* --- actividad --- */
   .trabajo {
     background: var(--panel); border-radius: 8px; padding: 14px 16px;
     box-shadow: var(--sombra); margin-bottom: 12px;
-    border-left: 4px solid var(--verde);
+    border-left: 4px solid var(--acento);
   }
   .trabajo .cabeza { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-bottom: 9px; }
   .trabajo .pregunta { font-weight: 600; flex: 1 1 260px; }
@@ -310,7 +322,7 @@
   .bienvenida {
     flex: 1; display: grid; place-content: center; justify-items: center;
     gap: 14px; text-align: center; padding: 30px; background: var(--panel);
-    border-bottom: 5px solid var(--verde);
+    border-bottom: 5px solid var(--acento);
   }
   .bienvenida h2 { font-weight: 300; font-size: 31px; margin: 0; color: var(--tinta-2); }
   .bienvenida p { color: var(--tinta-3); font-size: 14px; margin: 0; max-width: 48ch; }
@@ -341,7 +353,7 @@
   <aside class="lateral">
     <div class="barra">
       <div class="marca">
-        <div class="avatar verde" aria-hidden="true">
+        <div class="avatar acento" aria-hidden="true">
           <svg width="23" height="23" viewBox="0 0 24 24" fill="#fff"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 2a8 8 0 1 1-4.2 14.8l-.4-.2-2.6.7.7-2.5-.3-.4A8 8 0 0 1 12 4z"/></svg>
         </div>
         <div style="min-width:0">
@@ -580,7 +592,7 @@ function pintarListaChats(caja) {
       ),
     );
     centro.append(arriba, abajo);
-    const ico = elemento("div", "avatar verde", String(enCursoPorChat.size));
+    const ico = elemento("div", "avatar acento", String(enCursoPorChat.size));
     fijado.append(ico, centro);
     if (vista === "actividad") fijado.setAttribute("aria-current", "true");
     fijado.addEventListener("click", abrirActividad);
