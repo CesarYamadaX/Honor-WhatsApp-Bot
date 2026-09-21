@@ -117,6 +117,105 @@ TEXTOS = {
 }
 
 
+# Las piezas de la ficha que acompana a un pronostico. Van aparte de TEXTOS
+# porque llevan numeros dentro. El pronostico NO puede salir sin ella: un
+# numero del futuro sin decir de que sale invita a leerlo como un dato
+# cerrado, y quien lo recibe no tiene forma de juzgarlo.
+#
+# Lo que NO va aqui es el nombre de la tabla: la regla 6 del prompt prohibe
+# ensenarle al usuario nombres del esquema, y "32 meses de enero 2024 a
+# agosto 2026" dice lo mismo sin filtrarlos.
+_BASE_DEL_PRONOSTICO = {
+    ESPANOL: {
+        "titulo": "En que me base:",
+        "historia": "- {meses} meses de historia, de {desde} a {hasta}.",
+        "estacional": (
+            "- Metodo: el mismo mes del ano anterior, ajustado por el "
+            "crecimiento de los ultimos 6 meses."
+        ),
+        "tendencia": (
+            "- Metodo: la tendencia de los ultimos {ventana} meses. Ojo: no "
+            "hay un ano completo de historia, asi que NO toma en cuenta la "
+            "estacionalidad, que en estos datos pesa mucho."
+        ),
+        "precision": (
+            "- Precision: este metodo se equivoca alrededor de {error} en "
+            "pruebas contra meses que ya ocurrieron."
+        ),
+        "descartado": (
+            "- Deje fuera {mes} porque ese mes todavia no termina y habria "
+            "jalado el pronostico hacia abajo."
+        ),
+    },
+    INGLES: {
+        "titulo": "What this is based on:",
+        "historia": "- {meses} months of history, from {desde} to {hasta}.",
+        "estacional": (
+            "- Method: the same month last year, adjusted by the growth of "
+            "the last 6 months."
+        ),
+        "tendencia": (
+            "- Method: the trend of the last {ventana} months. Note: there "
+            "isn't a full year of history, so it does NOT account for "
+            "seasonality, which is strong in this data."
+        ),
+        "precision": (
+            "- Accuracy: this method is off by about {error} when tested "
+            "against months that already happened."
+        ),
+        "descartado": (
+            "- I left {mes} out because that month isn't over yet and it "
+            "would have dragged the forecast down."
+        ),
+    },
+    CHINO: {
+        "titulo": "预测依据：",
+        "historia": "- {meses} 个月的历史数据，从 {desde} 到 {hasta}。",
+        "estacional": "- 方法：去年同月的数据，按最近 6 个月的增长率调整。",
+        "tendencia": (
+            "- 方法：最近 {ventana} 个月的趋势。注意：历史数据不足一年，"
+            "因此没有考虑季节性，而这些数据的季节性很强。"
+        ),
+        "precision": "- 准确度：用已经发生的月份检验时，该方法的误差约为 {error}。",
+        "descartado": "- {mes} 没有计入，因为该月尚未结束，会把预测拉低。",
+    },
+}
+
+
+def base_del_pronostico(
+    idioma: str,
+    *,
+    meses_usados: int,
+    desde: tuple[int, int] | None,
+    hasta: tuple[int, int] | None,
+    estacional: bool,
+    ventana: int,
+    error: str,
+    descartado: tuple[int, int] | None,
+) -> str:
+    """La ficha de en que se baso un pronostico, en el idioma del usuario."""
+    piezas = _BASE_DEL_PRONOSTICO.get(idioma, _BASE_DEL_PRONOSTICO[ESPANOL])
+    lineas = [piezas["titulo"]]
+    if desde and hasta:
+        lineas.append(
+            piezas["historia"].format(
+                meses=meses_usados,
+                desde=f"{desde[0]}-{desde[1]:02d}",
+                hasta=f"{hasta[0]}-{hasta[1]:02d}",
+            )
+        )
+    if estacional:
+        lineas.append(piezas["estacional"])
+        lineas.append(piezas["precision"].format(error=error))
+    else:
+        lineas.append(piezas["tendencia"].format(ventana=ventana))
+    if descartado:
+        lineas.append(
+            piezas["descartado"].format(mes=f"{descartado[0]}-{descartado[1]:02d}")
+        )
+    return "\n".join(lineas)
+
+
 def sin_acentos(texto: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFD", texto) if not unicodedata.combining(c)

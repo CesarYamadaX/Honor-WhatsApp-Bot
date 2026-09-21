@@ -63,6 +63,13 @@ class Pronostico:
     metodo: str
     descartado: tuple[int, int] | None  # el mes incompleto que se dejo fuera
     confiable: bool
+    # En que se baso. Viaja con el pronostico porque el usuario lo ve: un
+    # numero del futuro sin decir de donde sale no se puede juzgar, y "no se
+    # en que se baso" fue justo lo que se pidio arreglar.
+    meses_usados: int = 0
+    desde: tuple[int, int] | None = None  # primer mes de la historia
+    hasta: tuple[int, int] | None = None  # ultimo mes completo que se uso
+    ventana: int = 0  # meses que mira el metodo de tendencia
 
 
 def _ultimo_mes_incompleto(serie: list[tuple[int, int, float]]) -> bool:
@@ -146,16 +153,31 @@ def proyectar(serie: list[tuple[int, int, float]], meses: int = 3) -> Pronostico
     if len(serie) < 2:
         return None
 
+    base = {
+        "meses_usados": len(serie),
+        "desde": (serie[0][0], serie[0][1]),
+        "hasta": (serie[-1][0], serie[-1][1]),
+    }
+
     if len(serie) >= MESES_PARA_ESTACIONALIDAD:
         estacional = _estacional(serie, meses)
         if estacional:
-            return Pronostico(estacional, "mismo mes del anio anterior ajustado por el crecimiento reciente", descartado, True)
+            return Pronostico(
+                estacional,
+                "mismo mes del anio anterior ajustado por el crecimiento reciente",
+                descartado,
+                True,
+                **base,
+            )
 
+    ventana = min(len(serie), 12)
     return Pronostico(
         _tendencia(serie, meses),
-        f"tendencia de los ultimos {min(len(serie), 12)} meses",
+        f"tendencia de los ultimos {ventana} meses",
         descartado,
         # Sin un anio completo no hay estacionalidad, y en estos datos la
         # estacionalidad es lo que mas pesa: diciembre casi duplica a febrero.
         False,
+        ventana=ventana,
+        **base,
     )

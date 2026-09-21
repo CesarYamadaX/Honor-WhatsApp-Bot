@@ -117,6 +117,53 @@ class TestResultadoAncho:
         assert _plan(df).es_temporal is False
 
 
+class TestElEjeDeTiempo:
+    """Una fecha por dias no se lee en el telefono: "que el eje X sea de
+    meses en lugar de por dias porque no se ve bien"."""
+
+    def _dias(self, dias: int):
+        return pd.DataFrame(
+            {
+                "Fecha": pd.date_range("2026-01-01", periods=dias, freq="D"),
+                "QTY": range(dias),
+            }
+        )
+
+    def test_medio_anio_de_dias_se_agrupa_por_mes(self):
+        # 180 dias son 180 etiquetas de diez caracteres. Antes ni se
+        # dibujaba: pasaban de MAX_CATEGORIAS y la grafica se descartaba
+        # entera.
+        plan = _plan(self._dias(180))
+        assert plan is not None
+        assert plan.eje == "periodo"
+        assert plan.etiquetas == [f"2026-{m:02d}" for m in range(1, 7)]
+
+    def test_el_mes_junta_lo_de_sus_dias(self):
+        # Enero son los dias 0..30: la suma tiene que ser la del mes, no el
+        # ultimo dia ni el primero.
+        plan = _plan(self._dias(180))
+        assert plan.series["QTY"][0] == sum(range(31))
+
+    def test_dentro_de_un_mes_se_conservan_los_dias(self):
+        # Ahi son pocos y se leen bien; agrupar dejaria un solo punto, que no
+        # dibuja nada.
+        plan = _plan(self._dias(10))
+        assert plan.etiquetas[0] == "2026-01-01"
+        assert len(plan.etiquetas) == 10
+
+    def test_un_promedio_no_se_suma_al_juntar_los_dias(self):
+        # Doce precios promedio sumados dan un numero que no existe.
+        df = pd.DataFrame(
+            {
+                "Fecha": pd.date_range("2026-01-01", periods=59, freq="D"),
+                "Precio promedio": [100.0] * 59,
+            }
+        )
+        plan = _plan(df)
+        # Enero y febrero: el promedio de cada mes sigue siendo 100, no 3 100.
+        assert plan.series["Precio promedio"] == [100.0, 100.0]
+
+
 class TestLoQueSeLeDiceAlAgente:
     """Cuando no hay grafica, el agente tiene que enterarse.
 

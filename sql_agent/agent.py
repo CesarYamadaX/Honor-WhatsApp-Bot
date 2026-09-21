@@ -393,6 +393,13 @@ class ContextoPeticion:
     # pronosticos -- el de la herramienta y el del guardian de `consultar_sql`
     # -- calculados sobre series distintas.
     pronostico_hecho: bool = False
+    # La ficha de en que se baso el pronostico, ya en el idioma del usuario.
+    # La pega `responder` al final del mensaje: que aparezca no puede depender
+    # de que el modelo se acuerde de contarlo.
+    base_del_pronostico: str = ""
+    # El idioma detectado de la pregunta, para los textos que escribe el
+    # servicio y no el modelo.
+    idioma: str = idiomas.POR_DEFECTO
     # Cuando empezo la peticion, para saber cuanto queda del presupuesto.
     inicio: float = field(default_factory=time.monotonic)
     # Lo pone la API cuando llega un mensaje nuevo del mismo chat. No hay
@@ -445,9 +452,12 @@ def contexto_peticion(
     engine: Engine,
     cancelacion: threading.Event | None = None,
     pregunta: str = "",
+    idioma: str = idiomas.POR_DEFECTO,
 ) -> Iterator[ContextoPeticion]:
     """Activa un contexto por petición, en lugar del viejo global _db_instance."""
-    ctx = ContextoPeticion(engine=engine, cancelacion=cancelacion, pregunta=pregunta)
+    ctx = ContextoPeticion(
+        engine=engine, cancelacion=cancelacion, pregunta=pregunta, idioma=idioma
+    )
     testigo = _contexto.set(ctx)
     try:
         yield ctx
@@ -1001,6 +1011,27 @@ def _serie_mensual(df: pd.DataFrame) -> list[tuple[int, int, float]] | None:
     return serie or None
 
 
+def _registrar_base(ctx: "ContextoPeticion", resultado) -> None:
+    """Guarda, en el idioma del usuario, la ficha de en que se baso.
+
+    Se pidio que el mensaje diga de donde sale el numero. No se le encarga al
+    modelo: la ficha se arma con los datos de la proyeccion y `responder` la
+    pega al final. Asi dice siempre los mismos meses y el mismo margen que se
+    usaron de verdad.
+    """
+    ctx.pronostico_hecho = True
+    ctx.base_del_pronostico = idiomas.base_del_pronostico(
+        ctx.idioma,
+        meses_usados=resultado.meses_usados,
+        desde=resultado.desde,
+        hasta=resultado.hasta,
+        estacional=resultado.confiable,
+        ventana=resultado.ventana,
+        error=f"{ERROR_TIPICO:.0%}",
+        descartado=resultado.descartado,
+    )
+
+
 def _texto_del_pronostico(resultado) -> str:
     """El pronostico como se lo lee el modelo, con sus advertencias."""
     lineas = [f"Pronostico ({resultado.metodo}):"]
@@ -1026,6 +1057,15 @@ def _texto_del_pronostico(resultado) -> str:
             "datos es fuerte (diciembre casi duplica a febrero). Avisale al "
             "usuario que es una estimacion gruesa."
         )
+
+    # La ficha con los meses, el metodo y el margen se la pega `responder` al
+    # final del mensaje, ya traducida. Si ademas el modelo la contara con sus
+    # palabras, el usuario la leeria dos veces.
+    lineas.append(
+        "La ficha con los meses de historia, el metodo y el margen se agrega "
+        "sola al final del mensaje: NO la repitas, solo da el numero y su "
+        "lectura."
+    )
     return "\n".join(lineas)
 
 
@@ -1078,7 +1118,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
             "proyectar. Trae la serie completa, sin filtrar por anio."
         )
 
-    ctx.pronostico_hecho = True
+    _registrar_base(ctx, resultado)
     return _texto_del_pronostico(resultado)
 
 
@@ -1251,7 +1291,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 "acaba de salir",
                 bitacora.NOTA,
             )
-            ctx.pronostico_hecho = True
+            _registrar_base(ctx, proyeccion)
             partes.append(_texto_del_pronostico(proyeccion))
 
     return "\n\n".join(partes)
@@ -1597,7 +1637,9 @@ class SQLAgent:
         historial: una pregunta cancelada no ocurrio.
         """
         self.idioma = idiomas.detectar(pregunta) or self.idioma
-        with contexto_peticion(self.engine, cancelacion, pregunta) as ctx:
+        with contexto_peticion(
+            self.engine, cancelacion, pregunta, self.idioma
+        ) as ctx:
             respuesta = self.agent_executor.invoke(
                 {
                     "input": pregunta,
@@ -1611,7 +1653,12 @@ class SQLAgent:
             texto = self._sin_enlaces_inventados(
                 respuesta.get("output", "No se obtuvo respuesta.")
             )
+            # El historial guarda lo que escribio el modelo; la ficha se pega
+            # despues, para el usuario. Repetirsela al modelo en el siguiente
+            # turno solo lo invitaria a copiarla.
             self._recordar(pregunta, texto)
+            if ctx.base_del_pronostico:
+                texto = f"{texto}\n\n{ctx.base_del_pronostico}"
             return texto, list(ctx.archivos)
 
     def _recordar(self, pregunta: str, respuesta: str) -> None:

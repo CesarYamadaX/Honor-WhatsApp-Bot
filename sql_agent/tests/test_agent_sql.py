@@ -730,6 +730,47 @@ class TestCuandoSePidioUnEstimado:
         assert "Pronostico" not in salida
 
 
+class TestLaBaseDelPronostico:
+    """"Quiero que en el mensaje hagas un summary de en que te estas basando
+    para hacer el pronostico". No se le encarga al modelo: la ficha se arma
+    con los datos de la proyeccion y se pega al final del mensaje."""
+
+    def _responder(self, pregunta, idioma_forzado=None):
+        motor = _engine_con_serie_mensual()
+        agente = SQLAgent.__new__(SQLAgent)
+        agente.engine = motor
+        agente.historial = []
+        agente.idioma = idioma_forzado or "es"
+
+        class _Ejecutor:
+            def invoke(self, payload, config=None, **kwargs):
+                consultar_sql.invoke({"query": "SELECT * FROM serie"})
+                return {"output": "Para el proximo mes espero alrededor de 120 mil."}
+
+        agente.agent_executor = _Ejecutor()
+        return agente.responder(pregunta)[0]
+
+    def test_el_mensaje_dice_en_que_se_baso(self):
+        texto = self._responder("dame un estimado del proximo mes")
+        assert "En que me base:" in texto
+        # Los meses de historia y el periodo que cubren.
+        assert "32 meses de historia" in texto
+        assert "2024-01" in texto and "2026-08" in texto
+        # El metodo y su margen, que es lo que deja juzgar el numero.
+        assert "mismo mes del ano anterior" in texto
+        assert "9%" in texto
+
+    def test_la_ficha_va_en_el_idioma_del_usuario(self):
+        texto = self._responder("forecast for next month", idioma_forzado="en")
+        assert "What this is based on:" in texto
+        assert "32 months of history" in texto
+        assert "En que me base" not in texto
+
+    def test_sin_pronostico_no_hay_ficha(self):
+        texto = self._responder("dame las ventas por mes")
+        assert "En que me base" not in texto
+
+
 class TestLoQueSeLeMandaAlUsuario:
     def test_se_tira_el_enlace_de_descarga_inventado(self):
         # Respondio tal cual: "[Descargar Excel con datos de ventas de

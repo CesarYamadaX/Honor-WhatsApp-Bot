@@ -113,11 +113,19 @@ def _eje_de_tiempo(df: pd.DataFrame):
     """
     for nombre in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[nombre]):
-            return (
-                pd.to_datetime(df[nombre]).dt.strftime("%Y-%m-%d"),
-                str(nombre),
-                {nombre},
-            )
+            fechas = pd.to_datetime(df[nombre])
+            meses = fechas.dt.strftime("%Y-%m")
+            # Por MESES en cuanto la serie pasa de uno. Un eje por dias de
+            # medio ano son 180 etiquetas de diez caracteres: no se lee
+            # ninguna, y antes ni siquiera llegaba a dibujarse porque 180
+            # puntos pasan de MAX_CATEGORIAS y la grafica se descartaba
+            # entera. Agrupadas por mes son seis puntos y se lee de corrido.
+            #
+            # Dentro de un mismo mes se conservan los dias: ahi son pocos, y
+            # un solo punto no dibuja nada.
+            if meses.nunique() > 1:
+                return meses, "periodo", {nombre}
+            return fechas.dt.strftime("%Y-%m-%d"), str(nombre), {nombre}
 
     anio, mes = _columna(df, _ES_ANIO), _columna(df, _ES_MES)
     # Un [Mes] suelto, sin anio, se queda como categoria normal: son doce
@@ -131,6 +139,19 @@ def _eje_de_tiempo(df: pd.DataFrame):
     return etiquetas, "periodo", {anio, mes}
 
 
+# Una medida que se llame asi no se suma al juntar los dias de un mes: doce
+# precios promedio sumados dan un numero que no existe. Se promedia.
+_ES_PROMEDIO = re.compile(
+    r"promedio|prom\b|media|average|\bavg\b|precio|price|ticket|porcentaje|"
+    r"percent|\brate\b|margen|margin",
+    re.IGNORECASE,
+)
+
+
+def _como_juntar(columna) -> str:
+    return "mean" if _ES_PROMEDIO.search(str(columna)) else "sum"
+
+
 def _por_periodo(etiquetas, columnas: pd.DataFrame) -> pd.DataFrame:
     """Una fila por punto del eje, en orden cronologico.
 
@@ -140,7 +161,9 @@ def _por_periodo(etiquetas, columnas: pd.DataFrame) -> pd.DataFrame:
     """
     tabla = columnas.copy()
     tabla.insert(0, "__eje", list(etiquetas))
-    return tabla.groupby("__eje", sort=True).sum()
+    return tabla.groupby("__eje", sort=True).agg(
+        {c: _como_juntar(c) for c in columnas.columns}
+    )
 
 
 def _plan_temporal(df, tiempo, medidas, categorias):
@@ -164,7 +187,10 @@ def _plan_temporal(df, tiempo, medidas, categorias):
                 "__valor": pd.to_numeric(df[medidas[0]], errors="coerce").values,
             }
         ).pivot_table(
-            index="__eje", columns="__serie", values="__valor", aggfunc="sum"
+            index="__eje",
+            columns="__serie",
+            values="__valor",
+            aggfunc=_como_juntar(medidas[0]),
         ).sort_index()
         # pivot_table deja NaN donde no hubo fila. Se queda asi a proposito:
         # un modelo del que no hay dato ese mes no es un cero, y rellenarlo
