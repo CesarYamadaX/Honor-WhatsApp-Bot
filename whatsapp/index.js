@@ -196,6 +196,18 @@ async function enviarArchivo(jid, ruta, idioma) {
   });
 }
 
+// Un mensaje que no se atiende se descarta en silencio, y hay cinco motivos
+// distintos por los que puede pasar. Sin esta linea, "le escribo y no
+// contesta" no deja NADA en el log y no hay por donde empezar a mirar.
+//
+// Se anota el motivo y de quien venia, nunca el contenido: el log es para
+// operar el bot, no para leer las conversaciones de nadie. Y sigue sin
+// contestarle al que escribe -- el silencio hacia fuera es lo que evita
+// confirmarle a un numero ajeno que hay un bot aqui.
+function descartado(motivo, jid, extra = "") {
+  console.log(`[whatsapp] mensaje descartado (${motivo}) de ${jid ?? "?"}${extra}`);
+}
+
 function textoDelMensaje(mensaje) {
   return (
     mensaje.message?.conversation ??
@@ -214,7 +226,10 @@ async function atender(mensaje) {
   try {
     const jid = mensaje.key?.remoteJid;
     // fromMe evita responder a lo que el propio numero envia.
-    if (!jid || mensaje.key?.fromMe) return;
+    if (!jid || mensaje.key?.fromMe) {
+      if (jid) descartado("lo envio este mismo numero", jid);
+      return;
+    }
 
     // WhatsApp esta migrando a JIDs "@lid" (un identificador interno, sin
     // relacion numerica con el telefono) en vez de "@s.whatsapp.net" para
@@ -236,7 +251,10 @@ async function atender(mensaje) {
     // mostrado en el grupo, en cada mensaje que cualquiera escriba, para
     // siempre. Ese descarte tiene que vivir aqui, del lado de Node, antes de
     // que exista la tentacion de generar cualquier trafico o presencia.
-    if (isJidGroup(jid) || isJidBroadcast(jid)) return;
+    if (isJidGroup(jid) || isJidBroadcast(jid)) {
+      descartado("grupo o difusion", jid);
+      return;
+    }
 
     idMensaje = mensaje.key?.id;
     if (idMensaje && registroVistos.marcarYVerificar(idMensaje)) {
@@ -245,7 +263,13 @@ async function atender(mensaje) {
     }
 
     const texto = textoDelMensaje(mensaje);
-    if (!texto || !texto.trim()) return;
+    if (!texto || !texto.trim()) {
+      // Una foto, un audio, un sticker o un tipo de mensaje que todavia no
+      // se sabe leer. Se anota cual, que es justo lo que hace falta para
+      // decidir si vale la pena soportarlo.
+      descartado("sin texto", jid, ` (${Object.keys(mensaje.message ?? {}).join(", ") || "vacio"})`);
+      return;
+    }
 
     // Nada de señales de vida antes de saber que el chat esta autorizado: si
     // un numero ajeno ve al bot "escribiendo", eso ya confirma que hay un bot
@@ -254,7 +278,10 @@ async function atender(mensaje) {
     // y vuelve en milisegundos. Antes esto no existia y la unica forma de
     // saberlo era mandar la pregunta entera y esperar: para cuando se sabia,
     // la consulta ya habia terminado y el indicador no cubria nada.
-    if (!(await autorizado(AGENT_API_URL, idAutorizacion))) return;
+    if (!(await autorizado(AGENT_API_URL, idAutorizacion))) {
+      descartado("no autorizado", idAutorizacion, idAutorizacion === jid ? "" : ` (chat ${jid})`);
+      return;
+    }
 
     // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo
     // y, si la consulta se alarga, un aviso para que el usuario sepa que
@@ -401,7 +428,13 @@ async function arrancar() {
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    // "notify" es un mensaje que acaba de llegar; "append" y "prepend" son
+    // el historial que el telefono sincroniza al conectar, y atenderlos
+    // seria contestar conversaciones viejas.
+    if (type !== "notify") {
+      descartado(`upsert ${type}`, messages?.[0]?.key?.remoteJid, ` (${messages?.length ?? 0} mensajes)`);
+      return;
+    }
     for (const mensaje of messages) await atender(mensaje);
   });
 }

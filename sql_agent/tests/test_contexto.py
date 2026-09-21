@@ -36,6 +36,16 @@ class _MotorDeCatalogos:
     def connect(self):
         return self
 
+    @property
+    def connection(self):
+        # El desglose por tienda le pone plazo a la conexion; el doble tiene
+        # que aguantarlo sin enterarse de nada mas.
+        return self
+
+    @property
+    def dbapi_connection(self):
+        return self
+
     def __enter__(self):
         return self
 
@@ -101,12 +111,24 @@ class TestQueSeConsulta:
 class TestHojasDevueltas:
     def test_devuelve_la_hoja_del_catalogo_que_caso(self):
         motor = _MotorDeCatalogos(
-            {"[UNICOS$]": (["HOMOLOGACION MODELO", "BRAND"], [("SAMSUNG A07", "SAMSUNG")])}
+            {"[CustomerStores]": (["ID", "Region"], [("Coppel", "Norte")])}
         )
         hojas = contexto_del_resultado(_resultado(), motor)
 
-        assert list(hojas) == ["Modelos"]
-        assert hojas["Modelos"].iloc[0]["BRAND"] == "SAMSUNG"
+        assert list(hojas) == ["Tiendas"]
+        assert hojas["Tiendas"].iloc[0]["Region"] == "Norte"
+
+    def test_ya_no_se_vuelca_el_catalogo_de_homologacion(self):
+        # Era la hoja "Modelos": para un resultado de 635 filas metia 2001
+        # filas de UNICOS$, que son las formas en que cada cadena escribe
+        # esos modelos. Eso no es detalle de ventas, es ruido.
+        motor = _MotorDeCatalogos(
+            {"[UNICOS$]": (["HOMOLOGACION MODELO"], [("SAMSUNG A07",)])}
+        )
+        hojas = contexto_del_resultado(_resultado(), motor)
+
+        assert "Modelos" not in hojas
+        assert not any("UNICOS$" in sql for sql, _ in motor.consultas)
 
     def test_un_catalogo_sin_coincidencias_no_deja_hoja_vacia(self):
         motor = _MotorDeCatalogos()
@@ -155,3 +177,81 @@ class TestExcelConContexto:
             _resultado(), filename="solo_datos.xlsx", contexto=contexto_vacio
         )
         assert openpyxl.load_workbook(ruta).sheetnames == [HOJA_DATOS]
+
+
+class TestDesglosePorTienda:
+    """La hoja que se pidio: cuanto vendio cada tienda de esos modelos."""
+
+    def _resultado_por_modelo(self):
+        return pd.DataFrame(
+            {
+                "Año": [2026, 2026, 2026],
+                "Mes": [1, 3, 6],
+                "HOMOLOGACION MODELO": ["OPPO A6X", "OPPO A5", "OPPO A6X"],
+                "Total Vendido": [100, 500, 300],
+            }
+        )
+
+    def test_desglosa_los_modelos_del_resultado(self):
+        motor = _MotorDeCatalogos(
+            {
+                "ETL_Consolidado_B2B": (
+                    ["Retail", "Store", "HOMOLOGACION MODELO", "Unidades"],
+                    [("Coppel", "1114 CUAUHTEMOC", "OPPO A6X", 2575)],
+                )
+            }
+        )
+        hojas = contexto_del_resultado(self._resultado_por_modelo(), motor)
+
+        assert "Ventas por tienda" in hojas
+        assert hojas["Ventas por tienda"].iloc[0]["Store"] == "1114 CUAUHTEMOC"
+
+    def test_los_modelos_van_por_lo_que_vendieron(self):
+        # Un reporte con cien modelos no se desglosa entero: cada uno cuesta
+        # tiempo de consulta. Se toman los que de verdad pesan.
+        muchos = pd.DataFrame(
+            {
+                "HOMOLOGACION MODELO": [f"MODELO {i}" for i in range(40)],
+                "Total": list(range(40)),
+                "Año": [2026] * 40,
+            }
+        )
+        modelos = contexto.modelos_a_desglosar(muchos)
+
+        assert len(modelos) == contexto.MAX_MODELOS_DESGLOSADOS
+        assert modelos[0] == "MODELO 39"
+
+    def test_sin_columna_de_modelo_no_hay_desglose(self):
+        assert contexto.modelos_a_desglosar(_resultado()) == []
+
+    def test_sin_periodo_no_se_consulta_la_vista_de_ventas(self):
+        # Una consulta por modelo sin acotar la fecha recorre la vista
+        # entera, que es la operacion cara que este modulo evita.
+        sin_fecha = pd.DataFrame(
+            {"HOMOLOGACION MODELO": ["OPPO A6X"], "Total": [10]}
+        )
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(sin_fecha, motor)
+
+        assert not any("ETL_Consolidado_B2B" in sql for sql, _ in motor.consultas)
+
+    def test_el_periodo_sale_del_año_y_el_mes(self):
+        assert contexto.periodo(self._resultado_por_modelo()) == ("2026-01-01", "2026-07-01")
+
+    def test_el_periodo_sale_tambien_de_una_columna_de_fecha(self):
+        df = pd.DataFrame(
+            {
+                "Día": pd.to_datetime(["2026-03-05", "2026-03-20"]),
+                "Modelo": ["OPPO A6X", "OPPO A6X"],
+                "QTY": [1, 2],
+            }
+        )
+        assert contexto.periodo(df) == ("2026-03-05", "2026-03-21")
+
+    def test_un_desglose_que_no_contesta_no_cuesta_el_reporte(self):
+        # La vista de ventas es la lenta; si no llega a tiempo, el reporte
+        # sale sin esa hoja en vez de hacer esperar al usuario.
+        motor = _MotorDeCatalogos(falla=("ETL_Consolidado_B2B",))
+        hojas = contexto_del_resultado(self._resultado_por_modelo(), motor)
+
+        assert "Ventas por tienda" not in hojas

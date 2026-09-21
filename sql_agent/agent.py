@@ -387,23 +387,40 @@ class ContextoPeticion:
     cancelacion: threading.Event | None = None
 
     def registrar_reporte(self, *rutas: str | None) -> None:
-        """Guarda los adjuntos de la pregunta. Solo cuenta la primera consulta.
+        """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
 
         Una pregunta, un archivo. Antes se acumulaban y se enviaban todos: el
         usuario pidio agregar el modelo a un reporte de ventas y recibio dos
         Excel -- 11 501 filas de ventas sin el modelo y 4 509 nombres de modelo
         sin ventas-- cuando queria una sola tabla con ambas cosas.
 
-        Se conserva el PRIMERO, no el ultimo, porque una consulta que falla no
-        llega hasta aqui: solo las exitosas generan archivo. Asi que la primera
-        es la respuesta que el agente construyo, y lo que venga despues en la
-        misma vuelta son comprobaciones (un DISTINCT para ver como se escriben
-        los valores, un listado de apoyo). Conservar el ultimo mandaba esas
-        comprobaciones en lugar del reporte: en una prueba, la lista de 16
-        retailers en vez de las ventas que se habian pedido.
+        Cual es el bueno se decide asi: se conserva el PRIMERO, salvo que
+        despues llegue uno CON GRAFICA y el guardado no la tenga.
+
+        Las dos mitades de esa regla vienen de un fallo real:
+
+        - El primero, porque lo que suele venir despues son comprobaciones
+          (un DISTINCT para ver como se escriben los valores). Conservar el
+          ultimo mandaba esas comprobaciones en lugar del reporte: en una
+          prueba, la lista de 16 retailers en vez de las ventas pedidas.
+
+        - Salvo que traiga grafica, porque el agente tambien explora al
+          reves: pidio "una grafica del top de modelos", saco 635 filas, la
+          herramienta le dijo que eran demasiadas, y recien entonces acoto a
+          10. Se le entrego el volcado de 635 sin grafica y se tiraron el
+          Excel chico Y su grafica, que era exactamente lo que se pidio.
+
+        Y la grafica distingue bien los dos casos porque solo se dibuja
+        cuando el resultado cabe entera en ella y tiene una columna
+        numerica: un DISTINCT de comprobacion nunca la genera.
         """
-        if not self.archivos:
-            self.archivos.extend(r for r in rutas if r)
+        nuevos = [r for r in rutas if r]
+        if not nuevos:
+            return
+        trae_grafica = any(r.lower().endswith(".png") for r in nuevos)
+        tiene_grafica = any(r.lower().endswith(".png") for r in self.archivos)
+        if not self.archivos or (trae_grafica and not tiene_grafica):
+            self.archivos[:] = nuevos
 
 
 _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default=None)

@@ -1336,3 +1336,46 @@ class TestIdiomaDeLaRespuesta:
             i for i, m in enumerate(mensajes) if "input" in getattr(m, "input_variables", [])
         )
         assert idx_historial < idx_idioma < idx_pregunta
+
+
+class TestCualReporteSeEntrega:
+    """Cual de los archivos de una vuelta es el que llega al usuario."""
+
+    def test_un_reporte_con_grafica_desplaza_al_volcado_anterior(self, engine):
+        # El fallo real: el usuario pidio "una grafica del top de modelos",
+        # el agente saco 635 filas, la herramienta le dijo que eran
+        # demasiadas, y recien entonces acoto a 10 -- que si dio grafica. Se
+        # le entrego el volcado de 635 sin grafica y se tiraron el Excel
+        # chico Y su grafica, que era justo lo que habia pedido.
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "volcado.xlsx")
+            assert ctx.archivos == ["volcado.xlsx"]
+
+            ctx.registrar_reporte("grafica.png", "top10.xlsx")
+            assert ctx.archivos == ["grafica.png", "top10.xlsx"]
+
+    def test_una_comprobacion_posterior_no_desplaza_al_reporte(self, engine):
+        # La otra mitad: lo que suele venir despues del reporte son
+        # comprobaciones (un DISTINCT para ver como se escriben los
+        # valores). Esas nunca traen grafica -- no tienen columna numerica --
+        # asi que no pueden robarle el lugar al reporte.
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte("grafica.png", "ventas.xlsx")
+            ctx.registrar_reporte(None, "retailers_distintos.xlsx")
+
+        assert ctx.archivos == ["grafica.png", "ventas.xlsx"]
+
+    def test_entre_dos_sin_grafica_se_queda_el_primero(self, engine):
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "primero.xlsx")
+            ctx.registrar_reporte(None, "segundo.xlsx")
+
+        assert ctx.archivos == ["primero.xlsx"]
+
+    def test_entre_dos_con_grafica_se_queda_el_primero(self, engine):
+        # Si los dos son presentables, sigue mandando la regla de siempre.
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte("uno.png", "uno.xlsx")
+            ctx.registrar_reporte("dos.png", "dos.xlsx")
+
+        assert ctx.archivos == ["uno.png", "uno.xlsx"]
