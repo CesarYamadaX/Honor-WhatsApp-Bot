@@ -13,7 +13,9 @@ diciembre casi duplica a febrero. Una tendencia lineal la ignora y falla justo
 en los meses que mas importan.
 """
 
+import re
 import statistics
+import unicodedata
 from dataclasses import dataclass
 
 # Un mes que apenas es una fraccion de los anteriores no termino todavia. Sin
@@ -29,6 +31,30 @@ MESES_PARA_ESTACIONALIDAD = 13
 # Error medio medido del metodo estacional en el backtest. Se le dice al
 # usuario: un pronostico sin margen invita a leerlo como un dato cerrado.
 ERROR_TIPICO = 0.09
+
+
+# Lo que alguien escribe cuando quiere un numero del futuro, sin acentos y en
+# minusculas. "estimad" esta en la lista por el caso que fallo: "quiero un
+# estimado de las ventas del siguiente mes en Liverpool" no traia ninguna de
+# las palabras que el prompt daba como ejemplo, el modelo lo trato como una
+# consulta normal, trajo la historia y contesto "descarga el Excel y procede
+# con la proyeccion". El usuario pidio un pronostico y recibio deberes.
+_PALABRAS_DE_PRONOSTICO = (
+    "pronostic", "proyec", "prediccion", "predecir", "predice", "prediga",
+    "estimad", "estimacion", "forecast", "predict", "estimate", "projection",
+)
+_PALABRAS_DE_PRONOSTICO_CJK = ("预测", "预计")
+
+
+def pidio_pronostico(pregunta: str) -> bool:
+    """True si la pregunta pedia un numero del futuro."""
+    if not pregunta:
+        return False
+    texto = unicodedata.normalize("NFKD", pregunta.casefold())
+    texto = texto.encode("ascii", "ignore").decode("ascii")
+    return any(p in texto for p in _PALABRAS_DE_PRONOSTICO) or any(
+        p in pregunta for p in _PALABRAS_DE_PRONOSTICO_CJK
+    )
 
 
 @dataclass

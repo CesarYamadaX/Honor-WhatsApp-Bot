@@ -18,6 +18,7 @@ from agent import (
     buscar_modelos,
     consultar_sql,
     precio_en_internet,
+    pronosticar_ventas,
     contexto_peticion,
     es_select,
     valores_distintos,
@@ -639,6 +640,111 @@ class TestConsultarSql:
         datos_b = pd.read_excel(rutas["b"])
         assert datos_a["tienda"].iloc[0].startswith("A-")
         assert datos_b["tienda"].iloc[0].startswith("B-")
+
+
+def _engine_con_serie_mensual(meses: int = 32):
+    """Un engine con una serie mensual como la que trae una tabla de ventas:
+    (anio, mes, total), con estacionalidad para que el metodo la use."""
+    motor = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    with motor.begin() as conexion:
+        conexion.execute(text("CREATE TABLE serie (anio INT, mes INT, total REAL)"))
+        anio, mes = 2024, 1
+        for i in range(meses):
+            conexion.execute(
+                text("INSERT INTO serie VALUES (:a, :m, :t)"),
+                {"a": anio, "m": mes, "t": 100000 + i * 1000 + (5000 if mes == 12 else 0)},
+            )
+            anio, mes = (anio + 1, 1) if mes == 12 else (anio, mes + 1)
+    return motor
+
+
+class TestCuandoSePidioUnEstimado:
+    """El caso que fallaba: "quiero un estimado de las ventas para el
+    siguiente mes en Liverpool".
+
+    El agente encontro la tabla, corrigio la columna, trajo la serie de 32
+    meses... y nunca llamo a `pronosticar_ventas`: contesto "descarga el Excel
+    y procede con la proyeccion". El usuario pidio un pronostico y recibio
+    deberes. La cuenta se hace con los datos ya en la mano, sin volver a la
+    base, en vez de depender de que el modelo elija la herramienta.
+    """
+
+    def test_la_serie_mensual_se_proyecta_sola(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = _engine_con_serie_mensual()
+        with contexto_peticion(
+            motor, pregunta="quiero un estimado de las ventas del siguiente mes"
+        ):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM serie"})
+
+        assert "Pronostico" in salida
+        # Y con su margen: un pronostico sin margen se lee como un dato
+        # cerrado.
+        assert "se equivoca" in salida or "estimacion gruesa" in salida
+
+    def test_una_pregunta_de_datos_reales_no_lleva_pronostico(
+        self, tmp_path, monkeypatch
+    ):
+        # La otra mitad, que ya fallo una vez al reves: se pidieron "ventas
+        # totales" y llego una proyeccion. Un dato que esta en la base no se
+        # responde con una estimacion.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = _engine_con_serie_mensual()
+        with contexto_peticion(motor, pregunta="ventas totales por mes"):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM serie"})
+
+        assert "Pronostico" not in salida
+
+    def test_un_resultado_que_no_es_serie_no_se_proyecta(self, tmp_path, monkeypatch):
+        # Tres columnas no bastan: tienen que ser anio, mes y total. Una
+        # tabla de tiendas leida como serie daria numeros inventados.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = create_engine("sqlite://")
+        with motor.begin() as conexion:
+            conexion.execute(text("CREATE TABLE t (tienda TEXT, region TEXT, qty INT)"))
+            for i in range(20):
+                conexion.execute(
+                    text("INSERT INTO t VALUES (:a, :b, :c)"),
+                    {"a": f"tienda-{i}", "b": "centro", "c": i},
+                )
+        with contexto_peticion(motor, pregunta="proyecta las ventas"):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM t"})
+
+        assert "Pronostico" not in salida
+
+    def test_no_se_proyecta_dos_veces_en_la_misma_vuelta(self, tmp_path, monkeypatch):
+        # Si el agente si llamo a la herramienta, el guardian se calla: dos
+        # pronosticos calculados sobre series distintas en la misma respuesta
+        # se contradicen.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = _engine_con_serie_mensual()
+        with contexto_peticion(motor, pregunta="proyecta las ventas"):
+            de_la_herramienta = pronosticar_ventas.invoke(
+                {"sql_historico": "SELECT * FROM serie"}
+            )
+            salida = consultar_sql.invoke({"query": "SELECT * FROM serie"})
+
+        assert "Pronostico" in de_la_herramienta
+        assert "Pronostico" not in salida
+
+
+class TestLoQueSeLeMandaAlUsuario:
+    def test_se_tira_el_enlace_de_descarga_inventado(self):
+        # Respondio tal cual: "[Descargar Excel con datos de ventas de
+        # Liverpool](sandbox:/path/to/excel/file)". Ese archivo no existe en
+        # ningun lado, el adjunto viaja por WhatsApp, y en el telefono se ven
+        # los corchetes crudos.
+        limpio = SQLAgent._sin_enlaces_inventados(
+            "Listo. [Descargar Excel](sandbox:/path/to/file) Avisame."
+        )
+        assert limpio == "Listo. Descargar Excel Avisame."
+
+    def test_un_enlace_de_verdad_se_conserva(self):
+        # El de `precio_en_internet` si se puede abrir.
+        texto = "Precio: [Amazon](https://amazon.com.mx/dp/X) 5 999."
+        assert SQLAgent._sin_enlaces_inventados(texto) == texto
 
 
 class TestToolkitDelAgente:

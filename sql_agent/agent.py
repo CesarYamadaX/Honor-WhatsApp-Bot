@@ -41,7 +41,7 @@ from excel_exporter import ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import idioma as idiomas
-from pronostico import ERROR_TIPICO, proyectar
+from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from formatting import formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
@@ -369,6 +369,11 @@ def es_select(sql: str) -> bool:
     return _evaluar_sql(sql)[0]
 
 
+# Un enlace de markdown cuyo destino no es http(s): el modelo los escribe
+# solo, apuntando a rutas que no existen. Ver `_sin_enlaces_inventados`.
+_ENLACE_SIN_DESTINO = re.compile(r"\[([^\]\n]+)\]\((?!https?://)[^)\n]*\)")
+
+
 class ConsultaCancelada(Exception):
     """El usuario mando otra pregunta (o pidio cancelar) y esta ya no importa."""
 
@@ -384,6 +389,10 @@ class ContextoPeticion:
     # en texto.
     pregunta: str = ""
     archivos: list[str] = field(default_factory=list)
+    # Si ya se proyecto en esta vuelta. Evita que la misma pregunta lleve dos
+    # pronosticos -- el de la herramienta y el del guardian de `consultar_sql`
+    # -- calculados sobre series distintas.
+    pronostico_hecho: bool = False
     # Cuando empezo la peticion, para saber cuanto queda del presupuesto.
     inicio: float = field(default_factory=time.monotonic)
     # Lo pone la API cuando llega un mensaje nuevo del mismo chat. No hay
@@ -962,6 +971,64 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
 MAX_MESES_PRONOSTICO = 12
 
 
+# Cuantos meses proyecta el guardian de `consultar_sql` cuando la pregunta
+# pedia un estimado. Los mismos que la herramienta por defecto: se pregunta
+# por el mes que viene, y los dos siguientes dan de contexto sin costar nada.
+MESES_DEL_GUARDIAN = 3
+
+
+def _serie_mensual(df: pd.DataFrame) -> list[tuple[int, int, float]] | None:
+    """La serie (anio, mes, total) de un resultado, o None si no lo es.
+
+    Es estricta a proposito -- anio entre 1900 y 2200, mes entre 1 y 12 --
+    porque tambien la usa el guardian de `consultar_sql` para decidir si lo
+    que acaba de salir de la base es una serie mensual o cualquier otra tabla
+    de tres columnas.
+    """
+    if df is None or df.shape[1] < 3:
+        return None
+    serie: list[tuple[int, int, float]] = []
+    for fila in df.itertuples(index=False):
+        if fila[0] is None or fila[1] is None or fila[2] is None:
+            continue
+        try:
+            anio, mes, total = int(fila[0]), int(fila[1]), float(fila[2])
+        except (TypeError, ValueError):
+            return None
+        if not (1900 <= anio <= 2200 and 1 <= mes <= 12):
+            return None
+        serie.append((anio, mes, total))
+    return serie or None
+
+
+def _texto_del_pronostico(resultado) -> str:
+    """El pronostico como se lo lee el modelo, con sus advertencias."""
+    lineas = [f"Pronostico ({resultado.metodo}):"]
+    for anio, mes, valor in resultado.meses:
+        lineas.append(f"  {anio}-{mes:02d}: {valor:,.0f}".replace(",", " "))
+
+    if resultado.descartado:
+        anio, mes = resultado.descartado
+        lineas.append(
+            f"Se dejo fuera {anio}-{mes:02d} porque el mes todavia no termina; "
+            "incluirlo habria arrastrado el pronostico hacia abajo."
+        )
+    if resultado.confiable:
+        lineas.append(
+            f"En pruebas contra meses ya ocurridos este metodo se equivoca "
+            f"alrededor de {ERROR_TIPICO:.0%}. Dile al usuario el rango, no "
+            "un numero exacto."
+        )
+    else:
+        lineas.append(
+            "OJO: no hay un anio completo de historia, asi que esto es solo "
+            "tendencia y NO toma en cuenta la estacionalidad, que en estos "
+            "datos es fuerte (diciembre casi duplica a febrero). Avisale al "
+            "usuario que es una estimacion gruesa."
+        )
+    return "\n".join(lineas)
+
+
 @tool
 def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     """Proyecta las ventas de los proximos meses.
@@ -997,13 +1064,8 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
             f"Devolvio {df.shape[1]}."
         )
 
-    try:
-        serie = [
-            (int(fila[0]), int(fila[1]), float(fila[2]))
-            for fila in df.itertuples(index=False)
-            if fila[0] is not None and fila[1] is not None and fila[2] is not None
-        ]
-    except (TypeError, ValueError):
+    serie = _serie_mensual(df)
+    if serie is None:
         return (
             "No pude leer la serie: las columnas deben ser anio (numero), "
             "mes (1-12) y total (numero), en ese orden."
@@ -1016,30 +1078,8 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
             "proyectar. Trae la serie completa, sin filtrar por anio."
         )
 
-    lineas = [f"Pronostico ({resultado.metodo}):"]
-    for anio, mes, valor in resultado.meses:
-        lineas.append(f"  {anio}-{mes:02d}: {valor:,.0f}".replace(",", " "))
-
-    if resultado.descartado:
-        anio, mes = resultado.descartado
-        lineas.append(
-            f"Se dejo fuera {anio}-{mes:02d} porque el mes todavia no termina; "
-            "incluirlo habria arrastrado el pronostico hacia abajo."
-        )
-    if resultado.confiable:
-        lineas.append(
-            f"En pruebas contra meses ya ocurridos este metodo se equivoca "
-            f"alrededor de {ERROR_TIPICO:.0%}. Dile al usuario el rango, no "
-            "un numero exacto."
-        )
-    else:
-        lineas.append(
-            "OJO: no hay un anio completo de historia, asi que esto es solo "
-            "tendencia y NO toma en cuenta la estacionalidad, que en estos "
-            "datos es fuerte (diciembre casi duplica a febrero). Avisale al "
-            "usuario que es una estimacion gruesa."
-        )
-    return "\n".join(lineas)
+    ctx.pronostico_hecho = True
+    return _texto_del_pronostico(resultado)
 
 
 @tool
@@ -1182,17 +1222,39 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # debajo para quien quiera el detalle.
     ctx.registrar_reporte(imagen, excel)
 
+    partes = [resultado.texto]
+
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
     # que tendria que cambiar para que la haya. Sin esto no se entera de que
     # no la hay y le promete al usuario una imagen que nunca se adjunto. Y
     # solo cuando la pidieron, porque a un reporte que nadie queria ver
     # graficado este aviso lo unico que le agrega es una consulta de mas.
     if quiere_grafica and motivo_sin_grafica:
-        return (
-            f"{resultado.texto}\n\nNo pude dibujar la grafica que te "
-            f"pidieron: {motivo_sin_grafica}."
-        )
-    return resultado.texto
+        partes.append(f"No pude dibujar la grafica que te pidieron: {motivo_sin_grafica}.")
+
+    # Se pidio un estimado y lo que acaba de salir de la base ES la serie
+    # mensual: la proyeccion se calcula aqui, con los datos ya en la mano.
+    #
+    # En produccion el usuario pidio "un estimado de las ventas del siguiente
+    # mes en Liverpool": el agente encontro la tabla, corrigio la columna,
+    # trajo la serie de 32 meses... y nunca llamo a `pronosticar_ventas`.
+    # Contesto "descarga el Excel y procede con la proyeccion". El usuario
+    # pidio un pronostico y recibio deberes. Que se haga la cuenta no puede
+    # depender de que el modelo elija la herramienta; los numeros ya estan
+    # aqui y la cuenta no vuelve a tocar la base.
+    if not ctx.pronostico_hecho and pidio_pronostico(ctx.pregunta):
+        serie = _serie_mensual(df)
+        proyeccion = proyectar(serie, MESES_DEL_GUARDIAN) if serie else None
+        if proyeccion is not None:
+            bitacora.paso(
+                "la pregunta pedia un estimado: proyectando la serie que "
+                "acaba de salir",
+                bitacora.NOTA,
+            )
+            ctx.pronostico_hecho = True
+            partes.append(_texto_del_pronostico(proyeccion))
+
+    return "\n\n".join(partes)
 
 
 class _ToolkitSoloLectura(SQLDatabaseToolkit):
@@ -1432,7 +1494,7 @@ class SQLAgent:
            cual o no encuentra nada o mezcla marcas distintas.
         12. `pronosticar_ventas` es SOLO para periodos que TODAVIA NO HAN
            OCURRIDO: "cuanto va a vender", "proyecta", "pronostico del proximo
-           mes". Pasale un SELECT con la serie mensual COMPLETA (anio, mes,
+           mes", "un estimado del siguiente mes", "una prediccion". Pasale un SELECT con la serie mensual COMPLETA (anio, mes,
            total), sin filtrar por anio, porque necesita el mismo mes del anio
            anterior por la estacionalidad. Nunca inventes tu una proyeccion.
            TODO LO DEMAS SON DATOS REALES y va por `consultar_sql`: "ventas
@@ -1510,6 +1572,21 @@ class SQLAgent:
             ],
         )
 
+    @staticmethod
+    def _sin_enlaces_inventados(texto: str) -> str:
+        """Quita los enlaces de descarga que el modelo se inventa.
+
+        Respondio, tal cual: "[Descargar Excel con datos de ventas de
+        Liverpool](sandbox:/path/to/excel/file)". Ese archivo no esta en
+        ningun lado -- el adjunto viaja por WhatsApp, no por un enlace -- y en
+        el telefono se ve el corchete y el parentesis crudos. Se queda el
+        texto y se tira el destino.
+
+        Un enlace http de verdad (el que trae `precio_en_internet`) se
+        conserva: ese si se puede abrir.
+        """
+        return _ENLACE_SIN_DESTINO.sub(r"\1", texto)
+
     def responder(
         self, pregunta: str, cancelacion: threading.Event | None = None
     ) -> tuple[str, list[str]]:
@@ -1531,7 +1608,9 @@ class SQLAgent:
                 # agente va haciendo, para poder seguirlo desde el panel.
                 config={"callbacks": [Observador()]},
             )
-            texto = respuesta.get("output", "No se obtuvo respuesta.")
+            texto = self._sin_enlaces_inventados(
+                respuesta.get("output", "No se obtuvo respuesta.")
+            )
             self._recordar(pregunta, texto)
             return texto, list(ctx.archivos)
 
