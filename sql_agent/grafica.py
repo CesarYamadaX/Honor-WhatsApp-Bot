@@ -7,7 +7,10 @@ conversacion misma, de un vistazo. El Excel queda de puros datos.
 
 import logging
 import os
+import re
+import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 import matplotlib
@@ -60,47 +63,218 @@ LARGO_DE_ETIQUETA_PARA_HORIZONTAL = 14
 MAX_LARGO_ETIQUETA = 42
 
 
-def _planear(df: pd.DataFrame):
-    """Elige que graficar, o None si ninguna grafica ayudaria.
+# Como nombra el agente las partes de una fecha. Las parte en columnas porque
+# asi las agrupa el GROUP BY ([Año], [Mes]) y quedan como numeros: sin
+# reconocerlas, la grafica las tomaba por medidas y dibujaba una barra de
+# valor 2026 y otra de valor 3 al lado de una de 143 575, con el modelo
+# repetido cuatro veces en el eje. Reconocerlas es lo que convierte ese
+# resultado de cuatro columnas en la grafica de evolucion que se pidio.
+_ES_ANIO = re.compile(r"^\s*\[?\s*(a[nñ]o|anio|year)\s*\]?\s*$", re.IGNORECASE)
+_ES_MES = re.compile(r"^\s*\[?\s*(mes|month)\s*\]?\s*$", re.IGNORECASE)
 
-    Devuelve (columna_categoria, columnas_de_valor, es_serie_temporal).
 
-    Las reglas salen de la guia de visualizacion: una sola fila es un numero,
-    no una grafica; sin columna numerica no hay magnitud que mostrar; y una
-    columna de fecha convierte la pregunta en "como evoluciona" (linea) en vez
-    de "quien es mayor" (barras).
+@dataclass(frozen=True)
+class Plan:
+    """Que dibujar: unas categorias en un eje y una o mas series sobre ellas.
+
+    Las series ya vienen resueltas -- nombre y valores alineados con las
+    etiquetas -- porque no siempre son columnas del resultado: en una grafica
+    de evolucion cada serie es un VALOR de una columna (un modelo, un
+    retailer) y sale de pivotar la tabla.
     """
-    if df is None or len(df) < 2:
-        return None
-    if len(df) > MAX_CATEGORIAS:
-        # Demasiadas filas para mostrarlas todas: mejor sin grafica que con
-        # una que solo ensena el principio de la tabla.
-        return None
 
-    numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if not numericas:
-        return None
+    eje: str
+    etiquetas: list[str]
+    series: dict[str, list]
+    titulo: str
+    es_temporal: bool
 
-    fechas = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    if fechas:
-        return fechas[0], numericas[:MAX_SERIES], True
 
-    etiquetas = [c for c in df.columns if c not in numericas]
-    if etiquetas:
-        return etiquetas[0], numericas[:MAX_SERIES], False
-
-    # Todo numerico (p. ej. [Month] y [QTY] de un GROUP BY): la primera hace
-    # de etiqueta y el resto son los valores. Con una sola columna numerica no
-    # queda nada que medir contra que.
-    if len(numericas) >= 2:
-        return numericas[0], numericas[1 : MAX_SERIES + 1], False
+def _columna(df: pd.DataFrame, patron: re.Pattern):
+    for nombre in df.columns:
+        if patron.match(str(nombre)):
+            return nombre
     return None
 
 
-def _etiquetas(serie: pd.Series, es_temporal: bool) -> list[str]:
-    if es_temporal:
-        return [d.strftime("%Y-%m-%d") for d in pd.to_datetime(serie)]
-    return [_recortar(str(v)) for v in serie]
+def _enteros(serie: pd.Series):
+    """La columna como enteros, o None si alguna celda no lo es."""
+    numeros = pd.to_numeric(serie, errors="coerce")
+    if numeros.isna().any():
+        return None
+    return numeros.astype(int)
+
+
+def _eje_de_tiempo(df: pd.DataFrame):
+    """(etiquetas, nombre del eje, columnas que consume), o None sin tiempo.
+
+    Las columnas que consume dejan de ser medidas: [Año] y [Mes] dicen
+    CUANDO paso algo, no cuanto.
+    """
+    for nombre in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[nombre]):
+            return (
+                pd.to_datetime(df[nombre]).dt.strftime("%Y-%m-%d"),
+                str(nombre),
+                {nombre},
+            )
+
+    anio, mes = _columna(df, _ES_ANIO), _columna(df, _ES_MES)
+    # Un [Mes] suelto, sin anio, se queda como categoria normal: son doce
+    # barras y se leen igual de bien.
+    if anio is None or mes is None:
+        return None
+    anios, meses = _enteros(df[anio]), _enteros(df[mes])
+    if anios is None or meses is None:
+        return None
+    etiquetas = anios.astype(str) + "-" + meses.astype(str).str.zfill(2)
+    return etiquetas, "periodo", {anio, mes}
+
+
+def _por_periodo(etiquetas, columnas: pd.DataFrame) -> pd.DataFrame:
+    """Una fila por punto del eje, en orden cronologico.
+
+    El orden lo manda el eje, no el ORDER BY de la consulta: "los mas
+    vendidos" viene ordenado por cantidad, y dibujarlo asi da una linea que va
+    y viene en el tiempo.
+    """
+    tabla = columnas.copy()
+    tabla.insert(0, "__eje", list(etiquetas))
+    return tabla.groupby("__eje", sort=True).sum()
+
+
+def _plan_temporal(df, tiempo, medidas, categorias):
+    """(Plan, motivo) para un resultado con tiempo.
+
+    (None, None) significa que el tiempo no da una grafica y sigue la
+    comparacion normal.
+    """
+    etiquetas, eje, _ = tiempo
+
+    if categorias:
+        # Una linea por cada valor de la columna de texto. "Ventas por mes y
+        # modelo" son seis puntos de cada modelo, no una fila suelta por cada
+        # combinacion: sin pivotar, el modelo salia repetido en el eje y la
+        # evolucion no se veia por ningun lado.
+        serie = categorias[0]
+        tabla = pd.DataFrame(
+            {
+                "__eje": list(etiquetas),
+                "__serie": [str(v) for v in df[serie]],
+                "__valor": pd.to_numeric(df[medidas[0]], errors="coerce").values,
+            }
+        ).pivot_table(
+            index="__eje", columns="__serie", values="__valor", aggfunc="sum"
+        ).sort_index()
+        # pivot_table deja NaN donde no hubo fila. Se queda asi a proposito:
+        # un modelo del que no hay dato ese mes no es un cero, y rellenarlo
+        # dibujaria una caida a la base que nadie midio. La linea se corta.
+        titulo = f"{medidas[0]} por {eje}"
+    else:
+        serie = None
+        tabla = _por_periodo(etiquetas, df[medidas[:MAX_SERIES]])
+        titulo = ", ".join(str(m) for m in tabla.columns) + f" por {eje}"
+
+    if len(tabla) < 2:
+        # Un solo punto no es una evolucion. No se rechaza: cae a la
+        # comparacion normal, que con un solo mes es justo lo que toca.
+        return None, None
+    if len(tabla) > MAX_CATEGORIAS:
+        return None, (
+            f"son {len(tabla)} puntos en el eje y una grafica legible admite "
+            f"{MAX_CATEGORIAS}"
+        )
+    if len(tabla.columns) > MAX_SERIES:
+        return None, (
+            f"son {len(tabla.columns)} lineas (una por cada valor de "
+            f"[{serie}]) y una grafica legible admite {MAX_SERIES}: vuelve a "
+            f"consultar acotando a {MAX_SERIES} para que salga la grafica"
+        )
+
+    series = {str(c): list(tabla[c]) for c in tabla.columns}
+    return Plan(eje, [str(i) for i in tabla.index], series, titulo, True), None
+
+
+# Lo que alguien escribe cuando quiere ver una grafica, sin acentos y en
+# minusculas. El chino va aparte porque no se normaliza igual.
+_PALABRAS_DE_GRAFICA = (
+    "grafic", "graph", "chart", "plot", "curva", "tendencia", "evoluc",
+)
+_PALABRAS_DE_GRAFICA_CJK = ("图", "曲线", "趋势")
+
+
+def pidio_grafica(pregunta: str) -> bool:
+    """True si la pregunta pedia ver una grafica.
+
+    Es una regla de codigo, no una instruccion del prompt, porque el prompt ya
+    lo intento: el modelo tiene que marcar `entregar_archivo=True` y no lo
+    marco -- a "muestrame una grafica de lineas" le respondio "te la envio" y
+    no se genero ninguna imagen. Que salga la grafica no puede depender de que
+    el modelo se acuerde de una bandera.
+    """
+    if not pregunta:
+        return False
+    texto = unicodedata.normalize("NFKD", pregunta.casefold())
+    texto = texto.encode("ascii", "ignore").decode("ascii")
+    return any(p in texto for p in _PALABRAS_DE_GRAFICA) or any(
+        p in pregunta for p in _PALABRAS_DE_GRAFICA_CJK
+    )
+
+
+def _planear(df: pd.DataFrame):
+    """Elige que graficar. Devuelve (Plan, motivo).
+
+    El plan es None si ninguna grafica ayudaria. El motivo es el texto que se
+    le devuelve al agente cuando SI puede hacer algo al respecto -- acotar la
+    consulta --, y existe para que no prometa una grafica que no va adjunta.
+
+    Las reglas salen de la guia de visualizacion: una sola fila es un numero,
+    no una grafica; sin columna numerica no hay magnitud que mostrar; y una
+    fecha convierte la pregunta en "como evoluciona" (linea) en vez de "quien
+    es mayor" (barras).
+    """
+    if df is None or len(df) < 2:
+        return None, None
+
+    numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    if not numericas:
+        return None, None
+
+    tiempo = _eje_de_tiempo(df)
+    consumidas = tiempo[2] if tiempo else set()
+    medidas = [c for c in numericas if c not in consumidas]
+    if not medidas:
+        return None, None
+    categorias = [c for c in df.columns if c not in numericas and c not in consumidas]
+
+    if tiempo is not None:
+        plan, motivo = _plan_temporal(df, tiempo, medidas, categorias)
+        if plan is not None or motivo is not None:
+            return plan, motivo
+
+    if len(df) > MAX_CATEGORIAS:
+        # Demasiadas filas para mostrarlas todas: mejor sin grafica que con
+        # una que solo ensena el principio de la tabla.
+        return None, (
+            f"son {len(df)} filas y una grafica legible admite "
+            f"{MAX_CATEGORIAS}: vuelve a consultar con un TOP para que salga "
+            "la grafica"
+        )
+
+    if categorias:
+        eje = categorias[0]
+    elif len(medidas) >= 2:
+        # Todo numerico (p. ej. [Month] y [QTY] de un GROUP BY): la primera
+        # hace de etiqueta y el resto son los valores.
+        eje, medidas = medidas[0], medidas[1:]
+    else:
+        # Una sola columna numerica y nada contra que medirla.
+        return None, None
+
+    series = {str(m): list(df[m]) for m in medidas[:MAX_SERIES]}
+    titulo = ", ".join(series) + f" por {eje}"
+    etiquetas = [_recortar(str(v)) for v in df[eje]]
+    return Plan(str(eje), etiquetas, series, titulo, False), None
 
 
 def _recortar(texto: str) -> str:
@@ -148,12 +322,21 @@ def _ruta_de_salida() -> str:
 
 def exportar_grafica(df: pd.DataFrame) -> str | None:
     """Dibuja el resultado y devuelve la ruta del PNG, o None si no aplica."""
-    plan = _planear(df)
-    if plan is None:
-        return None
-    categoria, valores, es_temporal = plan
+    return grafica_del_resultado(df)[0]
 
-    etiquetas = _etiquetas(df[categoria], es_temporal)
+
+def grafica_del_resultado(df: pd.DataFrame) -> tuple[str | None, str | None]:
+    """(ruta del PNG, motivo por el que no se dibujo).
+
+    El motivo existe para que el agente no prometa lo que no va adjunto: a un
+    resultado que no produjo ninguna imagen le respondio al usuario "he
+    preparado la grafica de lineas, te la envio".
+    """
+    plan, motivo = _planear(df)
+    if plan is None:
+        return None, motivo
+    etiquetas, es_temporal = plan.etiquetas, plan.es_temporal
+    valores = list(plan.series)
 
     horizontal = not es_temporal and _conviene_horizontal(etiquetas)
     alto = (
@@ -168,14 +351,14 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
             for indice, nombre in enumerate(valores):
                 ejes.plot(
                     etiquetas,
-                    df[nombre],
+                    plan.series[nombre],
                     color=PALETA_SERIES[indice % len(PALETA_SERIES)],
                     linewidth=2,
                     label=str(nombre),
                 )
         else:
             grosor = 0.8 / len(valores)
-            posiciones = range(len(df))
+            posiciones = range(len(etiquetas))
             for indice, nombre in enumerate(valores):
                 # Un solo color por serie pinta TODAS las barras igual. Es
                 # deliberado: colorear cada barra segun su tamano duplicaria
@@ -184,10 +367,10 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
                 desplazadas = [p + indice * grosor for p in posiciones]
                 color = PALETA_SERIES[indice % len(PALETA_SERIES)]
                 if horizontal:
-                    ejes.barh(desplazadas, df[nombre], height=grosor,
+                    ejes.barh(desplazadas, plan.series[nombre], height=grosor,
                               color=color, label=str(nombre))
                 else:
-                    ejes.bar(desplazadas, df[nombre], width=grosor,
+                    ejes.bar(desplazadas, plan.series[nombre], width=grosor,
                              color=color, label=str(nombre))
 
             centro = [p + (len(valores) - 1) * grosor / 2 for p in posiciones]
@@ -201,8 +384,7 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
                 ejes.set_xticks(centro)
                 ejes.set_xticklabels(etiquetas)
 
-        titulo = ", ".join(str(v) for v in valores) + f" por {categoria}"
-        ejes.set_title(titulo, color=COLOR_TEXTO, fontsize=13, pad=14)
+        ejes.set_title(plan.titulo, color=COLOR_TEXTO, fontsize=13, pad=14)
 
         # Una sola serie se nombra sola en el titulo; una leyenda de un
         # elemento es ruido. Con dos o mas es obligatoria: el color no puede
@@ -236,7 +418,7 @@ def exportar_grafica(df: pd.DataFrame) -> str | None:
         figura.tight_layout()
         ruta = _ruta_de_salida()
         figura.savefig(ruta, facecolor="white", bbox_inches="tight")
-        return ruta
+        return ruta, None
     finally:
         # Sin esto, cada consulta deja una figura viva y matplotlib se come la
         # memoria del proceso, que es un servicio de larga vida.

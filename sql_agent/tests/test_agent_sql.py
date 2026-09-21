@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
 import agent as modulo_agente
+import grafica
+
 from agent import (
     SQLAgent,
     _donde_vive_de_verdad,
@@ -458,6 +460,49 @@ class TestConsultarSql:
             consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 50"})
 
         assert ctx.archivos == []
+
+    def test_si_se_pidio_una_grafica_un_resultado_corto_la_lleva(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # El caso que fallaba: "muestrame una grafica de lineas del top de
+        # modelos". El agente acoto a diez filas, diez filas caben en texto,
+        # no hacia falta Excel... y la grafica se generaba dentro de ese mismo
+        # `if`, asi que no llegaba ninguna imagen y el bot igual respondio "te
+        # la envio". La imagen no depende ya de que haya Excel, ni de que el
+        # modelo se acuerde de marcar `entregar_archivo`: se lee la pregunta.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        with contexto_peticion(
+            engine, pregunta="muestrame una grafica de ventas por tienda"
+        ) as ctx:
+            consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 50"})
+
+        # Solo la imagen: el Excel cuesta (lleva la hoja de ventas por tienda)
+        # y el resultado ya se rindio entero como texto.
+        assert len(ctx.archivos) == 1
+        assert ctx.archivos[0].endswith(".png")
+
+    def test_si_no_se_pudo_dibujar_se_lo_dice_al_agente(self, tmp_path, monkeypatch):
+        # El bot respondio "he preparado la grafica de lineas, te la envio" a
+        # un resultado del que no salio ninguna imagen. No puede prometer lo
+        # que no va adjunto: si no se pudo dibujar, se entera y por que.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = _crear_engine_con_datos("aviso", filas=grafica.MAX_CATEGORIAS + 5)
+        with contexto_peticion(motor, pregunta="hazme una grafica de ventas"):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM ventas"})
+
+        assert "No pude dibujar la grafica" in salida
+        assert str(grafica.MAX_CATEGORIAS) in salida
+
+    def test_a_quien_no_pidio_grafica_no_se_le_avisa(self, tmp_path, monkeypatch):
+        # El aviso invita a consultar otra vez acotando. A un reporte que
+        # nadie queria ver graficado, eso es una consulta de mas de un minuto
+        # a cambio de nada.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        motor = _crear_engine_con_datos("sin_aviso", filas=grafica.MAX_CATEGORIAS + 5)
+        with contexto_peticion(motor, pregunta="dame las ventas por tienda"):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM ventas"})
+
+        assert "grafica" not in salida.lower()
 
     def test_pedir_el_archivo_sin_resultados_no_revienta(
         self, engine, tmp_path, monkeypatch
@@ -1364,6 +1409,17 @@ class TestCualReporteSeEntrega:
             ctx.registrar_reporte(None, "retailers_distintos.xlsx")
 
         assert ctx.archivos == ["grafica.png", "ventas.xlsx"]
+
+    def test_la_grafica_sola_tambien_desplaza_al_volcado(self, engine):
+        # Es el caso corriente desde que la grafica dejo de depender del
+        # Excel: el agente acota a diez filas, esas diez caben en texto, y de
+        # la segunda vuelta sale la imagen sin Excel que la acompane. Sigue
+        # siendo el reporte bueno, y el volcado anterior sigue sin serlo.
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "volcado.xlsx")
+            ctx.registrar_reporte("grafica.png", None)
+
+        assert ctx.archivos == ["grafica.png"]
 
     def test_entre_dos_sin_grafica_se_queda_el_primero(self, engine):
         with contexto_peticion(engine) as ctx:

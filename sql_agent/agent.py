@@ -38,7 +38,7 @@ from catalogo import (
 )
 from contexto import contexto_del_resultado
 from excel_exporter import ExcelExporter
-from grafica import exportar_grafica
+from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, proyectar
@@ -378,6 +378,11 @@ class ContextoPeticion:
     """Estado de una sola pregunta: de donde se lee y que reporte se genero."""
 
     engine: Engine
+    # La pregunta tal cual la escribio el usuario. La miran las herramientas
+    # que necesitan saber QUE se pidio y no solo que datos salieron: si dijo
+    # "muestrame una grafica", la grafica se genera aunque el resultado quepa
+    # en texto.
+    pregunta: str = ""
     archivos: list[str] = field(default_factory=list)
     # Cuando empezo la peticion, para saber cuanto queda del presupuesto.
     inicio: float = field(default_factory=time.monotonic)
@@ -428,10 +433,12 @@ _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default
 
 @contextmanager
 def contexto_peticion(
-    engine: Engine, cancelacion: threading.Event | None = None
+    engine: Engine,
+    cancelacion: threading.Event | None = None,
+    pregunta: str = "",
 ) -> Iterator[ContextoPeticion]:
     """Activa un contexto por petición, en lugar del viejo global _db_instance."""
-    ctx = ContextoPeticion(engine=engine, cancelacion=cancelacion)
+    ctx = ContextoPeticion(engine=engine, cancelacion=cancelacion, pregunta=pregunta)
     testigo = _contexto.set(ctx)
     try:
         yield ctx
@@ -1129,8 +1136,32 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     )
     bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s", bitacora.RESULTADO)
     resultado = formatear_resultado(df)
+
+    # La grafica ya NO depende de que haya Excel. Antes iba dentro del `if`
+    # de abajo, y por eso a un "muestrame una grafica de lineas del top de
+    # modelos" no llegaba ninguna imagen: el agente acoto a 10 filas, esas 10
+    # caben en texto, no hacia falta Excel... y con el Excel se cayo tambien
+    # la grafica, que era lo unico que se habia pedido.
+    #
+    # Se dibuja cuando el reporte ya se va a mandar de todos modos, o cuando
+    # la PREGUNTA pedia una grafica. Lo segundo se decide leyendo la pregunta
+    # y no la bandera del modelo, que es justo la que no se marco. Un
+    # resultado corto que nadie pidio ver graficado sigue sin adjunto: mandar
+    # una imagen de tres filas a un chat es ruido.
+    imagen = motivo_sin_grafica = None
+    quiere_grafica = pidio_grafica(ctx.pregunta)
+    if not df.empty and (
+        resultado.necesita_excel or entregar_archivo or quiere_grafica
+    ):
+        try:
+            imagen, motivo_sin_grafica = grafica_del_resultado(df)
+        except Exception:  # noqa: BLE001
+            # Que falle no cuesta el reporte: los datos son lo que se pidio.
+            logger.exception("No se pudo generar la grafica; va sin ella")
+
     # `not df.empty`: sin filas no hay nada que exportar, y pedir el archivo
     # no puede convertir un "sin resultados" en un error de exportacion.
+    excel = None
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -1147,16 +1178,20 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"
 
-        # La grafica va primero: en el chat se ve de un vistazo, y el Excel
-        # queda debajo para quien quiera el detalle. Que falle no cuesta el
-        # reporte: los datos son lo que se pidio.
-        try:
-            imagen = exportar_grafica(df)
-        except Exception:  # noqa: BLE001
-            logger.exception("No se pudo generar la grafica; se manda solo el Excel")
-            imagen = None
+    # La grafica va primero: en el chat se ve de un vistazo, y el Excel queda
+    # debajo para quien quiera el detalle.
+    ctx.registrar_reporte(imagen, excel)
 
-        ctx.registrar_reporte(imagen, excel)
+    # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
+    # que tendria que cambiar para que la haya. Sin esto no se entera de que
+    # no la hay y le promete al usuario una imagen que nunca se adjunto. Y
+    # solo cuando la pidieron, porque a un reporte que nadie queria ver
+    # graficado este aviso lo unico que le agrega es una consulta de mas.
+    if quiere_grafica and motivo_sin_grafica:
+        return (
+            f"{resultado.texto}\n\nNo pude dibujar la grafica que te "
+            f"pidieron: {motivo_sin_grafica}."
+        )
     return resultado.texto
 
 
@@ -1336,8 +1371,12 @@ class SQLAgent:
         3. Si el usuario pide modificar o borrar informacion, niegate educadamente
            explicando que solo tienes acceso de lectura.
         4. Para obtener los datos finales que responden la pregunta usa SIEMPRE la
-           herramienta `consultar_sql`. Con muchas filas arma sola el Excel y la
-           grafica.
+           herramienta `consultar_sql`. La grafica la arma sola siempre que el
+           resultado se pueda graficar, y con muchas filas arma ademas el Excel.
+           Para una grafica de evolucion, devuelve las columnas del periodo
+           ([Año], [Mes] o la fecha) JUNTO CON la columna que separa las
+           lineas (el modelo, el retailer) y una sola medida: se dibuja una
+           linea por cada modelo a lo largo de los meses. No mas de 6 lineas.
            Si el usuario PIDE el archivo ("mandame el excel", "pasamelo en
            archivo", "descargable"), llamala con `entregar_archivo=True`: un
            resultado corto se responde solo como texto, y sin eso el usuario se
@@ -1481,7 +1520,7 @@ class SQLAgent:
         historial: una pregunta cancelada no ocurrio.
         """
         self.idioma = idiomas.detectar(pregunta) or self.idioma
-        with contexto_peticion(self.engine, cancelacion) as ctx:
+        with contexto_peticion(self.engine, cancelacion, pregunta) as ctx:
             respuesta = self.agent_executor.invoke(
                 {
                     "input": pregunta,
