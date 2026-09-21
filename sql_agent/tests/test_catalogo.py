@@ -72,6 +72,72 @@ class TestNotasDeNegocio:
             assert catalogo.buscar(nombre), f"{nombre} ya no existe en el catalogo"
 
 
+class TestConceptosDelNegocio:
+    """CAPA, SHARE y promotoria: tres cosas que el negocio nombra a diario y
+    que no son columnas de ninguna tabla.
+
+    Como en TestNotasDeNegocio, esto no verifica que el modelo acierte --eso
+    depende del LLM-- sino que la informacion que lo evitaria le llegue.
+    """
+
+    def test_capa_esta_definido_y_avisa_de_la_tienda_repetida(self):
+        texto = catalogo.indice()
+        assert "CAPA" in texto
+        # Que es: el maximo, no el promedio ni el ultimo mes.
+        assert "MAX" in texto
+        # Y la trampa medida: el mismo numero de tienda con varios nombres
+        # parte la tienda y hunde su CAPA.
+        assert "ELEKTRA.COM" in texto and "CHARINDEX" in texto
+
+    def test_share_se_calcula_en_una_sola_pasada(self):
+        texto = catalogo.indice()
+        assert "SHARE" in texto
+        # Lo que arruina un share: filtrar la marca en el WHERE deja el
+        # denominador sin las demas marcas y todo da 100%.
+        assert "CASE WHEN [Brand]" in texto
+        assert "WHERE" in texto and "100%" in texto
+
+    def test_la_promotoria_apunta_a_sus_tablas(self):
+        texto = catalogo.indice()
+        assert "PROMOTORIA" in texto
+        assert "HCReport" in texto and "V_HCReport_Informes" in texto
+        assert "SEMANA COMPLETA" in texto
+
+    def test_la_ficha_mensual_trae_el_mapa_de_semanas_y_sus_dos_avisos(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
+        # El mes se escribe en ingles: sin esto el agente prueba '2026-08',
+        # no encuentra nada y reporta que no hay promotoria.
+        assert "2026-August" in ficha
+        # La semana que representa cada mes.
+        assert "W35 agosto" in ficha
+        # Los dos limites medidos de la vista.
+        assert "4 529" in ficha and "8 326" in ficha
+        assert "2027" in ficha
+
+    def test_la_ficha_semanal_avisa_del_cero_en_la_semana(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})
+        assert "W01" in ficha
+        assert "[ID]" in ficha and "CustomerStores" in ficha
+
+    def test_la_llave_compuesta_esta_explicada(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport_VW"})
+        assert "FKEY_HR" in ficha
+        assert "2026W10APSMX222602" in ficha
+
+    def test_el_catalogo_de_tiendas_dice_con_quien_casa_y_con_quien_no(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "CustomerStores"})
+        # Telcel y Sears no casan por nombre: forzarlo con LIKE inventa
+        # cruces que no existen.
+        assert "Telcel 0/675" in ficha and "Sears 0/91" in ficha
+
+    def test_el_mes_de_promotoria_no_se_adivina(self):
+        # Esta en valores.json para que `valores_distintos` lo conteste sin
+        # ir a la base, que es justo cuando el agente inventaria '2026-08'.
+        periodos = catalogo.valores_conocidos("V_HCReport_Informes", "Period")
+        assert "2026-August" in periodos
+        assert not any(p.endswith("-08") for p in periodos)
+
+
 class TestDescribirObjeto:
     def _describir(self, nombre: str) -> str:
         return catalogo.describir_objeto.invoke({"nombre": nombre})
