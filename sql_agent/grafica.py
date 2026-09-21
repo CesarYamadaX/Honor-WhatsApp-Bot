@@ -22,6 +22,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
+import tiempo  # noqa: E402
+
 logger = logging.getLogger("sql_agent.grafica")
 
 # Paleta categorica en orden fijo, validada con el validador de la guia de
@@ -63,16 +65,6 @@ LARGO_DE_ETIQUETA_PARA_HORIZONTAL = 14
 MAX_LARGO_ETIQUETA = 42
 
 
-# Como nombra el agente las partes de una fecha. Las parte en columnas porque
-# asi las agrupa el GROUP BY ([Año], [Mes]) y quedan como numeros: sin
-# reconocerlas, la grafica las tomaba por medidas y dibujaba una barra de
-# valor 2026 y otra de valor 3 al lado de una de 143 575, con el modelo
-# repetido cuatro veces en el eje. Reconocerlas es lo que convierte ese
-# resultado de cuatro columnas en la grafica de evolucion que se pidio.
-_ES_ANIO = re.compile(r"^\s*\[?\s*(a[nñ]o|anio|year)\s*\]?\s*$", re.IGNORECASE)
-_ES_MES = re.compile(r"^\s*\[?\s*(mes|month)\s*\]?\s*$", re.IGNORECASE)
-
-
 @dataclass(frozen=True)
 class Plan:
     """Que dibujar: unas categorias en un eje y una o mas series sobre ellas.
@@ -88,21 +80,6 @@ class Plan:
     series: dict[str, list]
     titulo: str
     es_temporal: bool
-
-
-def _columna(df: pd.DataFrame, patron: re.Pattern):
-    for nombre in df.columns:
-        if patron.match(str(nombre)):
-            return nombre
-    return None
-
-
-def _enteros(serie: pd.Series):
-    """La columna como enteros, o None si alguna celda no lo es."""
-    numeros = pd.to_numeric(serie, errors="coerce")
-    if numeros.isna().any():
-        return None
-    return numeros.astype(int)
 
 
 def _eje_de_tiempo(df: pd.DataFrame):
@@ -127,12 +104,12 @@ def _eje_de_tiempo(df: pd.DataFrame):
                 return meses, "periodo", {nombre}
             return fechas.dt.strftime("%Y-%m-%d"), str(nombre), {nombre}
 
-    anio, mes = _columna(df, _ES_ANIO), _columna(df, _ES_MES)
+    anio, mes = tiempo.columna(df, tiempo.ES_ANIO), tiempo.columna(df, tiempo.ES_MES)
     # Un [Mes] suelto, sin anio, se queda como categoria normal: son doce
     # barras y se leen igual de bien.
     if anio is None or mes is None:
         return None
-    anios, meses = _enteros(df[anio]), _enteros(df[mes])
+    anios, meses = tiempo.enteros(df[anio]), tiempo.enteros(df[mes])
     if anios is None or meses is None:
         return None
     etiquetas = anios.astype(str) + "-" + meses.astype(str).str.zfill(2)

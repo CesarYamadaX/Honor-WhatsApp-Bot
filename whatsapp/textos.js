@@ -8,14 +8,17 @@
 export const IDIOMA_POR_DEFECTO = "es";
 
 const TEXTOS = {
+  // No dice "se esta tardando": eso suena a que algo salio mal, y lo normal
+  // aqui es que tarde -- las vistas de venta se miden en minutos. Dice que
+  // esta trabajando, que es lo que esta pasando, y como cancelar.
   espera: {
     es:
-      "Esta consulta esta tardando mas de lo normal, sigo en ella. " +
+      "Estoy trabajando en lo que me pediste, esto puede tardar un poco. " +
       "Si quieres, mandame otra pregunta y cancelo esta.",
     en:
-      "This query is taking longer than usual; I'm still on it. " +
+      "I'm working on what you asked for; this may take a little while. " +
       "If you want, send me another question and I'll cancel this one.",
-    zh: "这个查询比平常久，我还在处理。如果需要，你可以再发一个问题，我会取消这一个。",
+    zh: "我正在处理你的请求，这可能需要一点时间。如果需要，你可以再发一个问题，我会取消这一个。",
   },
   ocupado: {
     es: "Sigo trabajando en tu pregunta anterior. Dame un momento.",

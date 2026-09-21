@@ -87,6 +87,52 @@ def test_el_excel_es_solo_datos(tmp_path, monkeypatch):
     assert libro[HOJA_DATOS]._charts == []
 
 
+class TestElArchivoSaleEnOrden:
+    """"Que cuando se pide un archivo siempre venga ordenado, por ejemplo de
+    meses, primero los mas viejos a los mas recientes".
+
+    El agente escribe `ORDER BY SUM([QTY]) DESC` porque esta buscando los mas
+    vendidos, asi que el reporte llegaba con agosto arriba, enero en medio y
+    marzo al final. Se reordena al entregarlo.
+    """
+
+    def _leer(self, ruta, hoja=HOJA_DATOS):
+        libro = openpyxl.load_workbook(ruta)
+        return list(libro[hoja].iter_rows(min_row=2, values_only=True))
+
+    def test_los_meses_salen_del_mas_viejo_al_mas_reciente(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        # Como viene de la consulta: ordenado por cantidad.
+        df = pd.DataFrame(
+            {
+                "Año": [2026, 2025, 2026],
+                "Mes": [3, 12, 1],
+                "Total": [300, 200, 100],
+            }
+        )
+        ruta = ExcelExporter.export_to_excel(df, filename="orden.xlsx")
+        assert [(f[0], f[1]) for f in self._leer(ruta)] == [
+            (2025, 12),
+            (2026, 1),
+            (2026, 3),
+        ]
+
+    def test_las_hojas_de_contexto_tambien(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        ficha = pd.DataFrame({"Mes": [9, 2], "Tienda": ["b", "a"], "Unidades": [5, 9]})
+        ruta = ExcelExporter.export_to_excel(
+            _df(), filename="contexto.xlsx", contexto={"Ventas por tienda": ficha}
+        )
+        assert [f[0] for f in self._leer(ruta, "Ventas por tienda")] == [2, 9]
+
+    def test_un_top_no_se_reordena(self, tmp_path, monkeypatch):
+        # Sin columna de tiempo, el orden de la consulta ES la respuesta.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        df = pd.DataFrame({"Retail": ["c", "a", "b"], "QTY": [30, 20, 10]})
+        ruta = ExcelExporter.export_to_excel(df, filename="top.xlsx")
+        assert [f[0] for f in self._leer(ruta)] == ["c", "a", "b"]
+
+
 class TestAnchoDeColumnas:
     def _ancho(self, libro, letra):
         return libro[HOJA_DATOS].column_dimensions[letra].width

@@ -27,6 +27,8 @@ import re
 
 import pandas as pd
 
+import tiempo
+
 logger = logging.getLogger("sql_agent.contexto")
 
 GTM = "[GTM BI Database].dbo"
@@ -59,12 +61,8 @@ SEGUNDOS_PARA_EL_DESGLOSE = 90
 # Como se llama la columna de modelo en un resultado. El agente las nombra de
 # varias formas segun como escriba el SELECT.
 _ES_MODELO = re.compile(
-    r"homologacion|modelo|model|material.?description", re.IGNORECASE
+    r".*(homologacion|modelo|model|material.?description)", re.IGNORECASE
 )
-_ES_ANIO = re.compile(r"^(a[nñ]o|year)$", re.IGNORECASE)
-_ES_MES = re.compile(r"^(mes|month)$", re.IGNORECASE)
-
-
 def _valores_de_texto(df: pd.DataFrame) -> list[str]:
     """Los valores distintos de las columnas no numericas del resultado."""
     valores: set[str] = set()
@@ -93,20 +91,13 @@ def _buscar(conexion, tabla: str, columnas: tuple[str, ...], valores: list[str])
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
-def _columna(df: pd.DataFrame, patron: re.Pattern) -> str | None:
-    for nombre in df.columns:
-        if patron.search(str(nombre)):
-            return nombre
-    return None
-
-
 def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:
     """Los modelos del resultado, los mas vendidos primero.
 
     Se ordenan por la columna numerica del propio resultado: si el reporte
     trae cien modelos, el desglose por tienda es de los que de verdad pesan.
     """
-    columna = _columna(df, _ES_MODELO)
+    columna = tiempo.columna(df, _ES_MODELO)
     if columna is None:
         return []
 
@@ -137,7 +128,8 @@ def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
             hasta = fechas.max().normalize() + pd.Timedelta(days=1)
             return desde.strftime("%Y-%m-%d"), hasta.strftime("%Y-%m-%d")
 
-    anio, mes = _columna(df, _ES_ANIO), _columna(df, _ES_MES)
+    anio = tiempo.columna(df, tiempo.ES_ANIO)
+    mes = tiempo.columna(df, tiempo.ES_MES)
     if anio is None:
         return None
     anios = pd.to_numeric(df[anio], errors="coerce").dropna()

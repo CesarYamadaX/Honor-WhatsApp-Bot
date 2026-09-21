@@ -7,6 +7,8 @@ import pandas as pd
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
+from tiempo import ordenar_por_tiempo
+
 logger = logging.getLogger("sql_agent.excel_exporter")
 
 HOJA_DATOS = "Datos"
@@ -134,6 +136,18 @@ class ExcelExporter:
         # Solo datos: la grafica ya no vive aqui, se manda como imagen aparte
         # (ver grafica.py). En el telefono nadie abre la segunda hoja de un
         # adjunto; una imagen se ve en la conversacion misma.
+        # El archivo sale en orden cronologico, del mes mas viejo al mas
+        # reciente. La consulta casi nunca viene asi -- el agente ordena por
+        # cantidad, buscando los mas vendidos -- y el reporte llegaba con
+        # agosto arriba y marzo al final. Ver tiempo.ordenar_por_tiempo: el
+        # orden es estable, asi que dentro de cada mes se conserva el de la
+        # consulta, y un resultado sin tiempo se deja como esta.
+        df = ordenar_por_tiempo(df)
+        contexto = {
+            nombre: ordenar_por_tiempo(ficha)
+            for nombre, ficha in (contexto or {}).items()
+        }
+
         with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
             df.to_excel(escritor, index=False, sheet_name=HOJA_DATOS)
             for nombre, ficha in (contexto or {}).items():
