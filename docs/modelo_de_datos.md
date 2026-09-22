@@ -120,11 +120,34 @@ armando la misma concatenación del lado de la venta casa mejor que
 | Liverpool | `[Material Description]` | `DESCRIPCION` | 100.0% |
 | AT&T | `[Model]` | `DESCRIPCION` | 89.0% — ahí la final casa **0%** |
 
-En Coppel la final es marca + descripción (`ACER ANV15-41-R4WJ`); en Sears es
-la palabra `Sears` + descripción (`Sears APPLE IPHONE 11 64GB`). Es también la
-columna que casa al 100% contra `vw_ETL_COPPEL` y `vw_ETL_COPPEL_IOT`, que
-arman su `[Material_Description]` como `CONCAT(marca, modelo)` — la misma idea
-del otro lado.
+### Por qué no la final en todas
+
+Porque `[MATERIAL DESCRIPTION FINAL]` no es un formato: es **prefijo +
+`[DESCRIPCION]`**, y el prefijo cambia por cadena. Filas del catálogo donde las
+dos columnas son idénticas:
+
+| Cadena | Iguales | El prefijo es |
+|---|---|---|
+| Telcel | 8 947 de 8 947 | nada — son la misma columna |
+| Elektra | 3 364 de 3 393 | nada, salvo 29 filas |
+| Liverpool | 6 227 de 12 489 | el código de artículo (`1200272087 ABS Nebula…`) |
+| Coppel | 11 de 3 076 | la **marca** (`ACER ANV15-41-R4WJ`) |
+| Sears | 0 de 455 | la palabra **Sears** (`Sears APPLE IPHONE 11 64GB`) |
+| AT&T | 11 de 454 | el **nombre del retail** (`AT&T CACS APPLE IPHONE 17…`) |
+
+De ahí la regla: donde el prefijo existe y se puede reconstruir desde la venta
+(Coppel, Sears), la final **es** la llave y casa mejor. Donde las dos columnas
+son casi la misma (Telcel, Elektra), da igual cuál se use. En Liverpool
+`[DESCRIPCION]` además cubre la mitad del catálogo que lleva código delante.
+
+AT&T es el caso que no compensa: el prefijo es el nombre del retail, y la tabla
+cruda mezcla CACS y DEALERS sin una columna que diga cuál es, así que habría que
+adivinarlo. Medido: con `'AT&T CACS '` casa 89.3%, con `'AT&T DEALERS '` 86.2%,
+y por `[DESCRIPCION]` 89.0%. Se queda con la descripción.
+
+La final es también la columna que casa al 100% contra `vw_ETL_COPPEL` y
+`vw_ETL_COPPEL_IOT`, que arman su `[Material_Description]` como
+`CONCAT(marca, modelo)` — la misma idea del otro lado.
 
 Por `[MATERIAL DESCRIPTION FINAL]` no hay ningún texto ambiguo en Coppel ni en
 Sears (0 con dos homologaciones); por `[DESCRIPCION]` sí hay 137 en Liverpool y
