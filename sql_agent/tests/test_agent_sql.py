@@ -771,6 +771,61 @@ class TestLaBaseDelPronostico:
         assert "En que me base" not in texto
 
 
+class TestLoQueSeOfreceAlFinal:
+    """Se pidio que el mensaje invite a indagar mas.
+
+    Va al final, despues de la respuesta, y sale de las columnas de la tabla
+    que se entrego -- no del modelo, que ni se entera de que se agrego.
+    """
+
+    def _responder(self, pregunta, query, idioma="es"):
+        motor = _engine_con_serie_mensual()
+        agente = SQLAgent.__new__(SQLAgent)
+        agente.engine = motor
+        agente.historial = []
+        agente.idioma = idioma
+
+        class _Ejecutor:
+            def invoke(self, payload, config=None, **kwargs):
+                consultar_sql.invoke({"query": query})
+                return {"output": "Vendieron 120 mil unidades."}
+
+        agente.agent_executor = _Ejecutor()
+        return agente.responder(pregunta)[0]
+
+    def test_el_mensaje_termina_ofreciendo_que_mas_preguntar(self):
+        texto = self._responder("ventas por mes", "SELECT * FROM serie")
+        assert "Tambien te puedo decir:" in texto
+        # Y va DESPUES de la respuesta, no encima de ella.
+        assert texto.index("120 mil") < texto.index("Tambien te puedo decir:")
+
+    def test_no_se_ofrece_lo_que_la_tabla_ya_traia(self):
+        # La tabla de la prueba tiene anio y mes: ofrecer "por mes" seria
+        # ofrecer lo que el usuario acaba de recibir.
+        texto = self._responder("ventas por mes", "SELECT * FROM serie")
+        assert "mes del ano pasado" in texto or "por tienda" in texto
+
+    def test_va_en_el_idioma_del_usuario(self):
+        texto = self._responder("sales by month", "SELECT * FROM serie", idioma="en")
+        assert "I can also tell you:" in texto
+        assert "Tambien te puedo decir" not in texto
+
+    def test_una_pregunta_sin_consulta_no_ofrece_nada(self):
+        # Si no hubo tabla, no hay de que colgar una sugerencia.
+        motor = _engine_con_serie_mensual()
+        agente = SQLAgent.__new__(SQLAgent)
+        agente.engine = motor
+        agente.historial = []
+        agente.idioma = "es"
+
+        class _Ejecutor:
+            def invoke(self, payload, config=None, **kwargs):
+                return {"output": "Hola, en que te ayudo?"}
+
+        agente.agent_executor = _Ejecutor()
+        assert "Tambien te puedo decir" not in agente.responder("hola")[0]
+
+
 class TestLoQueSeLeMandaAlUsuario:
     def test_se_tira_el_enlace_de_descarga_inventado(self):
         # Respondio tal cual: "[Descargar Excel con datos de ventas de

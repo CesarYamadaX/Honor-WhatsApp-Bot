@@ -42,6 +42,7 @@ from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
+from sugerencias import sugerir
 from formatting import formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
@@ -397,6 +398,9 @@ class ContextoPeticion:
     # La pega `responder` al final del mensaje: que aparezca no puede depender
     # de que el modelo se acuerde de contarlo.
     base_del_pronostico: str = ""
+    # Que mas se puede preguntar sobre lo que se acaba de entregar. Claves de
+    # sugerencias.py; el texto lo arma `responder` en el idioma del usuario.
+    sugerencias: list[str] = field(default_factory=list)
     # El idioma detectado de la pregunta, para los textos que escribe el
     # servicio y no el modelo.
     idioma: str = idiomas.POR_DEFECTO
@@ -1262,6 +1266,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # debajo para quien quiera el detalle.
     ctx.registrar_reporte(imagen, excel)
 
+    # Que mas se puede preguntar sobre esto. Se queda con las de la PRIMERA
+    # consulta, que es la que responde la pregunta: las de despues salen de
+    # comprobaciones y ofrecerian el detalle de una tabla que el usuario
+    # nunca vio.
+    if not ctx.sugerencias:
+        ctx.sugerencias = sugerir(ctx.pregunta, df, query)
+
     partes = [resultado.texto]
 
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
@@ -1499,6 +1510,12 @@ class SQLAgent:
            responde lo que se pidio.
         5. Respondes en un telefono: se breve. No repitas la tabla de resultados en
            tu respuesta final, resumela en una o dos frases.
+           No cierres ofreciendo mas datos ("¿quieres que lo abra por
+           tienda?", "¿te lo comparo con el ano pasado?"): al final del
+           mensaje se agregan solas, y en el idioma del usuario, dos cosas
+           concretas que se pueden preguntar sobre lo que acabas de
+           entregar. Si tu ademas ofreces, el usuario lee lo mismo dos
+           veces.
         6. Si una herramienta devuelve un mensaje de error (por ejemplo, de la base
            de datos o del driver), NUNCA cites ese texto tal cual al usuario: puede
            contener nombres de tablas, columnas u otros detalles internos del
@@ -1659,6 +1676,11 @@ class SQLAgent:
             self._recordar(pregunta, texto)
             if ctx.base_del_pronostico:
                 texto = f"{texto}\n\n{ctx.base_del_pronostico}"
+            # Lo ultimo: primero la respuesta, luego de donde salio, y al
+            # final lo que se puede preguntar despues.
+            ofrecimiento = idiomas.sugerencias(self.idioma, ctx.sugerencias)
+            if ofrecimiento:
+                texto = f"{texto}\n\n{ofrecimiento}"
             return texto, list(ctx.archivos)
 
     def _recordar(self, pregunta: str, respuesta: str) -> None:

@@ -216,6 +216,56 @@ def base_del_pronostico(
     return "\n".join(lineas)
 
 
+# Lo que se ofrece al final de una respuesta. El texto es la PREGUNTA que el
+# usuario tendria que hacer, no una descripcion: asi puede copiarla o decir
+# "la primera" y el bot ya sabe seguir, porque la conversacion tiene memoria.
+_SUGERENCIAS = {
+    ESPANOL: {
+        "titulo": "Tambien te puedo decir:",
+        "share_honor": "que parte de eso fue HONOR (el share)",
+        "por_tienda": "como se reparte por tienda",
+        "capa": "el CAPA de esas tiendas, para ver cuanto les falta para su maximo",
+        "mismo_periodo_anterior": "como venia el mismo periodo del ano pasado",
+        "por_modelo": "que modelos lo movieron",
+        "otros_retailers": "como les fue a las otras cadenas",
+        "ventas_de_esas_tiendas": "cuanto vendieron esas tiendas, para ver si la promotoria se nota",
+    },
+    INGLES: {
+        "titulo": "I can also tell you:",
+        "share_honor": "how much of that was HONOR (the share)",
+        "por_tienda": "how it breaks down by store",
+        "capa": "the CAPA of those stores, to see how far they are from their peak",
+        "mismo_periodo_anterior": "how the same period looked last year",
+        "por_modelo": "which models drove it",
+        "otros_retailers": "how the other retailers did",
+        "ventas_de_esas_tiendas": "how much those stores sold, to see whether the promoter shows up in the numbers",
+    },
+    CHINO: {
+        "titulo": "我还可以告诉你：",
+        "share_honor": "其中荣耀（HONOR）占多少（份额）",
+        "por_tienda": "按门店的分布情况",
+        "capa": "这些门店的 CAPA，看看距离各自的峰值还有多远",
+        "mismo_periodo_anterior": "去年同期的情况",
+        "por_modelo": "哪些机型带动的",
+        "otros_retailers": "其他渠道的表现",
+        "ventas_de_esas_tiendas": "这些门店卖了多少，看看促销员有没有体现在数字上",
+    },
+}
+
+
+def sugerencias(idioma: str, claves: list) -> str:
+    """Lo que se puede preguntar despues, en el idioma del usuario.
+
+    Cadena vacia si no hay nada que ofrecer, para que quien llama no tenga
+    que acordarse de comprobarlo.
+    """
+    piezas = _SUGERENCIAS.get(idioma, _SUGERENCIAS[ESPANOL])
+    lineas = [f"- {piezas[c]}" for c in claves if c in piezas]
+    if not lineas:
+        return ""
+    return "\n".join([piezas["titulo"], *lineas])
+
+
 def sin_acentos(texto: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFD", texto) if not unicodedata.combining(c)
