@@ -156,6 +156,85 @@ class TestHojasDevueltas:
         assert list(hojas) == ["Carriers"]
 
 
+class TestUnaHojaPorCadena:
+    """Cuando el reporte trae varias cadenas, cada una tiene su pestaña.
+
+    La hoja de datos se queda completa: esto se agrega al lado. Un reporte
+    que compara Coppel contra Elektra se lee cadena por cadena, y en una sola
+    tabla mezclada eso obliga a filtrar a mano cada vez.
+    """
+
+    def _reporte(self, cadenas, filas_por_cadena, unidades=None):
+        datos = []
+        for indice, cadena in enumerate(cadenas):
+            for fila in range(filas_por_cadena):
+                datos.append(
+                    {
+                        "Retail": cadena,
+                        "Año": 2026,
+                        "Mes": (fila % 12) + 1,
+                        "Unidades": (unidades or {}).get(cadena, 10),
+                    }
+                )
+        return pd.DataFrame(datos)
+
+    def test_cada_cadena_tiene_su_hoja(self):
+        hojas = contexto.hojas_por_cadena(self._reporte(["Coppel", "ELEKTRA"], 12))
+        assert set(hojas) == {"Coppel", "ELEKTRA"}
+        assert (hojas["Coppel"]["Retail"] == "Coppel").all()
+        assert len(hojas["Coppel"]) == 12
+
+    def test_las_pestañas_van_por_volumen_no_por_el_año(self):
+        # La primera columna numerica de un reporte por mes es [Año]:
+        # ordenar por ella es ordenar por 2026, o sea por numero de filas.
+        df = self._reporte(
+            ["chica", "grande"], 12, unidades={"chica": 1, "grande": 1000}
+        )
+        assert list(contexto.hojas_por_cadena(df)) == ["grande", "chica"]
+
+    def test_con_una_sola_cadena_no_se_separa_nada(self):
+        assert contexto.hojas_por_cadena(self._reporte(["Coppel"], 30)) == {}
+
+    def test_sin_columna_de_cadena_tampoco(self):
+        df = pd.DataFrame({"Modelo": ["a"] * 20, "Unidades": range(20)})
+        assert contexto.hojas_por_cadena(df) == {}
+
+    def test_no_se_parte_un_reporte_flaco(self):
+        # 48 filas y 16 cadenas son tres filas por pestaña: separar ahi no
+        # ayuda a comparar, estorba.
+        df = self._reporte([f"C{i}" for i in range(16)], 3)
+        assert contexto.hojas_por_cadena(df) == {}
+
+    def test_ni_uno_con_demasiadas_cadenas(self):
+        df = self._reporte([f"C{i}" for i in range(20)], 30)
+        assert contexto.hojas_por_cadena(df) == {}
+
+    def test_el_nombre_de_la_hoja_lo_acepta_excel(self):
+        # Excel rechaza : \\ / ? * [ ] y corta a 31 caracteres.
+        largo = "AT&T Cacs / Retail [norte] " + "x" * 40
+        nombre = contexto._nombre_de_hoja(largo, set())
+        assert len(nombre) <= 31
+        assert not any(c in nombre for c in ":\\/?*[]")
+
+    def test_dos_cadenas_no_se_pisan_al_recortarse(self):
+        usados = set()
+        largo = "CADENA MUY LARGA QUE SE RECORTA AQUI Y ALLA"
+        primero = contexto._nombre_de_hoja(largo, usados)
+        segundo = contexto._nombre_de_hoja(largo, usados)
+        assert primero != segundo
+        assert len(segundo) <= 31
+
+    def test_ninguna_hoja_se_llama_como_la_de_datos(self):
+        # Dos hojas con el mismo nombre revientan el archivo.
+        df = self._reporte(["Datos", "Coppel"], 12)
+        assert "Datos" not in contexto.hojas_por_cadena(df)
+
+    def test_la_medida_ignora_el_periodo(self):
+        df = pd.DataFrame({"Año": [2026], "Mes": [8], "Unidades": [5]})
+        assert contexto._medida(df) == "Unidades"
+        assert contexto._medida(pd.DataFrame({"Año": [2026]})) is None
+
+
 class TestExcelConContexto:
     def test_el_resultado_va_en_la_primera_hoja(self, tmp_path, monkeypatch):
         import openpyxl

@@ -266,6 +266,24 @@ columna de tienda — la hoja sale por **periodo**: unidades por retailer y
 tienda en el rango del reporte, sin pasar por la homologación. Siempre
 correcta, aunque sin modelo.
 
+## Las hojas del archivo
+
+| Hoja | Qué lleva |
+|---|---|
+| `Datos` | el resultado completo, en orden cronológico |
+| una por cadena | las filas de esa cadena, cuando el reporte trae varias |
+| `Ventas por tienda` | región, tienda, modelo y unidades (una sola cadena) o retailer, tienda y unidades del periodo (varias) |
+| `Tiendas`, `Regiones`, `Carriers` | la ficha de los valores que salieron |
+
+Las hojas por cadena se agregan **sin quitar** `Datos`, y van ordenadas por
+volumen para que las primeras pestañas sean las que pesan. No se separa
+siempre: hacen falta entre 2 y 16 cadenas y al menos 10 filas por cadena en
+promedio. Un reporte de 48 filas y 16 cadenas son tres filas por pestaña —
+ahí separar no ayuda a comparar, estorba.
+
+El nombre de la hoja es el de la cadena, limpiado para Excel: sin
+`: \ / ? * [ ]`, cortado a 31 caracteres y sin repetirse.
+
 ## Lo que sigue sin resolverse
 
 - **Telcel y Sears no cruzan con `CustomerStores` por nombre.** Mientras siga

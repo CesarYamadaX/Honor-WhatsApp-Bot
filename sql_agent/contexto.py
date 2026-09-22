@@ -70,6 +70,20 @@ MAX_FILAS_POR_HOJA = 2000
 # esta hoja es un extra y no puede duplicar la espera.
 SEGUNDOS_PARA_EL_DESGLOSE = 90
 
+# Hasta cuantas cadenas se separan en hojas propias. La vista consolidada
+# tiene 16 valores de [Retail] -- Telcel sola aporta seis canales -- y ese es
+# el tope real; mas que eso no es una columna de cadena.
+MAX_HOJAS_POR_CADENA = 16
+
+# Y cuantas filas tiene que tener en promedio cada cadena para que separarlas
+# ayude. Un reporte de 48 filas y 16 cadenas son tres filas por pestaña: ahi
+# separar no ayuda a comparar, estorba. La pestaña propia sirve cuando la
+# cadena trae una tabla de verdad.
+MIN_FILAS_POR_CADENA = 10
+
+# Caracteres que Excel no acepta en el nombre de una hoja.
+_PROHIBIDOS_EN_HOJA = ':\\/?*[]'
+
 # Cuantos modelos del resultado se desglosan. Un reporte con cien modelos no
 # se lee de todos modos: se toman los mas vendidos del propio resultado.
 MAX_MODELOS_DESGLOSADOS = 15
@@ -207,6 +221,23 @@ def _buscar(conexion, tabla: str, columnas: tuple[str, ...], valores: list[str])
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
+def _medida(df: pd.DataFrame):
+    """La columna numerica que MIDE algo, o None.
+
+    No basta con "la primera numerica": en un resultado por mes, la primera
+    numerica es [Año], y ordenar por ella es ordenar por 2026 -- o sea, por
+    numero de filas. Las columnas de periodo dicen cuando, no cuanto.
+    """
+    for nombre in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[nombre]):
+            continue
+        texto = str(nombre)
+        if tiempo.ES_ANIO.match(texto) or tiempo.ES_MES.match(texto):
+            continue
+        return nombre
+    return None
+
+
 def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:
     """Los modelos del resultado, los mas vendidos primero.
 
@@ -217,15 +248,75 @@ def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:
     if columna is None:
         return []
 
-    numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if numericas:
-        orden = df.groupby(columna, dropna=True)[numericas[0]].sum()
+    medida = _medida(df)
+    if medida is not None:
+        orden = df.groupby(columna, dropna=True)[medida].sum()
         nombres = orden.sort_values(ascending=False).index
     else:
         nombres = df[columna].dropna().unique()
 
     modelos = [str(v).strip() for v in nombres if str(v).strip()]
     return modelos[:MAX_MODELOS_DESGLOSADOS]
+
+
+def _nombre_de_hoja(valor: str, usados: set[str]) -> str:
+    """Un nombre que Excel acepte y que no pise a otro.
+
+    Excel corta a 31 caracteres, rechaza : \\ / ? * [ ] y revienta con dos
+    hojas del mismo nombre: 'TELCEL CORPO.' y 'TELCEL CAC' caben, pero dos
+    cadenas largas podrian quedar iguales al recortarlas.
+    """
+    limpio = "".join(" " if c in _PROHIBIDOS_EN_HOJA else c for c in str(valor))
+    limpio = " ".join(limpio.split())[:31].strip() or "Cadena"
+    nombre, numero = limpio, 2
+    while nombre.casefold() in usados:
+        sufijo = f" {numero}"
+        nombre = f"{limpio[:31 - len(sufijo)]}{sufijo}"
+        numero += 1
+    usados.add(nombre.casefold())
+    return nombre
+
+
+def hojas_por_cadena(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Una hoja con las filas de cada cadena, cuando el reporte trae varias.
+
+    La hoja de datos sigue completa: esto se agrega al lado. Un reporte que
+    compara Coppel contra Elektra se lee cadena por cadena --"que paso en
+    Coppel"-- y en una sola tabla mezclada eso obliga a filtrar a mano cada
+    vez.
+
+    Las cadenas van ordenadas por volumen, para que las primeras pestañas
+    sean las que pesan. Si el resultado no dice de que cadena es cada fila,
+    o si son demasiadas, no se separa nada.
+    """
+    if df is None or df.empty:
+        return {}
+    columna = tiempo.columna(df, _ES_RETAIL)
+    if columna is None:
+        return {}
+
+    cadenas = df[columna].dropna().astype(str)
+    cuantas = cadenas.nunique()
+    if not 2 <= cuantas <= MAX_HOJAS_POR_CADENA:
+        return {}
+    if len(df) < cuantas * MIN_FILAS_POR_CADENA:
+        return {}
+
+    medida = _medida(df)
+    if medida is not None:
+        orden = df.groupby(cadenas, dropna=True)[medida].sum()
+        valores = list(orden.sort_values(ascending=False).index)
+    else:
+        valores = list(cadenas.value_counts().index)
+
+    usados: set[str] = {"datos"}
+    hojas: dict[str, pd.DataFrame] = {}
+    for valor in valores:
+        filas = df[cadenas == valor]
+        if filas.empty:
+            continue
+        hojas[_nombre_de_hoja(valor, usados)] = filas
+    return hojas
 
 
 def _cual_retailer(texto: str) -> str | None:
@@ -393,9 +484,11 @@ def contexto_del_resultado(
     if df is None or df.empty:
         return {}
 
-    hojas: dict[str, pd.DataFrame] = {}
+    # Primero una hoja por cadena, si el reporte trae varias: van pegadas a
+    # la hoja de datos, que es de donde salen.
+    hojas: dict[str, pd.DataFrame] = hojas_por_cadena(df)
 
-    # El desglose por tienda va primero: es lo que se pidio ver, y lo unico
+    # El desglose por tienda va despues: es lo que se pidio ver, y lo unico
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
     rango = periodo(df)
     if rango:
