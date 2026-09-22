@@ -315,17 +315,41 @@ class TestDesglosePorTienda:
             )
             assert "nombre" in enlace, clave
 
-    def test_se_aceptan_las_dos_columnas_de_unicos(self):
-        # Cual casa depende de la cadena: la final da 100% en Elektra, Telcel
-        # y Liverpool, y 0% en Coppel, AT&T y Sears. Aceptar las dos no
-        # cuesta cobertura y cubre los dos formatos.
+    def test_coppel_arma_la_llave_concatenando_marca_y_modelo(self):
+        # En Coppel, [MATERIAL DESCRIPTION FINAL] ES marca + descripcion
+        # ("ACER ANV15-41-R4WJ"). Armando esa llave casa el 100% del mes,
+        # contra el 97.8% que casa [Modelo] por [DESCRIPCION].
+        df = self._resultado_por_modelo()
+        df["Retail"] = "Coppel"
         motor = self._motor_con_crudas()
-        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+        contexto_del_resultado(df, motor, "")
         sql, _ = self._sql_de_ventas(motor)[0]
 
-        assert "[DESCRIPCION]" in sql
+        assert "CONCAT(v.[Marca], ' ', v.[Modelo])" in sql
         assert "[MATERIAL DESCRIPTION FINAL]" in sql
-        assert "UNION ALL" in sql
+
+    def test_sears_antepone_la_palabra_sears(self):
+        # Ahi la final es "Sears " + la descripcion ("Sears APPLE IPHONE 11
+        # 64GB"), literal.
+        cruda = contexto.CRUDAS["SEARS"]
+        assert cruda.llave == "CONCAT('Sears ', v.[Model])"
+        assert cruda.columna_en_unicos == "MATERIAL DESCRIPTION FINAL"
+
+    def test_att_se_queda_con_la_descripcion(self):
+        # En AT&T la final casa 0%: la llave es [Model] por [DESCRIPCION].
+        cruda = contexto.CRUDAS["AT&T"]
+        assert cruda.llave == "v.[Model]"
+        assert cruda.columna_en_unicos == "DESCRIPCION"
+
+    def test_cada_llave_nombra_una_columna_de_su_tabla(self):
+        # Una llave que mencione una columna de otra tabla revienta en
+        # ejecucion y solo se veria en produccion.
+        for clave, cruda in contexto.CRUDAS.items():
+            assert cruda.llave.startswith(("v.[", "CONCAT(")), clave
+            assert cruda.columna_en_unicos in (
+                "DESCRIPCION",
+                "MATERIAL DESCRIPTION FINAL",
+            ), clave
 
     def test_con_una_sola_cadena_la_hoja_lleva_el_modelo(self):
         # La ruta buena al modelo: la tabla CRUDA del retailer contra
@@ -383,8 +407,8 @@ class TestDesglosePorTienda:
         )
         sql, _ = self._sql_de_ventas(motor)[0]
 
-        assert "GROUP BY [texto]" in sql
-        assert "MIN([homologacion])" in sql
+        assert "GROUP BY [DESCRIPCION]" in sql
+        assert "MIN([HOMOLOGACION MODELO])" in sql
 
     def test_se_dejan_fuera_devoluciones_y_ajustes(self):
         # Las vistas oficiales filtran `>= 1`: la hoja tiene que sumar como
@@ -417,7 +441,9 @@ class TestDesglosePorTienda:
             assert cruda.tabla and cruda.retail_en_unicos, clave
             assert all(
                 getattr(cruda, campo)
-                for campo in ("modelo", "clave", "etiqueta", "fecha", "unidades")
+                for campo in ("llave", "columna_en_unicos", "clave", "etiqueta",
+                              "fecha", "unidades", "retail_en_catalogo",
+                              "enlace_con_catalogo")
             ), clave
 
     def test_sin_periodo_no_se_consulta_la_vista_de_ventas(self):

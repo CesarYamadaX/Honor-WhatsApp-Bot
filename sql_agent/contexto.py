@@ -100,7 +100,13 @@ class Cruda:
 
     tabla: str
     retail_en_unicos: tuple[str, ...]
-    modelo: str
+    # Con que texto de la venta se busca el modelo en UNICOS$, y contra cual
+    # de sus dos columnas. No es lo mismo en todas las cadenas: Coppel y
+    # Sears casan con [MATERIAL DESCRIPTION FINAL], que es una CONCATENACION
+    # -- marca + descripcion en Coppel, la palabra "Sears" + descripcion en
+    # Sears -- y las demas casan con [DESCRIPCION] a secas.
+    llave: str
+    columna_en_unicos: str
     clave: str
     etiqueta: str
     fecha: str
@@ -120,23 +126,35 @@ class Cruda:
 _POR_NOMBRE = "cs.[nombre] = v.[{etiqueta}]"
 _POR_NUMERO = "cs.[numero] = TRY_CONVERT(int, v.[{clave}])"
 
+_DESCRIPCION = "DESCRIPCION"
+_FINAL = "MATERIAL DESCRIPTION FINAL"
+
+# Medido en agosto de 2026, unidades que llegan a una homologacion:
+#   Coppel    marca + modelo -> FINAL       100.0%   (contra 97.8% por DESCRIPCION)
+#   Sears     'Sears ' + modelo -> FINAL    100.0%   (igual que por DESCRIPCION)
+#   Elektra / Telcel / Liverpool -> DESCRIPCION  100.0%
+#   AT&T      [Model] -> DESCRIPCION         89.0%   (la FINAL ahi casa 0%)
 CRUDAS = {
-    "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",), "Modelo", "Tienda", "Tienda",
-                    "Día", "Unidades", "COPPEL", _POR_NOMBRE),
-    "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "Desc Sku", "Tienda #", "POS",
-                     "Day", "QTY", "ELEKTRA", _POR_NUMERO),
-    "TELCEL": Cruda("TELCEL_B2B", ("TELCEL",), "Descripción", "Venta", "Venta",
-                    "Fecha", "Cantidad", "TELCEL", _POR_NOMBRE),
-    "LIVERPOOL": Cruda("LIVERPOOL_B2B$", ("LIVERPOOL",), "Material Description",
+    "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",),
+                    "CONCAT(v.[Marca], ' ', v.[Modelo])", _FINAL,
+                    "Tienda", "Tienda", "Día", "Unidades", "COPPEL", _POR_NOMBRE),
+    "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "v.[Desc Sku]", _DESCRIPCION,
+                     "Tienda #", "POS", "Day", "QTY", "ELEKTRA", _POR_NUMERO),
+    "TELCEL": Cruda("TELCEL_B2B", ("TELCEL",), "v.[Descripción]", _DESCRIPCION,
+                    "Venta", "Venta", "Fecha", "Cantidad", "TELCEL", _POR_NOMBRE),
+    "LIVERPOOL": Cruda("LIVERPOOL_B2B$", ("LIVERPOOL",),
+                       "v.[Material Description]", _DESCRIPCION,
                        "Centro", "STORE", "Día/Periodo", "Vtas# U Per 1",
                        "LIVERPOOL", _POR_NOMBRE),
     # Los dos [Retail] de AT&T: con DEALERS solo se casa el 80.7% del mes, con
     # los dos el 88.9% (medido, agosto de 2026).
-    "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "Model",
-                  "Codigo de Organización", "Nombre de la Organización",
-                  "Fecha de Transacción", "Cantidad", "AT&T", _POR_NOMBRE),
-    "SEARS": Cruda("SEARS_B2B", ("SEARS",), "Model", "#POS", "POS", "Fecha",
-                   "Total", "SEARS", _POR_NUMERO),
+    "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "v.[Model]",
+                  _DESCRIPCION, "Codigo de Organización",
+                  "Nombre de la Organización", "Fecha de Transacción",
+                  "Cantidad", "AT&T", _POR_NOMBRE),
+    "SEARS": Cruda("SEARS_B2B", ("SEARS",), "CONCAT('Sears ', v.[Model])",
+                   _FINAL, "#POS", "POS", "Fecha", "Total", "SEARS",
+                   _POR_NUMERO),
 }
 
 # El numero de tienda que el catalogo esconde al final de [HONOR NAME], entre
@@ -281,17 +299,20 @@ def _ventas_por_tienda_y_modelo(conexion, cruda: Cruda, modelos: list[str],
     casa el 100% en Elektra, Telcel, Liverpool y Sears, el 97.8% en Coppel y
     el 89% en AT&T; hacerlo desde la vista consolidada casa el 8%.
 
-    Se aceptan las DOS columnas de UNICOS$ -- [DESCRIPCION] y
-    [MATERIAL DESCRIPTION FINAL] -- porque cual sirve depende de la cadena y
-    de si el dato viene de la tabla cruda o de una vista. Medido contra las
-    tablas crudas de agosto de 2026: la final casa el 100% en Elektra, Telcel
-    y Liverpool, y el 0% en Coppel, AT&T y Sears. Aceptar las dos no cuesta
-    nada (Coppel da 97.8% igual) y cubre los dos mundos.
+Cada cadena tiene SU llave, y no es siempre la misma columna:
+    Coppel y Sears casan con [MATERIAL DESCRIPTION FINAL], que es una
+    concatenacion -- en Coppel marca + descripcion ("ACER ANV15-41-R4WJ"), en
+    Sears la palabra Sears + descripcion ("Sears APPLE IPHONE 11 64GB") --, y
+    las demas casan con [DESCRIPCION] a secas. Medido en agosto de 2026:
+    armando la concatenacion, Coppel sube de 97.8% a 100.0%; Sears se queda
+    en 100.0% por las dos rutas. En AT&T la final casa 0%, asi que ahi la
+    llave es [Model] contra [DESCRIPCION].
 
     El GROUP BY dentro de UNICOS$ no es decoracion: en Liverpool hay 137
-    descripciones que apuntan a mas de una homologacion (6 en Coppel, 1 entre
-    los dos AT&T, 177 si se juntan las dos columnas). Sin colapsarlas, cada
-    venta de esas se uniria dos veces y las unidades saldrian infladas.
+    descripciones que apuntan a mas de una homologacion (6 en Coppel). Sin
+    colapsarlas, cada venta de esas se uniria dos veces y las unidades
+    saldrian infladas. Por [MATERIAL DESCRIPTION FINAL] no hay ninguna
+    ambigua ni en Coppel ni en Sears (medido: 0).
 
     La REGION sale de CustomerStores, y el enlace es distinto por cadena:
     Coppel, Telcel, AT&T y Liverpool casan por nombre (99.6%, 99.4%, 99.5% y
@@ -314,21 +335,14 @@ def _ventas_por_tienda_y_modelo(conexion, cruda: Cruda, modelos: list[str],
                u.[modelo] AS [Modelo],
                SUM(v.[{cruda.unidades}]) AS [Unidades]
         FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
-        JOIN (SELECT [texto], MIN([homologacion]) AS [modelo] FROM (
-                SELECT [DESCRIPCION] AS [texto],
-                       [HOMOLOGACION MODELO] AS [homologacion]
-                FROM {UNICOS}
-                WHERE [Retail] IN ({huecos_retail})
-                  AND [DESCRIPCION] IS NOT NULL AND LTRIM([DESCRIPCION]) <> ''
-                UNION ALL
-                SELECT [MATERIAL DESCRIPTION FINAL],
-                       [HOMOLOGACION MODELO]
-                FROM {UNICOS}
-                WHERE [Retail] IN ({huecos_retail})
-                  AND [MATERIAL DESCRIPTION FINAL] IS NOT NULL
-                  AND LTRIM([MATERIAL DESCRIPTION FINAL]) <> ''
-              ) x GROUP BY [texto]) u
-          ON u.[texto] = v.[{cruda.modelo}]
+        JOIN (SELECT [{cruda.columna_en_unicos}] AS [texto],
+                     MIN([HOMOLOGACION MODELO]) AS [modelo]
+              FROM {UNICOS}
+              WHERE [Retail] IN ({huecos_retail})
+                AND [{cruda.columna_en_unicos}] IS NOT NULL
+                AND LTRIM([{cruda.columna_en_unicos}]) <> ''
+              GROUP BY [{cruda.columna_en_unicos}]) u
+          ON u.[texto] = {cruda.llave}
         LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
                           {_NUMERO_DEL_CATALOGO} AS [numero]
                    FROM {GTM}.[CustomerStores]
@@ -341,7 +355,6 @@ def _ventas_por_tienda_y_modelo(conexion, cruda: Cruda, modelos: list[str],
         ORDER BY SUM(v.[{cruda.unidades}]) DESC
     """
     parametros = (
-        *cruda.retail_en_unicos,
         *cruda.retail_en_unicos,
         cruda.retail_en_catalogo,
         desde,

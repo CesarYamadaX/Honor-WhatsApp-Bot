@@ -104,27 +104,31 @@ Scrap trae además dos retailers que **no existen en las tablas de venta**:
 Suburbia y Mercado Libre. Y dos trampas: `[price]` trae ceros (hay que filtrar
 `> 0`) y hay varias filas del mismo modelo, tienda y fecha.
 
-### Cuál de las dos columnas de `UNICOS$`
+### Cuál de las dos columnas de `UNICOS$`, y cómo se arma la llave
 
-Contra las tablas **crudas**, cuál casa depende de la cadena (agosto de 2026,
-unidades):
+`[MATERIAL DESCRIPTION FINAL]` **es una concatenación**, y ahí está la trampa:
+comparada contra la descripción pelada de la venta no casa con nada, pero
+armando la misma concatenación del lado de la venta casa mejor que
+`[DESCRIPCION]`. Cada cadena la arma a su manera:
 
-| Cadena | `[DESCRIPCION]` | `[MATERIAL DESCRIPTION FINAL]` |
-|---|---|---|
-| Elektra / Telcel / Liverpool | 100% | 100% |
-| Coppel | 97.8% | **0%** |
-| AT&T | 89.0% | **0%** |
-| Sears | 100% | **0%** |
+| Cadena | Llave del lado de la venta | Columna de `UNICOS$` | Casa |
+|---|---|---|---|
+| Coppel | `CONCAT([Marca], ' ', [Modelo])` | `MATERIAL DESCRIPTION FINAL` | **100.0%** (97.8% por `[DESCRIPCION]`) |
+| Sears | `CONCAT('Sears ', [Model])` | `MATERIAL DESCRIPTION FINAL` | 100.0% (igual por `[DESCRIPCION]`) |
+| Elektra | `[Desc Sku]` | `DESCRIPCION` | 100.0% |
+| Telcel | `[Descripción]` | `DESCRIPCION` | 100.0% |
+| Liverpool | `[Material Description]` | `DESCRIPCION` | 100.0% |
+| AT&T | `[Model]` | `DESCRIPCION` | 89.0% — ahí la final casa **0%** |
 
-Por eso `[DESCRIPCION]` es la ruta por defecto para una tabla cruda: es la
-única que funciona en las seis. La descripción final es la que casa contra
-`vw_ETL_COPPEL` y `vw_ETL_COPPEL_IOT`, que arman su `[Material_Description]`
-como `CONCAT(marca, modelo)`.
+En Coppel la final es marca + descripción (`ACER ANV15-41-R4WJ`); en Sears es
+la palabra `Sears` + descripción (`Sears APPLE IPHONE 11 64GB`). Es también la
+columna que casa al 100% contra `vw_ETL_COPPEL` y `vw_ETL_COPPEL_IOT`, que
+arman su `[Material_Description]` como `CONCAT(marca, modelo)` — la misma idea
+del otro lado.
 
-La hoja del Excel acepta **las dos**, uniendo contra la unión de ambas columnas
-agrupada por el texto: no cuesta cobertura (Coppel sigue dando 97.8%) y atrapa
-los dos formatos. Al juntarlas hay 177 textos que apuntan a más de una
-homologación, y por eso la unión se colapsa con `MIN` antes de unir.
+Por `[MATERIAL DESCRIPTION FINAL]` no hay ningún texto ambiguo en Coppel ni en
+Sears (0 con dos homologaciones); por `[DESCRIPCION]` sí hay 137 en Liverpool y
+6 en Coppel, y por eso la llave se colapsa con `MIN` antes de unir.
 
 ## La tienda
 

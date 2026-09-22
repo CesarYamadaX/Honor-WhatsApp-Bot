@@ -201,10 +201,14 @@ class TestLaRegion:
         # Y como sacar el numero, que es la parte que nadie adivina.
         assert "CHARINDEX" in ficha and "TRY_CONVERT" in ficha
 
-    def test_unicos_dice_cual_columna_casa_con_que_cruda(self):
+    def test_unicos_dice_como_se_arma_la_llave_de_cada_cruda(self):
         ficha = catalogo.describir_objeto.invoke({"nombre": "UNICOS$"})
-        assert "97.8%" in ficha  # Coppel por DESCRIPCION
-        assert "0%" in ficha  # la final, en Coppel/AT&T/Sears
+        # Coppel: la final es marca + descripcion.
+        assert "CONCAT" in ficha and "[Marca]" in ficha
+        # Sears: la final antepone la palabra.
+        assert "'Sears '" in ficha
+        # AT&T: ahi la final no sirve.
+        assert "0%" in ficha
 
 
 class TestDescribirObjeto:
