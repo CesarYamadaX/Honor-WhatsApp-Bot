@@ -15,15 +15,29 @@ Las otras hojas (tiendas, regiones, carriers) si son catalogo, y son chicas:
 CustomerStores 7k filas, STATES_AND_REGIONS 8.6k, HonorCarriers 55. Responden
 en decimas de segundo.
 
-El detalle por tienda NO es chico: sale de las mismas vistas de venta que
-tardan. Medido contra la base real, 3 modelos y 6 meses son 24 segundos. Por
-eso va acotado -- pocos modelos, el periodo del propio resultado -- y con su
-propio presupuesto de tiempo: si no llega, el reporte sale sin esa hoja en
-vez de hacer esperar al usuario.
+El detalle por tienda va por PERIODO, no por modelo, y eso no es una
+simplificacion: es lo unico que se puede calcular bien desde la vista
+consolidada. La primera version filtraba los modelos del resultado uniendo
+la consolidada con UNICOS$ por [DESCRIPCION], y esa union esta mal por dos
+lados a la vez. Medido en agosto de 2026: de 2 030 760 unidades del mes solo
+casaban 165 941, el 8%, porque en la consolidada [Material_Description] es
+SKU + retailer + descripcion ("N.I15128N AT&T Cacs APPLE IPHONE 15 128GB
+4G") y nunca va a ser igual a una descripcion pelada. Y de lo poco que
+casaba, una parte se contaba de mas: UNICOS$ repite 1 249 descripciones y
+algunas apuntan a 25 homologaciones distintas, asi que sin [Retail] en el ON
+una misma venta se multiplica y ademas puede quedar bajo el modelo
+equivocado. Las propias reglas del catalogo ya lo prohibian ("PROHIBIDO: una
+vista vw_ETL_* con u.[DESCRIPCION]"), y la consolidada es la union de esas
+vistas.
+
+Sin la homologacion de por medio la hoja es correcta, es mas rapida (16s un
+mes, 39s medio ano, medido) y es lo que se habia pedido: el detalle de las
+ventas por tienda, no el catalogo. Igual lleva su propio presupuesto de
+tiempo: si no llega, el reporte sale sin esa hoja en vez de hacer esperar al
+usuario.
 """
 
 import logging
-import re
 
 import pandas as pd
 
@@ -33,7 +47,6 @@ logger = logging.getLogger("sql_agent.contexto")
 
 GTM = "[GTM BI Database].dbo"
 VENTAS = "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"
-UNICOS = f"{GTM}.[UNICOS$]"
 
 # Cada entrada: hoja, tabla, y las columnas por las que se intenta casar los
 # valores que aparecen en el resultado.
@@ -50,19 +63,11 @@ MAX_VALORES_POR_COLUMNA = 200
 # sepulta.
 MAX_FILAS_POR_HOJA = 2000
 
-# Cuantos modelos del resultado se desglosan por tienda. Cada uno cuesta
-# tiempo de consulta, y un reporte con cien modelos no se lee de todos modos:
-# se toman los mas vendidos del propio resultado.
-MAX_MODELOS_DESGLOSADOS = 15
 # Lo que se le da al desglose antes de rendirse. El reporte ya costo minutos;
 # esta hoja es un extra y no puede duplicar la espera.
 SEGUNDOS_PARA_EL_DESGLOSE = 90
 
-# Como se llama la columna de modelo en un resultado. El agente las nombra de
-# varias formas segun como escriba el SELECT.
-_ES_MODELO = re.compile(
-    r".*(homologacion|modelo|model|material.?description)", re.IGNORECASE
-)
+
 def _valores_de_texto(df: pd.DataFrame) -> list[str]:
     """Los valores distintos de las columnas no numericas del resultado."""
     valores: set[str] = set()
@@ -89,27 +94,6 @@ def _buscar(conexion, tabla: str, columnas: tuple[str, ...], valores: list[str])
     cursor = conexion.exec_driver_sql(sql, tuple(valores) * len(columnas))
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
-
-
-def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:
-    """Los modelos del resultado, los mas vendidos primero.
-
-    Se ordenan por la columna numerica del propio resultado: si el reporte
-    trae cien modelos, el desglose por tienda es de los que de verdad pesan.
-    """
-    columna = tiempo.columna(df, _ES_MODELO)
-    if columna is None:
-        return []
-
-    numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if numericas:
-        orden = df.groupby(columna, dropna=True)[numericas[0]].sum()
-        nombres = orden.sort_values(ascending=False).index
-    else:
-        nombres = df[columna].dropna().unique()
-
-    modelos = [str(v).strip() for v in nombres if str(v).strip()]
-    return modelos[:MAX_MODELOS_DESGLOSADOS]
 
 
 def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
@@ -148,21 +132,22 @@ def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
     return desde.strftime("%Y-%m-%d"), (fin + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
 
 
-def _ventas_por_tienda(conexion, modelos: list[str], desde: str, hasta: str):
-    """Cuanto vendio cada tienda de esos modelos, en ese periodo."""
-    huecos = ", ".join("?" * len(modelos))
+def _ventas_por_tienda(conexion, desde: str, hasta: str):
+    """Cuanto vendio cada tienda en ese periodo, la que mas primero.
+
+    Son todas las marcas: desde la consolidada no se puede acotar por modelo
+    sin pasar por una union que pierde el 92% del volumen (ver el encabezado
+    del modulo). La hoja dice donde estuvo el volumen del periodo.
+    """
     sql = f"""
         SELECT TOP {MAX_FILAS_POR_HOJA}
-               v.[Retail], v.[Store], u.[HOMOLOGACION MODELO],
-               SUM(v.[QTY]) AS [Unidades]
+               v.[Retail], v.[Store], SUM(v.[QTY]) AS [Unidades]
         FROM {VENTAS} v
-        JOIN {UNICOS} u ON u.[DESCRIPCION] = v.[Material_Description]
         WHERE v.[Date] >= ? AND v.[Date] < ?
-          AND u.[HOMOLOGACION MODELO] IN ({huecos})
-        GROUP BY v.[Retail], v.[Store], u.[HOMOLOGACION MODELO]
+        GROUP BY v.[Retail], v.[Store]
         ORDER BY SUM(v.[QTY]) DESC
     """
-    cursor = conexion.exec_driver_sql(sql, (desde, hasta, *modelos))
+    cursor = conexion.exec_driver_sql(sql, (desde, hasta))
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
@@ -176,13 +161,12 @@ def contexto_del_resultado(df: pd.DataFrame, engine) -> dict[str, pd.DataFrame]:
 
     # El desglose por tienda va primero: es lo que se pidio ver, y lo unico
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
-    modelos = modelos_a_desglosar(df)
     rango = periodo(df)
-    if modelos and rango:
+    if rango:
         try:
             with engine.connect() as conexion:
                 conexion.connection.dbapi_connection.timeout = SEGUNDOS_PARA_EL_DESGLOSE
-                ventas = _ventas_por_tienda(conexion, modelos, *rango)
+                ventas = _ventas_por_tienda(conexion, *rango)
             if not ventas.empty:
                 hojas["Ventas por tienda"] = ventas
         except Exception:  # noqa: BLE001

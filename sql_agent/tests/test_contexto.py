@@ -75,11 +75,21 @@ class TestQueSeConsulta:
         assert contexto_del_resultado(pd.DataFrame(), motor) == {}
         assert motor.consultas == []
 
-    def test_un_resultado_solo_numerico_no_consulta_nada(self):
-        # Sin valores de texto no hay tiendas ni modelos que buscar.
+    def test_un_resultado_solo_numerico_no_busca_en_los_catalogos(self):
+        # Sin valores de texto no hay tiendas ni carriers que buscar. El
+        # desglose por tienda si corre: solo necesita el periodo, y este
+        # resultado lo tiene.
         motor = _MotorDeCatalogos()
         df = pd.DataFrame({"Year": [2026], "QTY": [5]})
-        assert contexto_del_resultado(df, motor) == {}
+        contexto_del_resultado(df, motor)
+
+        for sql, _ in motor.consultas:
+            assert "CustomerStores" not in sql
+            assert "HonorCarriers" not in sql
+
+    def test_un_resultado_sin_texto_ni_periodo_no_consulta_nada(self):
+        motor = _MotorDeCatalogos()
+        assert contexto_del_resultado(pd.DataFrame({"QTY": [5]}), motor) == {}
         assert motor.consultas == []
 
     def test_los_valores_viajan_como_parametros(self):
@@ -180,7 +190,17 @@ class TestExcelConContexto:
 
 
 class TestDesglosePorTienda:
-    """La hoja que se pidio: cuanto vendio cada tienda de esos modelos."""
+    """La hoja que se pidio: cuanto vendio cada tienda en el periodo.
+
+    Va por PERIODO y no por modelo. La primera version filtraba los modelos
+    del resultado uniendo la consolidada con UNICOS$ por [DESCRIPCION], y esa
+    union esta mal por dos lados: en la consolidada [Material_Description] es
+    SKU + retailer + descripcion, asi que casaba el 8% del volumen del mes
+    (165 941 de 2 030 760 unidades en agosto de 2026), y de eso una parte se
+    contaba de mas, porque UNICOS$ repite 1 249 descripciones y algunas
+    apuntan a 25 homologaciones distintas. Las reglas del propio catalogo ya
+    prohibian ese cruce.
+    """
 
     def _resultado_por_modelo(self):
         return pd.DataFrame(
@@ -192,44 +212,50 @@ class TestDesglosePorTienda:
             }
         )
 
-    def test_desglosa_los_modelos_del_resultado(self):
-        motor = _MotorDeCatalogos(
+    def _motor_con_ventas(self):
+        return _MotorDeCatalogos(
             {
                 "ETL_Consolidado_B2B": (
-                    ["Retail", "Store", "HOMOLOGACION MODELO", "Unidades"],
-                    [("Coppel", "1114 CUAUHTEMOC", "OPPO A6X", 2575)],
+                    ["Retail", "Store", "Unidades"],
+                    [("Coppel", "1114 CUAUHTEMOC", 2575)],
                 )
             }
         )
-        hojas = contexto_del_resultado(self._resultado_por_modelo(), motor)
+
+    def test_la_hoja_trae_las_tiendas_del_periodo(self):
+        hojas = contexto_del_resultado(
+            self._resultado_por_modelo(), self._motor_con_ventas()
+        )
 
         assert "Ventas por tienda" in hojas
         assert hojas["Ventas por tienda"].iloc[0]["Store"] == "1114 CUAUHTEMOC"
 
-    def test_los_modelos_van_por_lo_que_vendieron(self):
-        # Un reporte con cien modelos no se desglosa entero: cada uno cuesta
-        # tiempo de consulta. Se toman los que de verdad pesan.
-        muchos = pd.DataFrame(
-            {
-                "HOMOLOGACION MODELO": [f"MODELO {i}" for i in range(40)],
-                "Total": list(range(40)),
-                "Año": [2026] * 40,
-            }
+    def test_la_consulta_no_pasa_por_la_homologacion(self):
+        # El cruce con UNICOS$ perdia el 92% del volumen y duplicaba parte
+        # del resto. Que no vuelva a entrar sin que nadie lo note.
+        motor = self._motor_con_ventas()
+        contexto_del_resultado(self._resultado_por_modelo(), motor)
+
+        ventas = [sql for sql, _ in motor.consultas if "ETL_Consolidado_B2B" in sql]
+        assert ventas, "deberia consultar la vista de ventas"
+        for sql in ventas:
+            assert "UNICOS" not in sql.upper()
+            assert "JOIN" not in sql.upper()
+
+    def test_el_periodo_viaja_como_parametro(self):
+        motor = self._motor_con_ventas()
+        contexto_del_resultado(self._resultado_por_modelo(), motor)
+
+        sql, parametros = next(
+            (s, p) for s, p in motor.consultas if "ETL_Consolidado_B2B" in s
         )
-        modelos = contexto.modelos_a_desglosar(muchos)
-
-        assert len(modelos) == contexto.MAX_MODELOS_DESGLOSADOS
-        assert modelos[0] == "MODELO 39"
-
-    def test_sin_columna_de_modelo_no_hay_desglose(self):
-        assert contexto.modelos_a_desglosar(_resultado()) == []
+        assert sql.count("?") == 2
+        assert parametros == ("2026-01-01", "2026-07-01")
 
     def test_sin_periodo_no_se_consulta_la_vista_de_ventas(self):
-        # Una consulta por modelo sin acotar la fecha recorre la vista
-        # entera, que es la operacion cara que este modulo evita.
-        sin_fecha = pd.DataFrame(
-            {"HOMOLOGACION MODELO": ["OPPO A6X"], "Total": [10]}
-        )
+        # Sin acotar la fecha la consulta recorre la vista entera, que es la
+        # operacion cara que este modulo evita.
+        sin_fecha = pd.DataFrame({"Tienda": ["1114 CUAUHTEMOC"], "Total": [10]})
         motor = _MotorDeCatalogos()
         contexto_del_resultado(sin_fecha, motor)
 
