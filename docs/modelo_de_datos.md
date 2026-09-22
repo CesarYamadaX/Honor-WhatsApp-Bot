@@ -38,6 +38,17 @@ VENTA                                    CATÁLOGOS                 PROMOTORÍA
                                                           [status_of_promoter][Period]
 ```
 
+```
+PRECIOS  [Scrap]
+
+ Complete_Scrap  (2.3 M filas, 2025 → hoy, 8 retailers)
+ [model] = codigo del sitio (BVL-N49)  ← NUNCA se agrupa por aqui
+ [approved_name] = HONOR MAGIC 6 PRO 512GB  ← la homologacion de esta base
+        │
+        └── mismo vocabulario que UNICOS$.[HOMOLOGACION MODELO]
+            (156 de los 183 modelos que Elektra vendio en agosto 2026)
+```
+
 ## Las tres rutas de homologación
 
 El modelo de teléfono se agrupa SIEMPRE por `UNICOS$.[HOMOLOGACION MODELO]`;
@@ -65,6 +76,33 @@ descripciones están repetidas**, algunas apuntando a 25 homologaciones
 distintas. Sin `u.[Retail]` en el `ON`, una misma venta se multiplica y puede
 quedar contada bajo el modelo equivocado. Por eso la regla A lleva el retailer
 pegado a la condición, no en el `WHERE`.
+
+## El nombre del modelo
+
+El modelo **nunca** se agrupa por el texto que escribe el retailer: cada cadena
+escribe el mismo aparato a su manera y agrupar por ahi parte un teléfono en
+varias filas, sin que nada falle. Cada base tiene su columna homologada:
+
+| Mundo | Columna | Ejemplo |
+|---|---|---|
+| venta | `UNICOS$.[HOMOLOGACION MODELO]` | `APPLE IPHONE 15 128GB 4G` |
+| precios | `Complete_Scrap.[approved_name]` | `HONOR MAGIC 6 PRO 512GB` |
+
+Las dos hablan el mismo idioma, así que son la llave entre precio y venta: de
+los **183** modelos que Elektra vendió en agosto de 2026, **156** tienen precio
+en Scrap. Quitar el sufijo de red (`4G`/`5G`) solo recupera 2 más, así que la
+diferencia no es de formato: son modelos que nadie publicó online.
+
+Y cuidado con las columnas que dicen "homologado" y no lo son:
+`EKT_B2B.[Modelo Homologado]` es la homologación **interna de Elektra**
+(`Oppo A6`, `Samsung Galaxy A37`) y contra la oficial casa el **2.5%** del
+volumen (4 250 de 167 845 unidades). En Scrap, `[model]` es el código del sitio
+del retailer (`BVL-N49`, `CLK-NX3`): hay 1 045 códigos para 3 561 nombres
+aprobados, o sea que el código ni siquiera identifica el producto.
+
+Scrap trae además dos retailers que **no existen en las tablas de venta**:
+Suburbia y Mercado Libre. Y dos trampas: `[price]` trae ceros (hay que filtrar
+`> 0`) y hay varias filas del mismo modelo, tienda y fecha.
 
 ## La tienda
 
@@ -124,6 +162,19 @@ la ruta C, la prohibida. Perdía el 92% del volumen y duplicaba parte del resto.
 Ahora la hoja va por **periodo**, sin pasar por la homologación: unidades por
 retailer y tienda en el rango que cubre el reporte. Es correcta, y además más
 rápida (16 s un mes, 39 s medio año, contra 23 s de una consulta equivocada).
+
+## La homologación en la hoja por tienda
+
+La hoja "Ventas por tienda" del Excel va por periodo y **sin** modelo, y eso no
+es que la homologación sobre: es que desde la vista consolidada no se puede
+aplicar (ruta C, la que casa el 8%). El modelo por tienda sí se puede pedir, y
+sale correcto, por la ruta A: la tabla cruda del retailer unida a `UNICOS$` por
+su columna, con `u.[Retail]` en el `ON`. Medido: 0 s en Elektra y 4 s en Coppel
+para un mes, contra los 23 s que tardaba la consulta equivocada.
+
+Dicho de otra forma: "ventas por tienda y modelo de Elektra en agosto" es una
+pregunta que el bot responde bien hoy; lo que no puede es armarla sola, para
+todas las cadenas a la vez, como hoja automática de cada reporte.
 
 ## Lo que sigue sin resolverse
 

@@ -380,5 +380,17 @@
    "R9",
    "RM"
   ]
+ },
+ "Complete_Scrap": {
+  "retail": [
+   "Coppel",
+   "Elektra",
+   "Liverpool",
+   "Mercado Libre",
+   "Movistar CACS",
+   "Sears",
+   "Suburbia",
+   "Telcel CACS"
+  ]
  }
 }

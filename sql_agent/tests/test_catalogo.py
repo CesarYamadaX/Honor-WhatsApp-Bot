@@ -138,6 +138,46 @@ class TestConceptosDelNegocio:
         assert not any(p.endswith("-08") for p in periodos)
 
 
+class TestLaHomologacion:
+    """El modelo se agrupa por su nombre homologado, y cada base tiene el
+    suyo. Es la regla que mas veces ha salido mal: agrupar por el texto del
+    retailer parte un mismo telefono en varias filas y los totales salen
+    mal, sin que nada falle.
+    """
+
+    def test_el_prompt_nombra_la_columna_homologada_de_cada_base(self):
+        texto = catalogo.indice()
+        assert "[HOMOLOGACION MODELO]" in texto  # venta
+        assert "[approved_name]" in texto  # precios
+
+    def test_se_avisa_de_la_homologacion_interna_de_elektra(self):
+        # [Modelo Homologado] suena a la buena y no lo es: con la oficial
+        # casa el 2.5% del volumen.
+        ficha = catalogo.describir_objeto.invoke({"nombre": "EKT_B2B"})
+        assert "Modelo Homologado" in ficha
+        assert "2.5%" in ficha
+        assert "[Desc Sku]" in ficha
+
+    def test_la_ficha_de_scrap_prohibe_agrupar_por_model(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "Complete_Scrap"})
+        assert "[approved_name]" in ficha
+        assert "BVL-N49" in ficha  # el codigo del sitio, el que NO se agrupa
+
+    def test_la_ficha_de_scrap_avisa_de_los_precios_en_cero(self):
+        # Promediar [price] sin filtrar hunde el precio medio.
+        ficha = catalogo.describir_objeto.invoke({"nombre": "Complete_Scrap"})
+        assert "[price] > 0" in ficha
+        # Y de que hay repetidos por fecha.
+        assert "consultation_date" in ficha
+
+    def test_scrap_trae_retailers_que_no_estan_en_venta(self):
+        # Suburbia y Mercado Libre solo existen aqui: si el agente no lo
+        # sabe, contesta que no hay datos de esas cadenas.
+        ficha = catalogo.describir_objeto.invoke({"nombre": "Complete_Scrap"})
+        assert "Suburbia" in ficha and "Mercado Libre" in ficha
+        assert "Suburbia" in catalogo.valores_conocidos("Complete_Scrap", "retail")
+
+
 class TestDescribirObjeto:
     def _describir(self, nombre: str) -> str:
         return catalogo.describir_objeto.invoke({"nombre": nombre})
