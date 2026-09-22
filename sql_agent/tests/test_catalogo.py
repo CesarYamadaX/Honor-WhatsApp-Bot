@@ -178,6 +178,35 @@ class TestLaHomologacion:
         assert "Suburbia" in catalogo.valores_conocidos("Complete_Scrap", "retail")
 
 
+class TestLaRegion:
+    """Se pidio poder buscar por region. La region no esta en la venta: vive
+    en CustomerStores y cada cadena se enlaza distinto."""
+
+    def test_el_prompt_dice_que_la_region_va_por_la_tabla_cruda(self):
+        texto = catalogo.indice()
+        assert "REGION" in texto
+        assert "CustomerStores" in texto and "TABLA CRUDA" in texto
+
+    def test_se_avisa_de_las_dos_cadenas_que_no_casan_por_nombre(self):
+        # Elektra y Sears: forzarlo con LIKE inventaria cruces.
+        texto = catalogo.indice()
+        assert "Elektra y Sears NO casan por nombre" in texto
+        assert "HONOR NAME" in texto
+
+    def test_la_ficha_del_catalogo_trae_el_enlace_de_cada_cadena(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "CustomerStores"})
+        for tabla in ("COPPEL_B2B", "TELCEL_B2B", "ATT_B2B", "LIVERPOOL_B2B$",
+                      "EKT_B2B", "SEARS_B2B"):
+            assert tabla in ficha, tabla
+        # Y como sacar el numero, que es la parte que nadie adivina.
+        assert "CHARINDEX" in ficha and "TRY_CONVERT" in ficha
+
+    def test_unicos_dice_cual_columna_casa_con_que_cruda(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "UNICOS$"})
+        assert "97.8%" in ficha  # Coppel por DESCRIPCION
+        assert "0%" in ficha  # la final, en Coppel/AT&T/Sears
+
+
 class TestDescribirObjeto:
     def _describir(self, nombre: str) -> str:
         return catalogo.describir_objeto.invoke({"nombre": nombre})

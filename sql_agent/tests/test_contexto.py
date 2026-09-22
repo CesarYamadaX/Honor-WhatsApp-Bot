@@ -273,6 +273,60 @@ class TestDesglosePorTienda:
             if "_B2B" in sql or "ETL_Consolidado" in sql
         ]
 
+    def test_la_hoja_lleva_la_region_de_cada_tienda(self):
+        # Se pidio poder buscar por region; la region no esta en la venta,
+        # hay que traerla de CustomerStores.
+        motor = _MotorDeCatalogos(
+            {
+                "EKT_B2B": (
+                    ["Region", "Tienda", "Modelo", "Unidades"],
+                    [("R9", "929797 ELEKTRA.MX", "SAMSUNG A17 128GB 4G", 176)],
+                )
+            }
+        )
+        hojas = contexto_del_resultado(
+            self._resultado_por_modelo(), motor, "FROM EKT_B2B"
+        )
+
+        assert list(hojas["Ventas por tienda"].columns)[0] == "Region"
+        sql, parametros = self._sql_de_ventas(motor)[0]
+        assert "CustomerStores" in sql
+        # Filtrado por cadena, para no cruzar nombres entre retailers.
+        assert "ELEKTRA" in parametros
+        # Y en LEFT JOIN: una tienda sin region no puede borrar su venta.
+        assert "LEFT JOIN" in sql
+
+    def test_elektra_y_sears_se_unen_por_numero_de_tienda(self):
+        # Sus nombres no se parecen a los del catalogo; el numero vive entre
+        # parentesis dentro de [HONOR NAME].
+        for clave in ("ELEKTRA", "SEARS"):
+            cruda = contexto.CRUDAS[clave]
+            enlace = cruda.enlace_con_catalogo.format(
+                etiqueta=cruda.etiqueta, clave=cruda.clave
+            )
+            assert "numero" in enlace, clave
+            assert cruda.clave in enlace, clave
+
+    def test_las_demas_se_unen_por_nombre(self):
+        for clave in ("COPPEL", "TELCEL", "AT&T", "LIVERPOOL"):
+            cruda = contexto.CRUDAS[clave]
+            enlace = cruda.enlace_con_catalogo.format(
+                etiqueta=cruda.etiqueta, clave=cruda.clave
+            )
+            assert "nombre" in enlace, clave
+
+    def test_se_aceptan_las_dos_columnas_de_unicos(self):
+        # Cual casa depende de la cadena: la final da 100% en Elektra, Telcel
+        # y Liverpool, y 0% en Coppel, AT&T y Sears. Aceptar las dos no
+        # cuesta cobertura y cubre los dos formatos.
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+        sql, _ = self._sql_de_ventas(motor)[0]
+
+        assert "[DESCRIPCION]" in sql
+        assert "[MATERIAL DESCRIPTION FINAL]" in sql
+        assert "UNION ALL" in sql
+
     def test_con_una_sola_cadena_la_hoja_lleva_el_modelo(self):
         # La ruta buena al modelo: la tabla CRUDA del retailer contra
         # UNICOS$.[DESCRIPCION]. Desde la consolidada casaria el 8%.
@@ -329,8 +383,8 @@ class TestDesglosePorTienda:
         )
         sql, _ = self._sql_de_ventas(motor)[0]
 
-        assert "GROUP BY [DESCRIPCION]" in sql
-        assert "MIN([HOMOLOGACION MODELO])" in sql
+        assert "GROUP BY [texto]" in sql
+        assert "MIN([homologacion])" in sql
 
     def test_se_dejan_fuera_devoluciones_y_ajustes(self):
         # Las vistas oficiales filtran `>= 1`: la hoja tiene que sumar como

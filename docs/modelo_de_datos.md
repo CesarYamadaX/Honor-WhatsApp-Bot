@@ -57,7 +57,7 @@ y una que parece funcionar y no funciona.
 
 | | Desde | Con | Casa | Veredicto |
 |---|---|---|---|---|
-| **A** | tabla **cruda** del retailer | `u.[DESCRIPCION]` + `u.[Retail]` | **100.0%** Elektra (167 845 de 167 845), **97.8%** Coppel (472 876 de 483 430) | la ruta por defecto |
+| **A** | tabla **cruda** del retailer | `u.[DESCRIPCION]` + `u.[Retail]` | 100% Elektra, Telcel, Liverpool y Sears; **97.8%** Coppel; **89.0%** AT&T | la ruta por defecto |
 | **B** | `vw_ETL_COPPEL` / `_IOT` | `u.[MATERIAL DESCRIPTION FINAL]` | **100.0%** (483 284 de 483 430 unidades, Coppel agosto 2026) | válida solo para esas dos vistas |
 | **C** | cualquier `vw_ETL_*` | `u.[DESCRIPCION]` | **4.1%** (19 867 de 483 430) | **prohibida**: devuelve un top que parece razonable y es falso |
 
@@ -103,6 +103,28 @@ aprobados, o sea que el código ni siquiera identifica el producto.
 Scrap trae además dos retailers que **no existen en las tablas de venta**:
 Suburbia y Mercado Libre. Y dos trampas: `[price]` trae ceros (hay que filtrar
 `> 0`) y hay varias filas del mismo modelo, tienda y fecha.
+
+### Cuál de las dos columnas de `UNICOS$`
+
+Contra las tablas **crudas**, cuál casa depende de la cadena (agosto de 2026,
+unidades):
+
+| Cadena | `[DESCRIPCION]` | `[MATERIAL DESCRIPTION FINAL]` |
+|---|---|---|
+| Elektra / Telcel / Liverpool | 100% | 100% |
+| Coppel | 97.8% | **0%** |
+| AT&T | 89.0% | **0%** |
+| Sears | 100% | **0%** |
+
+Por eso `[DESCRIPCION]` es la ruta por defecto para una tabla cruda: es la
+única que funciona en las seis. La descripción final es la que casa contra
+`vw_ETL_COPPEL` y `vw_ETL_COPPEL_IOT`, que arman su `[Material_Description]`
+como `CONCAT(marca, modelo)`.
+
+La hoja del Excel acepta **las dos**, uniendo contra la unión de ambas columnas
+agrupada por el texto: no cuesta cobertura (Coppel sigue dando 97.8%) y atrapa
+los dos formatos. Al juntarlas hay 177 textos que apuntan a más de una
+homologación, y por eso la unión se colapsa con `MIN` antes de unir.
 
 ## La tienda
 
@@ -179,7 +201,26 @@ seis consultan en 3 segundos o menos.
 | AT&T | `ATT_B2B` | `[Model]` | `[Codigo de Organización]` / `[Nombre de la Organización]` | `[Fecha de Transacción]` | `[Cantidad]` |
 | Sears | `SEARS_B2B` | `[Model]` | `[#POS]` / `[POS]` | `[Fecha]` | `[Total]` |
 
-Tres detalles que se descubrieron midiendo:
+Y lleva la **región** de cada tienda, que no está en la venta: sale de
+`CustomerStores`, y el enlace también es distinto por cadena. Tiendas de agosto
+de 2026 que llegan a una región:
+
+| Cadena | Se une | Casan |
+|---|---|---|
+| Coppel | `[Tienda]` → `[Coppel Name]` | 1728 / 1735 (99.6%) |
+| Telcel | `[Venta]` → `[Coppel Name]` | 649 / 653 (99.4%) |
+| AT&T | `[Nombre de la Organización]` → `[Coppel Name]` | 1674 / 1682 (99.5%) |
+| Liverpool | `[STORE]` → `[Coppel Name]` | 189 / 200 (94.5%) |
+| Elektra | `[Tienda #]` → número dentro de `[HONOR NAME]` | 1258 / 1269 (99.1%) |
+| Sears | `[#POS]` → número dentro de `[HONOR NAME]` | 90 / 91 (98.9%) |
+
+Elektra y Sears **no casan por nombre**: sus tiendas se llaman distinto en la
+venta y en el catálogo. El número está escondido entre paréntesis al final de
+`[HONOR NAME]` (`ELEKTRA MERIDA 2 (8649)`, `SEARS SATELITE (104)`). Y esto es
+otra razón para ir por la tabla cruda: desde la consolidada, Telcel y Sears no
+casan **nunca** y Elektra casa la mitad.
+
+Tres detalles más que se descubrieron midiendo:
 
 - **Se agrupa por la clave y se muestra la etiqueta.** El número de tienda es
   estable; el nombre no. En Elektra la 6169 es `EKT MEGA ZUMPANGO` y también
