@@ -1251,7 +1251,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
         # reporte sale igual con la hoja de datos.
         try:
-            contexto = contexto_del_resultado(df, ctx.engine)
+            contexto = contexto_del_resultado(df, ctx.engine, query)
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
             contexto = {}

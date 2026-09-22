@@ -38,6 +38,8 @@ usuario.
 """
 
 import logging
+import re
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -47,6 +49,7 @@ logger = logging.getLogger("sql_agent.contexto")
 
 GTM = "[GTM BI Database].dbo"
 VENTAS = "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"
+UNICOS = f"{GTM}.[UNICOS$]"
 
 # Cada entrada: hoja, tabla, y las columnas por las que se intenta casar los
 # valores que aparecen en el resultado.
@@ -66,6 +69,74 @@ MAX_FILAS_POR_HOJA = 2000
 # Lo que se le da al desglose antes de rendirse. El reporte ya costo minutos;
 # esta hoja es un extra y no puede duplicar la espera.
 SEGUNDOS_PARA_EL_DESGLOSE = 90
+
+# Cuantos modelos del resultado se desglosan. Un reporte con cien modelos no
+# se lee de todos modos: se toman los mas vendidos del propio resultado.
+MAX_MODELOS_DESGLOSADOS = 15
+
+# Como se llama la columna de modelo en un resultado. El agente las nombra de
+# varias formas segun como escriba el SELECT.
+_ES_MODELO = re.compile(
+    r".*(homologacion|modelo|model|material.?description)", re.IGNORECASE
+)
+_ES_RETAIL = re.compile(r".*(retail|cadena)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Cruda:
+    """La tabla cruda de un retailer y las columnas que hay que mirar en ella.
+
+    Cada cadena entrega su descarga con sus propios nombres: la tienda es
+    [Tienda] en Coppel, [POS] en Elektra, [Venta] en Telcel y
+    [Nombre de la Organización] en AT&T. Este mapa se verifico consultando
+    las siete tablas, no leyendo el catalogo.
+
+    `clave` y `etiqueta` son dos columnas distintas a proposito: se agrupa
+    por la clave (el numero de tienda, que es estable) y se muestra la
+    etiqueta (el nombre, que cambia). En Elektra la 6169 aparece como
+    "EKT MEGA ZUMPANGO" y como "MEGA ZUMPANGO"; agrupar por el nombre la
+    partiria en dos.
+    """
+
+    tabla: str
+    retail_en_unicos: tuple[str, ...]
+    modelo: str
+    clave: str
+    etiqueta: str
+    fecha: str
+    unidades: str
+
+
+# Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
+# Movistar no esta porque MVS_B2B no tiene columna de tienda -- su corte mas
+# fino es el canal -- asi que para Movistar la hoja sale por periodo.
+CRUDAS = {
+    "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",), "Modelo", "Tienda", "Tienda",
+                    "Día", "Unidades"),
+    "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "Desc Sku", "Tienda #", "POS",
+                     "Day", "QTY"),
+    "TELCEL": Cruda("TELCEL_B2B", ("TELCEL",), "Descripción", "Venta", "Venta",
+                    "Fecha", "Cantidad"),
+    "LIVERPOOL": Cruda("LIVERPOOL_B2B$", ("LIVERPOOL",), "Material Description",
+                       "Centro", "STORE", "Día/Periodo", "Vtas# U Per 1"),
+    # Los dos [Retail] de AT&T: con DEALERS solo se casa el 80.7% del mes, con
+    # los dos el 88.9% (medido, agosto de 2026).
+    "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "Model",
+                  "Codigo de Organización", "Nombre de la Organización",
+                  "Fecha de Transacción", "Cantidad"),
+    "SEARS": Cruda("SEARS_B2B", ("SEARS",), "Model", "#POS", "POS", "Fecha",
+                   "Total"),
+}
+
+# Como se nombra cada retailer en un resultado o en el SQL que lo produjo.
+_RETAILER_POR_TEXTO = (
+    ("COPPEL", re.compile(r"coppel", re.IGNORECASE)),
+    ("ELEKTRA", re.compile(r"elektra|\bEKT\b|EKT_B2B", re.IGNORECASE)),
+    ("TELCEL", re.compile(r"telcel", re.IGNORECASE)),
+    ("LIVERPOOL", re.compile(r"liverpool", re.IGNORECASE)),
+    ("AT&T", re.compile(r"at&t|ATT_B2B|ATT_Postpaid", re.IGNORECASE)),
+    ("SEARS", re.compile(r"sears", re.IGNORECASE)),
+)
 
 
 def _valores_de_texto(df: pd.DataFrame) -> list[str]:
@@ -94,6 +165,53 @@ def _buscar(conexion, tabla: str, columnas: tuple[str, ...], valores: list[str])
     cursor = conexion.exec_driver_sql(sql, tuple(valores) * len(columnas))
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
+
+
+def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:
+    """Los modelos del resultado, los mas vendidos primero.
+
+    Se ordenan por la columna numerica del propio resultado: si el reporte
+    trae cien modelos, el desglose es de los que de verdad pesan.
+    """
+    columna = tiempo.columna(df, _ES_MODELO)
+    if columna is None:
+        return []
+
+    numericas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    if numericas:
+        orden = df.groupby(columna, dropna=True)[numericas[0]].sum()
+        nombres = orden.sort_values(ascending=False).index
+    else:
+        nombres = df[columna].dropna().unique()
+
+    modelos = [str(v).strip() for v in nombres if str(v).strip()]
+    return modelos[:MAX_MODELOS_DESGLOSADOS]
+
+
+def _cual_retailer(texto: str) -> str | None:
+    """El retailer que nombra ese texto, o None si no es exactamente uno.
+
+    Exactamente uno: un reporte que compara Coppel contra Elektra no se puede
+    desglosar por la tabla cruda de ninguno de los dos.
+    """
+    encontrados = {clave for clave, patron in _RETAILER_POR_TEXTO if patron.search(texto)}
+    return encontrados.pop() if len(encontrados) == 1 else None
+
+
+def retailer_del_resultado(df: pd.DataFrame, query: str) -> str | None:
+    """De que cadena es el reporte, mirando primero el resultado y luego el SQL.
+
+    El resultado manda: si trae una columna de retailer con un solo valor,
+    eso es lo que el usuario esta viendo. Si no la trae, el SQL dice de que
+    tabla salio.
+    """
+    columna = tiempo.columna(df, _ES_RETAIL)
+    if columna is not None:
+        valores = df[columna].dropna().astype(str).unique()
+        if len(valores) == 1:
+            return _cual_retailer(valores[0])
+        return None
+    return _cual_retailer(query or "")
 
 
 def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
@@ -132,6 +250,50 @@ def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
     return desde.strftime("%Y-%m-%d"), (fin + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
 
 
+def _ventas_por_tienda_y_modelo(conexion, cruda: Cruda, modelos: list[str],
+                               desde: str, hasta: str):
+    """Cuanto vendio cada tienda de esos modelos, por la tabla CRUDA.
+
+    Esta es la ruta buena para llegar al modelo: la descripcion tal cual la
+    escribe la cadena contra UNICOS$.[DESCRIPCION], con el retailer pegado a
+    la condicion. Medido, casa el 100% en Elektra y el 97.8% en Coppel,
+    mientras que hacerlo desde la vista consolidada casa el 8%.
+
+    El GROUP BY dentro de UNICOS$ no es decoracion: en Liverpool hay 137
+    descripciones que apuntan a mas de una homologacion (6 en Coppel, 1 entre
+    los dos AT&T). Sin colapsarlas, cada venta de esas se uniria dos veces y
+    las unidades saldrian infladas.
+
+    `>= 1` deja fuera devoluciones y ajustes, que es lo que hacen las vistas
+    oficiales: asi la hoja suma como el reporte que acompaña.
+    """
+    huecos_retail = ", ".join("?" * len(cruda.retail_en_unicos))
+    huecos_modelo = ", ".join("?" * len(modelos))
+    sql = f"""
+        SELECT TOP {MAX_FILAS_POR_HOJA}
+               MAX(v.[{cruda.etiqueta}]) AS [Tienda],
+               u.[modelo] AS [Modelo],
+               SUM(v.[{cruda.unidades}]) AS [Unidades]
+        FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
+        JOIN (SELECT [DESCRIPCION] AS [desc],
+                     MIN([HOMOLOGACION MODELO]) AS [modelo]
+              FROM {UNICOS}
+              WHERE [Retail] IN ({huecos_retail})
+                AND [DESCRIPCION] IS NOT NULL AND LTRIM([DESCRIPCION]) <> ''
+              GROUP BY [DESCRIPCION]) u
+          ON u.[desc] = v.[{cruda.modelo}]
+        WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
+          AND v.[{cruda.unidades}] >= 1
+          AND u.[modelo] IN ({huecos_modelo})
+        GROUP BY v.[{cruda.clave}], u.[modelo]
+        ORDER BY SUM(v.[{cruda.unidades}]) DESC
+    """
+    parametros = (*cruda.retail_en_unicos, desde, hasta, *modelos)
+    cursor = conexion.exec_driver_sql(sql, parametros)
+    filas = cursor.fetchall()
+    return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
+
+
 def _ventas_por_tienda(conexion, desde: str, hasta: str):
     """Cuanto vendio cada tienda en ese periodo, la que mas primero.
 
@@ -152,7 +314,9 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str):
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
-def contexto_del_resultado(df: pd.DataFrame, engine) -> dict[str, pd.DataFrame]:
+def contexto_del_resultado(
+    df: pd.DataFrame, engine, query: str = ""
+) -> dict[str, pd.DataFrame]:
     """Hojas de contexto para el resultado, vacio si no hay nada que agregar."""
     if df is None or df.empty:
         return {}
@@ -163,10 +327,20 @@ def contexto_del_resultado(df: pd.DataFrame, engine) -> dict[str, pd.DataFrame]:
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
     rango = periodo(df)
     if rango:
+        # Con el modelo si se puede cuando el reporte es de UNA cadena: ahi
+        # hay una tabla cruda donde la homologacion casa. Si son varias, o si
+        # no hay modelos, la hoja sale por periodo, que siempre es correcta.
+        cruda = CRUDAS.get(retailer_del_resultado(df, query) or "")
+        modelos = modelos_a_desglosar(df)
         try:
             with engine.connect() as conexion:
                 conexion.connection.dbapi_connection.timeout = SEGUNDOS_PARA_EL_DESGLOSE
-                ventas = _ventas_por_tienda(conexion, *rango)
+                if cruda and modelos:
+                    ventas = _ventas_por_tienda_y_modelo(
+                        conexion, cruda, modelos, *rango
+                    )
+                else:
+                    ventas = _ventas_por_tienda(conexion, *rango)
             if not ventas.empty:
                 hojas["Ventas por tienda"] = ventas
         except Exception:  # noqa: BLE001

@@ -252,6 +252,120 @@ class TestDesglosePorTienda:
         assert sql.count("?") == 2
         assert parametros == ("2026-01-01", "2026-07-01")
 
+    def _motor_con_crudas(self):
+        return _MotorDeCatalogos(
+            {
+                "EKT_B2B": (
+                    ["Tienda", "Modelo", "Unidades"],
+                    [("929797 ELEKTRA.MX", "SAMSUNG A17 128GB 4G", 176)],
+                ),
+                "COPPEL_B2B": (
+                    ["Tienda", "Modelo", "Unidades"],
+                    [("800 • COPPEL INTERNET", "SAMSUNG A17 128GB 4G", 374)],
+                ),
+            }
+        )
+
+    def _sql_de_ventas(self, motor):
+        return [
+            (sql, par)
+            for sql, par in motor.consultas
+            if "_B2B" in sql or "ETL_Consolidado" in sql
+        ]
+
+    def test_con_una_sola_cadena_la_hoja_lleva_el_modelo(self):
+        # La ruta buena al modelo: la tabla CRUDA del retailer contra
+        # UNICOS$.[DESCRIPCION]. Desde la consolidada casaria el 8%.
+        motor = self._motor_con_crudas()
+        hojas = contexto_del_resultado(
+            self._resultado_por_modelo(), motor, "FROM [RAW_DATA_B2B].dbo.[EKT_B2B]"
+        )
+
+        assert list(hojas["Ventas por tienda"].columns) == [
+            "Tienda", "Modelo", "Unidades"
+        ]
+        sql, parametros = self._sql_de_ventas(motor)[0]
+        assert "EKT_B2B" in sql
+        assert "ETL_Consolidado_B2B" not in sql
+        # El retailer va pegado a la condicion, no en el WHERE de la venta.
+        assert parametros[0] == "ELEKTRA"
+
+    def test_el_retailer_sale_del_resultado_antes_que_del_sql(self):
+        # Si la tabla que el usuario esta viendo dice Coppel, es Coppel,
+        # aunque el SQL haya salido de la consolidada.
+        df = self._resultado_por_modelo()
+        df["Retail"] = "Coppel"
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(df, motor, "FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]")
+
+        assert "COPPEL_B2B" in self._sql_de_ventas(motor)[0][0]
+
+    def test_con_dos_cadenas_la_hoja_vuelve_a_ser_por_periodo(self):
+        # Un reporte que compara Coppel contra Elektra no se puede desglosar
+        # por la tabla cruda de ninguno de los dos.
+        df = self._resultado_por_modelo()
+        df["Retail"] = ["Coppel", "ELEKTRA", "Coppel"]
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(df, motor, "")
+
+        sql, _ = self._sql_de_ventas(motor)[0]
+        assert "ETL_Consolidado_B2B" in sql
+        assert "UNICOS" not in sql.upper()
+
+    def test_sin_modelos_la_hoja_es_por_periodo(self):
+        sin_modelo = pd.DataFrame({"Año": [2026], "Mes": [8], "QTY": [10]})
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(sin_modelo, motor, "FROM EKT_B2B")
+
+        assert "ETL_Consolidado_B2B" in self._sql_de_ventas(motor)[0][0]
+
+    def test_la_homologacion_se_colapsa_para_no_duplicar(self):
+        # En Liverpool hay 137 descripciones que apuntan a mas de una
+        # homologacion; sin agruparlas, cada venta se une dos veces y las
+        # unidades salen infladas.
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(
+            self._resultado_por_modelo(), motor, "FROM EKT_B2B"
+        )
+        sql, _ = self._sql_de_ventas(motor)[0]
+
+        assert "GROUP BY [DESCRIPCION]" in sql
+        assert "MIN([HOMOLOGACION MODELO])" in sql
+
+    def test_se_dejan_fuera_devoluciones_y_ajustes(self):
+        # Las vistas oficiales filtran `>= 1`: la hoja tiene que sumar como
+        # el reporte al que acompaña.
+        motor = self._motor_con_crudas()
+        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+        sql, _ = self._sql_de_ventas(motor)[0]
+
+        assert ">= 1" in sql
+
+    def test_los_modelos_van_por_lo_que_vendieron(self):
+        # Un reporte con cien modelos no se desglosa entero: cada uno alarga
+        # la consulta. Se toman los que de verdad pesan.
+        muchos = pd.DataFrame(
+            {
+                "HOMOLOGACION MODELO": [f"MODELO {i}" for i in range(40)],
+                "Total": list(range(40)),
+                "Año": [2026] * 40,
+            }
+        )
+        modelos = contexto.modelos_a_desglosar(muchos)
+
+        assert len(modelos) == contexto.MAX_MODELOS_DESGLOSADOS
+        assert modelos[0] == "MODELO 39"
+
+    def test_cada_cruda_declara_columnas_completas(self):
+        # El mapa se verifico tabla por tabla contra el servidor; si alguien
+        # agrega una cadena a medias, aqui se ve.
+        for clave, cruda in contexto.CRUDAS.items():
+            assert cruda.tabla and cruda.retail_en_unicos, clave
+            assert all(
+                getattr(cruda, campo)
+                for campo in ("modelo", "clave", "etiqueta", "fecha", "unidades")
+            ), clave
+
     def test_sin_periodo_no_se_consulta_la_vista_de_ventas(self):
         # Sin acotar la fecha la consulta recorre la vista entera, que es la
         # operacion cara que este modulo evita.

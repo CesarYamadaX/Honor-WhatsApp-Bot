@@ -163,18 +163,40 @@ Ahora la hoja va por **periodo**, sin pasar por la homologación: unidades por
 retailer y tienda en el rango que cubre el reporte. Es correcta, y además más
 rápida (16 s un mes, 39 s medio año, contra 23 s de una consulta equivocada).
 
-## La homologación en la hoja por tienda
+## La hoja por tienda del Excel
 
-La hoja "Ventas por tienda" del Excel va por periodo y **sin** modelo, y eso no
-es que la homologación sobre: es que desde la vista consolidada no se puede
-aplicar (ruta C, la que casa el 8%). El modelo por tienda sí se puede pedir, y
-sale correcto, por la ruta A: la tabla cruda del retailer unida a `UNICOS$` por
-su columna, con `u.[Retail]` en el `ON`. Medido: 0 s en Elektra y 4 s en Coppel
-para un mes, contra los 23 s que tardaba la consulta equivocada.
+La hoja "Ventas por tienda" lleva el **modelo** cuando el reporte es de **una
+sola cadena**, y entonces sale por la ruta A: la tabla cruda de esa cadena
+unida a `UNICOS$` por su columna, con el retailer pegado al `ON`. Medido, las
+seis consultan en 3 segundos o menos.
 
-Dicho de otra forma: "ventas por tienda y modelo de Elektra en agosto" es una
-pregunta que el bot responde bien hoy; lo que no puede es armarla sola, para
-todas las cadenas a la vez, como hoja automática de cada reporte.
+| Cadena | Tabla cruda | Modelo | Tienda (clave / etiqueta) | Fecha | Unidades |
+|---|---|---|---|---|---|
+| Coppel | `COPPEL_B2B` | `[Modelo]` | `[Tienda]` | `[Día]` | `[Unidades]` |
+| Elektra | `EKT_B2B` | `[Desc Sku]` | `[Tienda #]` / `[POS]` | `[Day]` | `[QTY]` |
+| Telcel | `TELCEL_B2B` | `[Descripción]` | `[Venta]` | `[Fecha]` | `[Cantidad]` |
+| Liverpool | `LIVERPOOL_B2B$` | `[Material Description]` | `[Centro]` / `[STORE]` | `[Día/Periodo]` | `[Vtas# U Per 1]` |
+| AT&T | `ATT_B2B` | `[Model]` | `[Codigo de Organización]` / `[Nombre de la Organización]` | `[Fecha de Transacción]` | `[Cantidad]` |
+| Sears | `SEARS_B2B` | `[Model]` | `[#POS]` / `[POS]` | `[Fecha]` | `[Total]` |
+
+Tres detalles que se descubrieron midiendo:
+
+- **Se agrupa por la clave y se muestra la etiqueta.** El número de tienda es
+  estable; el nombre no. En Elektra la 6169 es `EKT MEGA ZUMPANGO` y también
+  `MEGA ZUMPANGO`: agrupar por el nombre la parte en dos.
+- **La homologación se colapsa antes de unir** (`GROUP BY [DESCRIPCION]` +
+  `MIN([HOMOLOGACION MODELO])`). En Liverpool hay **137** descripciones que
+  apuntan a más de una homologación, 6 en Coppel y 1 entre los dos AT&T; sin
+  colapsarlas, esas ventas se unirían dos veces y las unidades saldrían
+  infladas.
+- **AT&T necesita sus dos `[Retail]`.** Con `AT&T DEALERS` solo casa el 80.7%
+  del mes; con `DEALERS` y `CACS` juntos, el 88.9%.
+
+Cuando el reporte **no** es de una sola cadena — porque compara varias, o
+porque no hay columna de modelo, o porque es de Movistar, cuya tabla no tiene
+columna de tienda — la hoja sale por **periodo**: unidades por retailer y
+tienda en el rango del reporte, sin pasar por la homologación. Siempre
+correcta, aunque sin modelo.
 
 ## Lo que sigue sin resolverse
 
