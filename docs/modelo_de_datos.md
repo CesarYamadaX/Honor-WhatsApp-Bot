@@ -1,6 +1,6 @@
 # Cómo se consultan las tablas
 
-Fecha: 2026-09-21, ampliado 2026-09-23 (Raw_Data y PIVOT)
+Fecha: 2026-09-21, ampliado 2026-09-23 (Raw_Data y PIVOT), 2026-09-24 (segundo intento de region)
 Estado: revisado contra la base, cada número de aquí está medido
 
 Este documento es el mapa que el bot ya lleva dentro (`sql_agent/catalogo.py`),
@@ -176,6 +176,39 @@ más de un nombre. Agrupar por `[Store]` parte una tienda en varias: la 6169 da
 para cualquier ranking por tienda de Elektra, el corte va por el número:
 `LEFT([Store], CHARINDEX(' ', [Store]+' ')-1)`. En Coppel, AT&T, Movistar y
 Sears el nombre es estable (0.2% o menos).
+
+### El segundo intento cuando la tienda no llega a una región
+
+Para Coppel, Telcel, AT&T y Liverpool —las que se enlazan por nombre—, si el
+cruce exacto contra `CustomerStores` no encuentra la tienda, hay un **segundo
+intento** con los dos nombres normalizados (sin el NBSP que a veces se cuela
+como espacio, sin corridas de espacio de más, sin espacios en las puntas).
+Sale caro solo cuando hace falta: es un segundo `LEFT JOIN` y un `COALESCE`,
+no una segunda consulta.
+
+La ganancia real está concentrada en Liverpool. Medido sobre junio–agosto de
+2026:
+
+| Cadena | Solo exacto | Con el segundo intento |
+|---|---|---|
+| Liverpool | 92.5% | **98.3%** (+17 743 unidades) |
+| Coppel | 99.9% | 100.0% (+733 unidades) |
+| Telcel | 99.8% | 99.8% (sin cambio) |
+| AT&T | 67.7% | 67.7% (sin cambio) |
+
+La causa en Liverpool es literal: la venta trae `L  TAMPICO` (dos espacios) y
+el catálogo tiene `L TAMPICO` (uno). En Telcel y AT&T el segundo intento no
+ayuda porque el hueco no es de formato — son nombres genuinamente distintos, o
+en AT&T (67.7%, el peor de los seis) directamente no son tiendas: `ATT_B2B`
+mezcla texto de canal como `J3A - Cadena COPPEL, S.A. DE C.V.` junto con las
+tiendas físicas, y ningún cruce por nombre va a convertir eso en una tienda.
+
+Elektra y Sears —las que se enlazan por número— no llevan segundo intento:
+medido, sus pocas tiendas sin catalogar (13 de 1272 en Elektra) genuinamente
+no están dadas de alta, y normalizar un nombre no ayuda cuando el enlace ya
+es por número. El segundo intento tampoco inventa cruces: `L OBLATOS` sigue
+sin región porque en el catálogo es `L GUADALAJARA OBLATOS`, un nombre
+distinto de verdad, no un problema de espacios.
 
 ## Promotoría
 

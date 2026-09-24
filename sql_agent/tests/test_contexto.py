@@ -365,6 +365,51 @@ class TestDatosCrudosParaElPivot:
         assert "Raw_Data" not in hojas
 
 
+class TestFallbackDeRegion:
+    """A las tiendas sin region se les da una segunda oportunidad contra el
+    catalogo, con el nombre normalizado. Se pidio esto porque "L  TAMPICO"
+    (dos espacios, tal cual lo escribe Liverpool) no casaba con
+    "L TAMPICO" del catalogo: medido, esa sola diferencia perdia 17 743
+    unidades del periodo, el 5.8% del total de Liverpool.
+    """
+
+    def test_las_que_se_identifican_por_nombre_llevan_el_segundo_intento(self):
+        for clave in ("COPPEL", "TELCEL", "AT&T", "LIVERPOOL"):
+            sql, region, parametros = contexto._join_region(contexto.CRUDAS[clave])
+            assert "COALESCE" in region, clave
+            assert sql.count("LEFT JOIN") == 2, clave
+            assert len(parametros) == 2, clave
+
+    def test_las_que_se_identifican_por_numero_no_lo_necesitan(self):
+        # Medido: sus pocas tiendas sin catalogar (13 de 1272 en Elektra) de
+        # verdad no estan dadas de alta; normalizar el nombre no ayuda
+        # cuando el enlace ya es por numero.
+        for clave in ("ELEKTRA", "SEARS"):
+            sql, region, parametros = contexto._join_region(contexto.CRUDAS[clave])
+            assert region == "cs.[Region]", clave
+            assert sql.count("LEFT JOIN") == 1, clave
+            assert len(parametros) == 1, clave
+
+    def test_ventas_crudas_arma_los_dos_joins_con_sus_parametros(self):
+        motor = _MotorDeCatalogos(
+            {"LIVERPOOL_B2B$": (["Region", "Tienda", "Marca", "Mes", "Unidades"], [])}
+        )
+        with motor.connect() as conexion:
+            contexto.ventas_crudas(
+                conexion, contexto.CRUDAS["LIVERPOOL"], "2026-06-01", "2026-09-01"
+            )
+
+        sql, parametros = motor.consultas[0]
+        assert sql.count("?") == len(parametros)
+        assert parametros[0] == parametros[1] == "LIVERPOOL"
+
+    def test_normaliza_el_nbsp_y_los_espacios_de_mas(self):
+        _, _, _ = contexto._join_region(contexto.CRUDAS["LIVERPOOL"])
+        sql, _, _ = contexto._join_region(contexto.CRUDAS["LIVERPOOL"])
+        assert "NCHAR(160)" in sql
+        assert "LTRIM(RTRIM(" in sql
+
+
 class TestCadaCrudaTieneSuMarca:
     def test_las_seis_declaran_la_columna_de_marca(self):
         # Verificado contra el servidor: Marca en Coppel/Elektra/Telcel,

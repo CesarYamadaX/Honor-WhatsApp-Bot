@@ -12,6 +12,13 @@ CPython 3.13 imprimiendo una excepcion estructurada (SEH) que pywin32 ya
 atrapa y convierte en un `pywintypes.com_error` normal por dentro de la
 llamada COM. Se ve feo, pero las pruebas siguen y pasan; se confirmo
 corriendolas varias veces seguidas con el mismo resultado.
+
+Corriendo junto con el resto de la suite (no este archivo solo), de vez en
+cuando UNA de las pruebas de `TestAgregarPivot` falla por contencion real de
+COM -- dos Excel abriendose casi al mismo tiempo, uno de las pruebas de este
+archivo y otro de la siguiente. Confirmado: volver a correr la suite, sin
+tocar nada, pasa limpio. Si vuelve a pasar seguido, ahi si hay algo que
+mirar; una vez sola es la naturaleza de automatizar Excel de verdad.
 """
 
 import openpyxl

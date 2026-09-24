@@ -199,6 +199,60 @@ _NUMERO_DEL_CATALOGO = (
     "CHARINDEX('(', REVERSE([HONOR NAME])) - 1), ')', '')) END"
 )
 
+# Quita el NBSP que a veces se cuela como espacio, colapsa las corridas de
+# espacio y recorta las puntas. Se aplica a los DOS lados antes de comparar.
+_NORMALIZAR = (
+    "LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({expr}, "
+    "NCHAR(160), ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')))"
+)
+
+
+def _join_region(cruda: Cruda) -> tuple[str, str, tuple]:
+    """El SQL para llegar a la region de una cruda: los JOIN, la expresion
+    de la columna, y los parametros que le faltan.
+
+    Las cadenas que se identifican por NOMBRE (Coppel, Telcel, AT&T,
+    Liverpool) llevan ademas un SEGUNDO intento con los nombres
+    normalizados -- sin el NBSP que a veces se cuela ni espacios de mas --,
+    porque ahi es donde de verdad ayuda: medido en Liverpool, "L  TAMPICO"
+    (dos espacios) no casaba con "L TAMPICO" del catalogo, y solo eso
+    perdia 17 743 unidades del periodo, el 5.8% del total (92.5% -> 98.3%
+    con el segundo intento). En Telcel y AT&T no ayuda en nada -- sus
+    huecos son otra cosa: nombres de verdad distintos, o en AT&T etiquetas
+    de canal ("J3A - Cadena COPPEL, S.A. DE C.V.") que no son tiendas -- y
+    en Elektra y Sears, que se identifican por NUMERO, tampoco: sus pocas
+    tiendas sin catalogar (13 de 1272 en Elektra) de verdad no estan dadas
+    de alta, con cualquier normalizacion.
+    """
+    enlace = cruda.enlace_con_catalogo.format(
+        etiqueta=cruda.etiqueta, clave=cruda.clave
+    )
+    if cruda.enlace_con_catalogo != _POR_NOMBRE:
+        sql = f"""
+            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
+                              {_NUMERO_DEL_CATALOGO} AS [numero]
+                       FROM {GTM}.[CustomerStores]
+                       WHERE [RetailName] = ?) cs
+              ON {enlace}
+        """
+        return sql, "cs.[Region]", (cruda.retail_en_catalogo,)
+
+    normalizado_venta = _NORMALIZAR.format(expr=f"v.[{cruda.etiqueta}]")
+    normalizado_catalogo = _NORMALIZAR.format(expr="cs2.[nombre]")
+    sql = f"""
+        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                   FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?) cs
+          ON {enlace}
+        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                   FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?) cs2
+          ON {normalizado_catalogo} = {normalizado_venta}
+    """
+    return (
+        sql,
+        "COALESCE(cs.[Region], cs2.[Region])",
+        (cruda.retail_en_catalogo, cruda.retail_en_catalogo),
+    )
+
 # Como se nombra cada retailer en un resultado o en el SQL que lo produjo.
 _RETAILER_POR_TEXTO = (
     ("COPPEL", re.compile(r"coppel", re.IGNORECASE)),
@@ -433,12 +487,10 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
     """
     huecos_retail = ", ".join("?" * len(cruda.retail_en_unicos))
     huecos_modelo = ", ".join("?" * len(modelos))
-    enlace = cruda.enlace_con_catalogo.format(
-        etiqueta=cruda.etiqueta, clave=cruda.clave
-    )
+    join_region, region, parametros_region = _join_region(cruda)
     sql = f"""
         SELECT TOP {MAX_FILAS_POR_HOJA}
-               MAX(cs.[Region]) AS [Region],
+               MAX({region}) AS [Region],
                MAX(v.[{cruda.etiqueta}]) AS [Tienda],
                u.[modelo] AS [Modelo],
                SUM(v.[{cruda.unidades}]) AS [Unidades]
@@ -451,20 +503,16 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
                 AND LTRIM([{cruda.columna_en_unicos}]) <> ''
               GROUP BY [{cruda.columna_en_unicos}]) u
           ON u.[texto] = {cruda.llave}
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
-                          {_NUMERO_DEL_CATALOGO} AS [numero]
-                   FROM {GTM}.[CustomerStores]
-                   WHERE [RetailName] = ?) cs
-          ON {enlace}
+        {join_region}
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
           AND v.[{cruda.unidades}] >= 1
           AND u.[modelo] IN ({huecos_modelo})
-        GROUP BY cs.[Region], v.[{cruda.clave}], u.[modelo]
+        GROUP BY {region}, v.[{cruda.clave}], u.[modelo]
         ORDER BY SUM(v.[{cruda.unidades}]) DESC
     """
     parametros = (
         *cruda.retail_en_unicos,
-        cruda.retail_en_catalogo,
+        *parametros_region,
         desde,
         hasta,
         *modelos,
@@ -488,29 +536,23 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     el detalle por modelo ya tiene su propia hoja. Esta es la que alimenta
     un pivot de tienda x mes, y para eso la marca alcanza.
     """
-    enlace = cruda.enlace_con_catalogo.format(
-        etiqueta=cruda.etiqueta, clave=cruda.clave
-    )
+    join_region, region, parametros_region = _join_region(cruda)
     sql = f"""
         SELECT TOP {MAX_FILAS_RAW_DATA}
-               MAX(cs.[Region]) AS [Region],
+               MAX({region}) AS [Region],
                MAX(v.[{cruda.etiqueta}]) AS [Tienda],
                v.[{cruda.marca}] AS [Marca],
                MONTH(v.[{cruda.fecha}]) AS [Mes],
                SUM(v.[{cruda.unidades}]) AS [Unidades]
         FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
-                          {_NUMERO_DEL_CATALOGO} AS [numero]
-                   FROM {GTM}.[CustomerStores]
-                   WHERE [RetailName] = ?) cs
-          ON {enlace}
+        {join_region}
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
           AND v.[{cruda.unidades}] >= 1
-        GROUP BY cs.[Region], v.[{cruda.clave}], v.[{cruda.marca}],
+        GROUP BY {region}, v.[{cruda.clave}], v.[{cruda.marca}],
                  MONTH(v.[{cruda.fecha}])
         ORDER BY SUM(v.[{cruda.unidades}]) DESC
     """
-    parametros = (cruda.retail_en_catalogo, desde, hasta)
+    parametros = (*parametros_region, desde, hasta)
     cursor = conexion.exec_driver_sql(sql, parametros)
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
