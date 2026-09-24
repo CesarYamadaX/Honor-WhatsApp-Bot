@@ -1267,8 +1267,21 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         # guardado, asi que va despues de escribirlo, nunca antes. Que Excel
         # no este disponible, tarde de mas, o falle no puede costar el
         # reporte: "Datos" y el resto de las hojas ya estan listas.
+        #
+        # Solo si este reporte va a ser el que se entrega. Medido en
+        # produccion: un turno reintento la consulta 4 veces (un error de
+        # SQL propio del modelo) y armo el pivot las 4, aunque
+        # `registrar_reporte` solo se queda con el PRIMERO -- 3 pases de
+        # Excel por COM tirados, ~20s perdidos. La condicion es la misma que
+        # usa `registrar_reporte` para decidir si este reporte reemplaza al
+        # que ya habia: el primero de la vuelta, o uno que trae grafica
+        # cuando el que ya se tiene no la trae.
+        sera_el_reporte_bueno = not ctx.archivos or (
+            imagen is not None
+            and not any(a.lower().endswith(".png") for a in ctx.archivos)
+        )
         crudos = contexto.get("Raw_Data")
-        if crudos is not None and not crudos.empty:
+        if sera_el_reporte_bueno and crudos is not None and not crudos.empty:
             config = excel_pivot.config_ventas_por_tienda(crudos)
             if config:
                 bitacora.paso("armando el pivot de tienda y mes", bitacora.NOTA)

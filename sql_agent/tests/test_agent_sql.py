@@ -537,6 +537,43 @@ class TestConsultarSql:
 
         assert ctx.archivos == de_la_primera
 
+    def test_el_pivot_solo_se_arma_para_el_reporte_que_se_entrega(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Medido en produccion: un turno reintento consultar_sql 4 veces (un
+        # error de SQL propio del modelo, sin relacion con el pivot) y armo
+        # el pivot las 4 -- aunque registrar_reporte solo se queda con el
+        # PRIMERO. Cada intento de mas es un Excel por COM completo, ~5-7s
+        # tirados. Se queda solo con el intento que de verdad se entrega.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            modulo_agente,
+            "contexto_del_resultado",
+            lambda df, engine, query: {
+                "Raw_Data": pd.DataFrame(
+                    {"Tienda": ["a"], "Marca": ["HONOR"], "Mes": [1], "Unidades": [1]}
+                )
+            },
+        )
+        monkeypatch.setattr(
+            modulo_agente.excel_pivot,
+            "config_ventas_por_tienda",
+            lambda df: {"filas": ["Tienda"], "columnas": ["Mes"], "medida": "Unidades"},
+        )
+        llamadas = []
+        monkeypatch.setattr(
+            modulo_agente.excel_pivot,
+            "agregar_pivot",
+            lambda *a, **k: llamadas.append(1) or True,
+        )
+
+        with contexto_peticion(engine):
+            consultar_sql.invoke({"query": "SELECT * FROM ventas"})
+            consultar_sql.invoke({"query": "SELECT tienda FROM ventas"})
+            consultar_sql.invoke({"query": "SELECT monto FROM ventas"})
+
+        assert len(llamadas) == 1
+
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "DROP TABLE ventas"})
