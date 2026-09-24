@@ -1,6 +1,6 @@
 # Cómo se consultan las tablas
 
-Fecha: 2026-09-21
+Fecha: 2026-09-21, ampliado 2026-09-23 (Raw_Data y PIVOT)
 Estado: revisado contra la base, cada número de aquí está medido
 
 Este documento es el mapa que el bot ya lleva dentro (`sql_agent/catalogo.py`),
@@ -273,7 +273,54 @@ correcta, aunque sin modelo.
 | `Datos` | el resultado completo, en orden cronológico |
 | una por cadena | las filas de esa cadena, cuando el reporte trae varias |
 | `Ventas por tienda` | región, tienda, modelo y unidades (una sola cadena) o retailer, tienda y unidades del periodo (varias) |
+| `Raw_Data` | tienda, marca, mes y unidades de TODA la cadena en el periodo, sin acotar a los modelos del resultado |
+| `PIVOT` | un PivotTable de Excel de verdad sobre `Raw_Data`: tienda › marca en filas, mes en columnas, suma y share % |
 | `Tiendas`, `Regiones`, `Carriers` | la ficha de los valores que salieron |
+
+### `Raw_Data` y `PIVOT`
+
+Se generan solo cuando el reporte es de **una sola cadena** (la misma condición
+que activa la ruta A de la homologación): sin una tabla cruda identificada no
+hay de dónde sacar el detalle. `Raw_Data` sale de esa tabla cruda —no de la
+vista consolidada— agrupada por tienda, marca y mes, **sin** acotar a los
+modelos del resultado: "las ventas de Elektra de junio a agosto" no viene con
+una lista corta de modelos que desglosar, así que esta hoja trae la cadena
+entera. Se agrupa por marca y no por modelo porque a nivel modelo la misma
+consulta da cuatro veces más filas (127 602 contra 28 887 en Elektra, medido);
+el detalle por modelo ya lo cubre `Ventas por tienda`. Tope medido: Elektra
+28 887 filas, Coppel (la tabla cruda más grande) 58 066 — el límite de
+`MAX_FILAS_RAW_DATA` (80 000) deja margen sin acercarse a los 16 MB del
+adjunto de WhatsApp.
+
+`PIVOT` es un PivotTable **real** de Excel —arrastrable, refrescable, el mismo
+objeto que arma alguien desde el menú Insertar—, no una tabla que solo se le
+parece. openpyxl no sabe escribir pivotes: leerlos sí, pero fabricar el cache
+y sus registros a mano en XML no tiene ejemplos documentados y no hay forma de
+probar que Excel lo abre sin pedir reparación. La única vía confiable es dejar
+que Excel mismo lo construya, así que `sql_agent/excel_pivot.py` abre Excel
+por COM (`pywin32`) sobre el archivo ya guardado y arma ahí el pivot:
+
+- Corre en un hilo aparte con plazo (90 s): una llamada COM colgada no puede
+  bloquear el turno de otra pregunta.
+- Un candado (`threading.Lock`) asegura que solo hay un Excel COM a la vez;
+  dos reportes armando un pivot en paralelo abrirían dos procesos por
+  separado, más lento y más frágil.
+- Cada hilo que usa COM necesita su propio `pythoncom.CoInitialize()` — un
+  apartamento COM no se comparte entre hilos, y sin esto revienta con
+  "CoInitialize has not been called". Apareció solo la segunda vez que se
+  probó: la primera, construir el envoltorio de la librería de Excel
+  disparaba un CoInitialize de casualidad; en cuanto ese cache ya existía en
+  disco, la ruta rápida se lo saltaba.
+- Un workbook que se abre y no se cierra deja el proceso `EXCEL.EXE` vivo
+  después de `Quit()`, invisible porque `Visible=False` le impide mostrar el
+  diálogo que lo estaría reteniendo. Se cierran todos los libros abiertos
+  antes de salir, y si el proceso sigue vivo un segundo después, se termina
+  por PID como último recurso. Verificado con una prueba que compara los
+  `EXCEL.EXE` vivos antes y después.
+
+Si Excel no está disponible, la llamada COM falla, o el trabajo no termina a
+tiempo, el reporte sale igual sin la hoja `PIVOT` — `Raw_Data` y el resto del
+archivo ya están guardados antes de intentar el pivot.
 
 Las hojas por cadena se agregan **sin quitar** `Datos`, y van ordenadas por
 volumen para que las primeras pestañas sean las que pesan. No se separa

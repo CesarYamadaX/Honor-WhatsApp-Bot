@@ -37,6 +37,7 @@ from catalogo import (
     valores_conocidos,
 )
 from contexto import contexto_del_resultado
+import excel_pivot
 from excel_exporter import ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
@@ -1261,6 +1262,23 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"
+
+        # El PIVOT de verdad: se arma con Excel por COM SOBRE el archivo ya
+        # guardado, asi que va despues de escribirlo, nunca antes. Que Excel
+        # no este disponible, tarde de mas, o falle no puede costar el
+        # reporte: "Datos" y el resto de las hojas ya estan listas.
+        crudos = contexto.get("Raw_Data")
+        if crudos is not None and not crudos.empty:
+            config = excel_pivot.config_ventas_por_tienda(crudos)
+            if config:
+                bitacora.paso("armando el pivot de tienda y mes", bitacora.NOTA)
+                if excel_pivot.agregar_pivot(excel, "Raw_Data", **config):
+                    bitacora.paso("pivot listo", bitacora.NOTA)
+                else:
+                    bitacora.paso(
+                        "no se pudo armar el pivot; el reporte sale sin el",
+                        bitacora.NOTA,
+                    )
 
     # La grafica va primero: en el chat se ve de un vistazo, y el Excel queda
     # debajo para quien quiera el detalle.

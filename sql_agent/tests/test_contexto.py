@@ -268,6 +268,115 @@ class TestExcelConContexto:
         assert openpyxl.load_workbook(ruta).sheetnames == [HOJA_DATOS]
 
 
+class TestDatosCrudosParaElPivot:
+    """La hoja Raw_Data que alimenta el PIVOT: 'quiero las ventas de Elektra
+    junio julio agosto y el share por tienda y por mes'. A diferencia de
+    'Ventas por tienda', esta no depende de una lista de modelos -- trae
+    TODA la cadena en el periodo, agrupada por tienda, marca y mes.
+    """
+
+    def _resultado_por_modelo(self):
+        # El mismo resultado con el que se prueba "Ventas por tienda": lo
+        # que importa aqui es que tenga periodo, no los modelos.
+        return pd.DataFrame(
+            {
+                "Año": [2026, 2026, 2026],
+                "Mes": [1, 3, 6],
+                "HOMOLOGACION MODELO": ["OPPO A6X", "OPPO A5", "OPPO A6X"],
+                "Total Vendido": [100, 500, 300],
+            }
+        )
+
+    def _motor_con_crudo(self, filas=None):
+        return _MotorDeCatalogos(
+            {
+                "EKT_B2B": (
+                    ["Region", "Tienda", "Marca", "Mes", "Unidades"],
+                    filas or [("R9", "929797 ELEKTRA.MX", "Samsung", 6, 176)],
+                )
+            }
+        )
+
+    def test_se_genera_junto_con_ventas_por_tienda(self):
+        motor = self._motor_con_crudo()
+        hojas = contexto_del_resultado(
+            self._resultado_por_modelo(), motor, "FROM EKT_B2B"
+        )
+
+        assert "Raw_Data" in hojas
+        assert list(hojas["Raw_Data"].columns) == [
+            "Region", "Tienda", "Marca", "Mes", "Unidades",
+        ]
+
+    def test_no_filtra_por_los_modelos_del_resultado(self):
+        # A diferencia de _ventas_por_tienda_y_modelo, esta trae la cadena
+        # entera: no hay IN (...) de modelos en el SQL.
+        motor = self._motor_con_crudo()
+        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+
+        sql_crudo = next(
+            sql for sql, _ in motor.consultas
+            if "GROUP BY cs.[Region], v.[Tienda #], v.[Marca]" in sql
+        )
+        assert "IN (" not in sql_crudo.split("WHERE")[1].split("GROUP BY")[0]
+
+    def test_se_agrupa_por_marca_no_por_modelo(self):
+        # Al nivel de modelo la misma consulta da cuatro veces mas filas
+        # (medido: 127 602 contra 28 887 en Elektra); esta hoja se queda en
+        # marca porque el detalle de modelo ya tiene su propia hoja.
+        motor = self._motor_con_crudo()
+        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+        sql_crudo = next(
+            sql for sql, _ in motor.consultas if "v.[Marca] AS [Marca]" in sql
+        )
+        assert "HOMOLOGACION" not in sql_crudo
+
+    def test_topea_las_filas(self):
+        # Medido: Elektra 3 meses da 28 887 filas asi, Coppel (la tabla mas
+        # grande) 58 066. El tope deja margen sin acercarse al limite de
+        # adjunto de WhatsApp.
+        motor = self._motor_con_crudo()
+        contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
+        sql_crudo = next(
+            sql for sql, _ in motor.consultas if "v.[Marca] AS [Marca]" in sql
+        )
+        assert f"TOP {contexto.MAX_FILAS_RAW_DATA}" in sql_crudo
+
+    def test_sin_cadena_identificada_no_se_genera(self):
+        # Sin tabla cruda no hay de donde sacar datos crudos.
+        motor = _MotorDeCatalogos()
+        hojas = contexto_del_resultado(self._resultado_por_modelo(), motor, "")
+        assert "Raw_Data" not in hojas
+
+    def test_un_fallo_en_raw_data_no_tira_ventas_por_tienda(self):
+        motor = _MotorDeCatalogos(
+            {
+                "EKT_B2B": (
+                    ["Tienda", "Modelo", "Unidades"],
+                    [("929797 ELEKTRA.MX", "SAMSUNG A17 128GB 4G", 176)],
+                )
+            },
+            falla=("v.[Marca] AS [Marca]",),
+        )
+        hojas = contexto_del_resultado(
+            self._resultado_por_modelo(), motor, "FROM EKT_B2B"
+        )
+        assert "Ventas por tienda" in hojas
+        assert "Raw_Data" not in hojas
+
+
+class TestCadaCrudaTieneSuMarca:
+    def test_las_seis_declaran_la_columna_de_marca(self):
+        # Verificado contra el servidor: Marca en Coppel/Elektra/Telcel,
+        # Brand en Liverpool/Sears, BRAND en AT&T.
+        esperadas = {
+            "COPPEL": "Marca", "ELEKTRA": "Marca", "TELCEL": "Marca",
+            "LIVERPOOL": "Brand", "AT&T": "BRAND", "SEARS": "Brand",
+        }
+        for clave, columna in esperadas.items():
+            assert contexto.CRUDAS[clave].marca == columna, clave
+
+
 class TestDesglosePorTienda:
     """La hoja que se pidio: cuanto vendio cada tienda en el periodo.
 

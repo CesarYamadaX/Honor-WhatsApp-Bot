@@ -14,3 +14,8 @@ uvicorn==0.34.0
 # Normaliza las fotos de los usuarios del panel (fotos.py). Ya entraba
 # como dependencia de matplotlib; se declara porque ahora se usa directo.
 Pillow>=10
+# Arma el PivotTable de verdad de un reporte (excel_pivot.py), abriendo
+# Excel por COM. Windows y Excel instalados son requisito del bot en general
+# (el panel ya abre una ventana de Edge, la app corre en la maquina del
+# usuario), asi que no es una dependencia nueva de plataforma.
+pywin32==312

@@ -84,6 +84,16 @@ MIN_FILAS_POR_CADENA = 10
 # Caracteres que Excel no acepta en el nombre de una hoja.
 _PROHIBIDOS_EN_HOJA = ':\\/?*[]'
 
+# Tope de filas para la hoja de datos crudos que alimenta el PIVOT. Se
+# agrupa por tienda, marca y mes -- sin el modelo, que ya tiene su propia
+# hoja mas fina ("Ventas por tienda") -- porque a nivel modelo la misma
+# consulta de tres meses de Elektra da 127 602 filas, cuatro veces mas. Sin
+# modelo, medido en agosto de 2026: Elektra 28 887, Coppel 58 066 (la tabla
+# cruda mas grande, 12M filas). 80 000 deja margen sin acercarse al limite
+# de adjunto de WhatsApp (16 MB por defecto): a ~7-8 bytes por celda, 80 000
+# filas x 5 columnas pesan bajo 3 MB antes del pivot.
+MAX_FILAS_RAW_DATA = 80000
+
 # Cuantos modelos del resultado se desglosan. Un reporte con cien modelos no
 # se lee de todos modos: se toman los mas vendidos del propio resultado.
 MAX_MODELOS_DESGLOSADOS = 15
@@ -132,6 +142,10 @@ class Cruda:
     # entre parentesis dentro de [HONOR NAME] ("SEARS SATELITE (104)").
     retail_en_catalogo: str = ""
     enlace_con_catalogo: str = ""
+    # La marca tal cual la escribe la tabla cruda. Existe en las seis, con
+    # nombre distinto: [Marca] en Coppel/Elektra/Telcel, [Brand] en
+    # Liverpool/Sears, [BRAND] en AT&T.
+    marca: str = ""
 
 
 # Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
@@ -151,24 +165,27 @@ _FINAL = "MATERIAL DESCRIPTION FINAL"
 CRUDAS = {
     "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",),
                     "CONCAT(v.[Marca], ' ', v.[Modelo])", _FINAL,
-                    "Tienda", "Tienda", "Día", "Unidades", "COPPEL", _POR_NOMBRE),
+                    "Tienda", "Tienda", "Día", "Unidades", "COPPEL",
+                    _POR_NOMBRE, marca="Marca"),
     "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "v.[Desc Sku]", _DESCRIPCION,
-                     "Tienda #", "POS", "Day", "QTY", "ELEKTRA", _POR_NUMERO),
+                     "Tienda #", "POS", "Day", "QTY", "ELEKTRA", _POR_NUMERO,
+                     marca="Marca"),
     "TELCEL": Cruda("TELCEL_B2B", ("TELCEL",), "v.[Descripción]", _DESCRIPCION,
-                    "Venta", "Venta", "Fecha", "Cantidad", "TELCEL", _POR_NOMBRE),
+                    "Venta", "Venta", "Fecha", "Cantidad", "TELCEL",
+                    _POR_NOMBRE, marca="Marca"),
     "LIVERPOOL": Cruda("LIVERPOOL_B2B$", ("LIVERPOOL",),
                        "v.[Material Description]", _DESCRIPCION,
                        "Centro", "STORE", "Día/Periodo", "Vtas# U Per 1",
-                       "LIVERPOOL", _POR_NOMBRE),
+                       "LIVERPOOL", _POR_NOMBRE, marca="Brand"),
     # Los dos [Retail] de AT&T: con DEALERS solo se casa el 80.7% del mes, con
     # los dos el 88.9% (medido, agosto de 2026).
     "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "v.[Model]",
                   _DESCRIPCION, "Codigo de Organización",
                   "Nombre de la Organización", "Fecha de Transacción",
-                  "Cantidad", "AT&T", _POR_NOMBRE),
+                  "Cantidad", "AT&T", _POR_NOMBRE, marca="BRAND"),
     "SEARS": Cruda("SEARS_B2B", ("SEARS",), "CONCAT('Sears ', v.[Model])",
                    _FINAL, "#POS", "POS", "Fecha", "Total", "SEARS",
-                   _POR_NUMERO),
+                   _POR_NUMERO, marca="Brand"),
 }
 
 # El numero de tienda que el catalogo esconde al final de [HONOR NAME], entre
@@ -457,6 +474,48 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
+def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
+    """Ventas de toda la cadena en el periodo, por tienda, marca y mes.
+
+    Es la fuente del PIVOT: a diferencia de `_ventas_por_tienda_y_modelo`,
+    que se acota a los modelos del resultado, esta trae TODA la cadena --
+    "las ventas de Elektra de junio a agosto" no viene con una lista corta
+    de modelos que desglosar, y limitarla a los top N habria escondido el
+    resto.
+
+    Se agrupa por marca, no por modelo: al nivel de modelo la misma consulta
+    da cuatro veces mas filas (127 602 contra 28 887 en Elektra, medido), y
+    el detalle por modelo ya tiene su propia hoja. Esta es la que alimenta
+    un pivot de tienda x mes, y para eso la marca alcanza.
+    """
+    enlace = cruda.enlace_con_catalogo.format(
+        etiqueta=cruda.etiqueta, clave=cruda.clave
+    )
+    sql = f"""
+        SELECT TOP {MAX_FILAS_RAW_DATA}
+               MAX(cs.[Region]) AS [Region],
+               MAX(v.[{cruda.etiqueta}]) AS [Tienda],
+               v.[{cruda.marca}] AS [Marca],
+               MONTH(v.[{cruda.fecha}]) AS [Mes],
+               SUM(v.[{cruda.unidades}]) AS [Unidades]
+        FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
+        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
+                          {_NUMERO_DEL_CATALOGO} AS [numero]
+                   FROM {GTM}.[CustomerStores]
+                   WHERE [RetailName] = ?) cs
+          ON {enlace}
+        WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
+          AND v.[{cruda.unidades}] >= 1
+        GROUP BY cs.[Region], v.[{cruda.clave}], v.[{cruda.marca}],
+                 MONTH(v.[{cruda.fecha}])
+        ORDER BY SUM(v.[{cruda.unidades}]) DESC
+    """
+    parametros = (cruda.retail_en_catalogo, desde, hasta)
+    cursor = conexion.exec_driver_sql(sql, parametros)
+    filas = cursor.fetchall()
+    return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
+
+
 def _ventas_por_tienda(conexion, desde: str, hasta: str):
     """Cuanto vendio cada tienda en ese periodo, la que mas primero.
 
@@ -512,6 +571,20 @@ def contexto_del_resultado(
             # El reporte ya esta listo; esta hoja es un extra. Que la vista de
             # ventas no conteste a tiempo no puede costar la respuesta.
             logger.exception("No se pudo desglosar por tienda")
+
+        # Los datos crudos que alimentan el PIVOT, solo cuando hay UNA cadena
+        # identificada: sin eso no hay tabla cruda de la que partir. Va en su
+        # propio try: que esta consulta falle no puede tirar la de arriba, ni
+        # al reves.
+        if cruda:
+            try:
+                with engine.connect() as conexion:
+                    conexion.connection.dbapi_connection.timeout = SEGUNDOS_PARA_EL_DESGLOSE
+                    crudos = ventas_crudas(conexion, cruda, *rango)
+                if not crudos.empty:
+                    hojas["Raw_Data"] = crudos
+            except Exception:  # noqa: BLE001
+                logger.exception("No se pudo traer el detalle crudo para el pivot")
 
     valores = _valores_de_texto(df)
     if not valores:
