@@ -358,6 +358,54 @@ class TestLaHojaNoContradiceAlMensaje:
         ) == {}
 
 
+class TestElTopeNoParteUnTotal:
+    """Cortar una hoja de VENTA no es "menos ruido": es un total que no
+    cuadra. Con el tope viejo de 2 000, "ventas de Honor por mes en 2026"
+    entregaba un mensaje que decia 1 634 670 unidades y una hoja que sumaba
+    1 381 369 -- el 84% -- sin decirlo en ningun lado.
+
+    Medido el 25 de septiembre de 2026, estas hojas no se pueden desbordar:
+    el techo lo pone cuantas tiendas existen. Retail x Store en la
+    consolidada da 6 626 filas para un mes y 9 760 para el ano entero con
+    todas las marcas.
+    """
+
+    def _sql_de(self, motor, fragmento):
+        return next(sql for sql, _ in motor.consultas if fragmento in sql)
+
+    def test_la_hoja_por_tienda_cabe_entera(self):
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [160909]}), motor, ""
+        )
+        sql = self._sql_de(motor, "GROUP BY v.[Retail], v.[Store]")
+
+        assert f"TOP {contexto.MAX_FILAS_DE_VENTA}" in sql
+        assert contexto.MAX_FILAS_DE_VENTA > 9760, "el peor caso medido"
+
+    def test_la_hoja_por_modelo_tambien(self):
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({
+                "Año": [2026], "Mes": [8],
+                "HOMOLOGACION MODELO": ["HONOR X5C"], "Total": [5],
+            }),
+            motor,
+            "FROM EKT_B2B",
+        )
+        assert f"TOP {contexto.MAX_FILAS_DE_VENTA}" in self._sql_de(motor, "u.[modelo]")
+
+    def test_las_hojas_de_catalogo_si_siguen_topadas(self):
+        # Ahi cortar SI es lo correcto: un volcado de CustomerStores entero
+        # (7k filas) no es contexto del resultado, es ruido.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(_resultado(), motor)
+        sql = self._sql_de(motor, "CustomerStores")
+
+        assert f"TOP {contexto.MAX_FILAS_POR_HOJA}" in sql
+        assert contexto.MAX_FILAS_POR_HOJA == 2000
+
+
 class TestDatosCrudosParaElPivot:
     """La hoja Raw_Data que alimenta el PIVOT: 'quiero las ventas de Elektra
     junio julio agosto y el share por tienda y por mes'. A diferencia de

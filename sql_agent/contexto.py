@@ -62,9 +62,27 @@ REFERENCIAS = (
 # Una columna con mas valores distintos que esto no es una dimension (es un
 # identificador o texto libre) y buscarla en los catalogos no aporta nada.
 MAX_VALORES_POR_COLUMNA = 200
-# Tope de filas por hoja de contexto: la ficha acompaña al resultado, no lo
-# sepulta.
+# Tope de filas por hoja de CATALOGO (Tiendas, Regiones, Carriers): la ficha
+# acompaña al resultado, no lo sepulta. Un volcado de CustomerStores entero
+# (7k filas) no es contexto, es ruido.
 MAX_FILAS_POR_HOJA = 2000
+
+# Tope de las hojas de VENTA, que es otra cosa: ahi cortar no es "menos
+# ruido", es un total que no cuadra. Con el tope de 2 000, "ventas de Honor
+# por mes en 2026" entregaba un mensaje que decia 1 634 670 unidades y una
+# hoja que sumaba 1 381 369 -- el 84% --, sin decir en ningun lado que
+# estaba cortada.
+#
+# Medido el 25 de septiembre de 2026, estas hojas no se pueden desbordar: el
+# techo lo pone cuantas tiendas existen, no el periodo. Retail x Store en la
+# consolidada da 6 626 filas para un mes y 9 760 para el ano entero con
+# todas las marcas, que es el peor caso. La de tienda x modelo va acotada
+# ademas a MAX_MODELOS_DESGLOSADOS, asi que su techo son ~25 000 (1 700
+# tiendas de Coppel x 15 modelos).
+#
+# 80 000 deja margen de sobra sin acercarse al limite de adjunto de WhatsApp
+# (16 MB): a ~7-8 bytes por celda, 80 000 filas x 4 columnas pesan bajo 3 MB.
+MAX_FILAS_DE_VENTA = 80000
 
 # Lo que se le da al desglose antes de rendirse. El reporte ya costo minutos;
 # esta hoja es un extra y no puede duplicar la espera.
@@ -525,7 +543,7 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
     huecos_modelo = ", ".join("?" * len(modelos))
     join_region, region, parametros_region = _join_region(cruda)
     sql = f"""
-        SELECT TOP {MAX_FILAS_POR_HOJA}
+        SELECT TOP {MAX_FILAS_DE_VENTA}
                MAX({region}) AS [Region],
                MAX(v.[{cruda.etiqueta}]) AS [Tienda],
                u.[modelo] AS [Modelo],
@@ -609,7 +627,7 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str,
         parametros.extend(valores)
 
     sql = f"""
-        SELECT TOP {MAX_FILAS_POR_HOJA}
+        SELECT TOP {MAX_FILAS_DE_VENTA}
                v.[Retail], v.[Store], SUM(v.[QTY]) AS [Unidades]
         FROM {VENTAS} v
         WHERE {' AND '.join(condiciones)}
