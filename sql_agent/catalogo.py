@@ -67,6 +67,37 @@ _LITERAL = re.compile(r"'((?:[^']|'')*)'")
 # 'HONOR', no la lista alfabetica desde ABS.
 MAX_VALORES_SUGERIDOS = 25
 
+# Liverpool es la UNICA cadena que vive partida en dos vistas, y usar una
+# sola no da error: da la mitad. Medido en agosto de 2026,
+# vw_ETL_Liverpool son 99 040 unidades y vw_ETL_Liverpool_IOT otras 73 608;
+# juntas dan 172 648, que es exactamente lo que la consolidada reporta para
+# 'Liverpool Offline' + 'Liverpool Online'. El bot contesto 99 040 a
+# "cuanto vendio Liverpool en agosto": el 57% de la verdad, sin una sola
+# señal de que faltaba algo.
+#
+# Las demas cuadran: vw_ETL_COPPEL da el Coppel entero (su _IOT esta vacia),
+# y Elektra, Sears, Movistar y Telcel casan al dedo con la consolidada.
+_MEDIA_CADENA = (
+    ("vw_ETL_Liverpool", "vw_ETL_Liverpool_IOT",
+     "vw_ETL_Liverpool es SOLO una parte de Liverpool: la otra esta en "
+     "vw_ETL_Liverpool_IOT. Medido en agosto de 2026, esta vista sola da "
+     "99 040 unidades de las 172 648 que vendio Liverpool -- el 57%. NO "
+     "contestes con este numero como si fuera Liverpool. Salvo que te hayan "
+     "pedido justamente esta parte, vuelve a consultar la cadena completa: "
+     "ETL_Consolidado_B2B con [Retail] IN ('Liverpool Offline', 'Liverpool "
+     "Online'), o UNION ALL de las dos vistas."),
+)
+
+
+def avisos_de_media_cadena(query: str) -> list[str]:
+    """Avisos por consultar una vista que es solo un pedazo de su cadena."""
+    avisos = []
+    for vista, la_otra, aviso in _MEDIA_CADENA:
+        usa = re.search(rf"\b{re.escape(vista)}\b(?!_)", query, re.IGNORECASE)
+        if usa and not re.search(rf"\b{re.escape(la_otra)}\b", query, re.IGNORECASE):
+            avisos.append(aviso)
+    return avisos
+
 
 def _objetos_nombrados(query: str) -> list[str]:
     """Los objetos con foto de valores que esta consulta menciona."""

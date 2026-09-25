@@ -114,6 +114,34 @@ class TestConceptosDelNegocio:
         assert "4 529" in ficha and "8 326" in ficha
         assert "2027" in ficha
 
+    def test_liverpool_vive_partido_en_dos_vistas(self):
+        # Medido el 25 de septiembre de 2026: vw_ETL_Liverpool son 99 040
+        # unidades de agosto y vw_ETL_Liverpool_IOT otras 73 608. Juntas dan
+        # 172 648, que es lo que la consolidada reporta para 'Liverpool
+        # Offline' + 'Liverpool Online'. El bot contesto 99 040 a "cuanto
+        # vendio Liverpool en agosto": el 57%, sin una señal de que faltaba.
+        avisos = catalogo.avisos_de_media_cadena(
+            "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Liverpool] WHERE [Year]=2026"
+        )
+        assert len(avisos) == 1
+        assert "vw_ETL_Liverpool_IOT" in avisos[0]
+        assert "172 648" in avisos[0]
+
+    def test_si_ya_estan_las_dos_no_falta_nada(self):
+        for query in (
+            "SELECT * FROM vw_ETL_Liverpool UNION ALL SELECT * FROM vw_ETL_Liverpool_IOT",
+            # El sufijo _IOT no puede leerse como la vista de al lado.
+            "SELECT SUM([QTY]) FROM vw_ETL_Liverpool_IOT",
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] LIKE 'Liverpool%'",
+        ):
+            assert catalogo.avisos_de_media_cadena(query) == []
+
+    def test_las_demas_cadenas_si_cuadran_y_no_se_avisan(self):
+        # vw_ETL_COPPEL da el Coppel entero (su _IOT esta vacia), y Elektra,
+        # Sears, Movistar y Telcel casan al dedo con la consolidada.
+        for vista in ("vw_ETL_COPPEL", "vw_ETL_Elektra", "vw_ETL_TELCEL_B2B"):
+            assert catalogo.avisos_de_media_cadena(f"SELECT * FROM {vista}") == []
+
     def test_un_filtro_con_un_valor_que_no_existe_se_detecta(self):
         # Medido el 25 de septiembre de 2026: en la consolidada la cadena se
         # llama 'Liverpool Offline' y 'Liverpool Online'. 'LIVERPOOL' a secas

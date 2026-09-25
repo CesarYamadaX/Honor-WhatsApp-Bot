@@ -32,6 +32,7 @@ from catalogo import (
     _corchetes,
     buscar,
     cargar_catalogo,
+    avisos_de_media_cadena,
     describir_objeto,
     filtros_que_no_casan,
     indice,
@@ -1369,6 +1370,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "terminado de cargar, por eso sale mucho mas bajo. Dilo al "
             "responder y NO lo presentes como una caida."
         )
+
+    # Media cadena. Avisa en vez de bloquear: el numero que salio es
+    # correcto para lo que se consulto, lo que falta es decir de que mitad
+    # es -- o volver a preguntar por la cadena entera.
+    for aviso in avisos_de_media_cadena(query):
+        bitacora.paso("la vista consultada es solo parte de su cadena", bitacora.NOTA)
+        partes.append(f"OJO: {aviso}")
 
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
     # que tendria que cambiar para que la haya. Sin esto no se entera de que

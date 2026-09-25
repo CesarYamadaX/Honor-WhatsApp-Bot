@@ -630,6 +630,27 @@ class TestConsultarSql:
         assert "No la ejecute" in salida
         assert "Liverpool Offline" in salida
 
+    def test_avisa_cuando_la_vista_es_solo_media_cadena(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Avisa en vez de bloquear: el numero que salio es correcto para lo
+        # que se consulto; lo que falta es decir de que mitad es.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            modulo_agente,
+            "avisos_de_media_cadena",
+            lambda query: ["vw_ETL_Liverpool es SOLO una parte de Liverpool."],
+        )
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke(
+                {"query": "SELECT * FROM ventas WHERE monto < 30"}
+            )
+
+        assert "OJO:" in salida
+        assert "SOLO una parte de Liverpool" in salida
+        # Y el resultado sigue ahi: no se bloqueo nada.
+        assert "tienda-0" in salida
+
     def test_no_quedan_tres_preguntas_al_final_del_mensaje(self):
         # El modelo cierra con su propia oferta y debajo va la ficha de
         # sugerencias que arma el servicio: el usuario recibe la respuesta y
