@@ -104,6 +104,19 @@ _ES_MODELO = re.compile(
     r".*(homologacion|modelo|model|material.?description)", re.IGNORECASE
 )
 _ES_RETAIL = re.compile(r".*(retail|cadena)", re.IGNORECASE)
+_ES_MARCA = re.compile(r"^\[?(brand|marca)\]?$", re.IGNORECASE)
+
+# `[Brand] = 'HONOR'` o `[Brand] IN ('HONOR','SAMSUNG')`, para cuando el
+# resultado viene agregado y ya no trae la columna.
+_MARCA_EN_SQL = re.compile(
+    r"\[?\bbrand\b\]?\s*(?:=|in)\s*\(?\s*((?:'[^']*'\s*,?\s*)+)\)?",
+    re.IGNORECASE,
+)
+_LITERAL = re.compile(r"'([^']*)'")
+
+# Cuantos valores distintos puede tener un filtro antes de dejar de serlo. Si
+# el resultado trae catorce marcas, no esta acotado a ninguna.
+MAX_VALORES_ACOTADOS = 8
 
 
 @dataclass(frozen=True)
@@ -404,6 +417,41 @@ def retailer_del_resultado(df: pd.DataFrame, query: str) -> str | None:
     return _cual_retailer(query or "")
 
 
+def acotado_del_resultado(df: pd.DataFrame, query: str = "") -> dict[str, list[str]]:
+    """A que marcas y cadenas esta acotado el resultado que se esta viendo.
+
+    La hoja "Ventas por tienda" salia SIEMPRE con todas las marcas y todas
+    las cadenas. Preguntabas "cuantas vendio Honor en agosto", el mensaje
+    contestaba 160 909 unidades -- correcto -- y el Excel que lo acompaña
+    traia 2 030 760 en esa hoja, la venta del mercado entero. Dos numeros que
+    no cuadran en el mismo archivo, y el que manda es el del archivo: nadie
+    revisa de donde salio cada hoja.
+
+    Los valores salen del propio resultado cuando este trae la columna (son
+    los que el servidor acaba de devolver, asi que existen tal cual) y, si
+    viene agregado y ya no la trae, de los literales del SQL. Un resultado
+    con muchos valores distintos no esta acotado a nada y no se filtra.
+    """
+    acotado: dict[str, list[str]] = {}
+    for destino, patron in (("Brand", _ES_MARCA), ("Retail", _ES_RETAIL)):
+        columna = tiempo.columna(df, patron) if df is not None else None
+        if columna is None:
+            continue
+        valores = sorted({
+            str(v).strip() for v in df[columna].dropna() if str(v).strip()
+        })
+        if 0 < len(valores) <= MAX_VALORES_ACOTADOS:
+            acotado[destino] = valores
+
+    if "Brand" not in acotado:
+        encontrado = _MARCA_EN_SQL.search(query or "")
+        if encontrado:
+            marcas = sorted(set(_LITERAL.findall(encontrado.group(1))))
+            if 0 < len(marcas) <= MAX_VALORES_ACOTADOS:
+                acotado["Brand"] = marcas
+    return acotado
+
+
 def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
     """El rango de fechas del resultado, como (desde, hasta_exclusivo).
 
@@ -546,22 +594,29 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
-def _ventas_por_tienda(conexion, desde: str, hasta: str):
+def _ventas_por_tienda(conexion, desde: str, hasta: str,
+                       acotado: dict[str, list[str]] | None = None):
     """Cuanto vendio cada tienda en ese periodo, la que mas primero.
 
-    Son todas las marcas: desde la consolidada no se puede acotar por modelo
-    sin pasar por una union que pierde el 92% del volumen (ver el encabezado
-    del modulo). La hoja dice donde estuvo el volumen del periodo.
+    No se acota por MODELO: desde la consolidada eso obliga a una union que
+    pierde el 92% del volumen (ver el encabezado del modulo). Por marca y por
+    cadena SI, y hay que hacerlo -- son columnas de la propia vista, y sin
+    ese filtro la hoja contradice al mensaje que la acompaña.
     """
+    condiciones, parametros = ["v.[Date] >= ?", "v.[Date] < ?"], [desde, hasta]
+    for columna, valores in (acotado or {}).items():
+        condiciones.append(f"v.[{columna}] IN ({', '.join('?' * len(valores))})")
+        parametros.extend(valores)
+
     sql = f"""
         SELECT TOP {MAX_FILAS_POR_HOJA}
                v.[Retail], v.[Store], SUM(v.[QTY]) AS [Unidades]
         FROM {VENTAS} v
-        WHERE v.[Date] >= ? AND v.[Date] < ?
+        WHERE {' AND '.join(condiciones)}
         GROUP BY v.[Retail], v.[Store]
         ORDER BY SUM(v.[QTY]) DESC
     """
-    cursor = conexion.exec_driver_sql(sql, (desde, hasta))
+    cursor = conexion.exec_driver_sql(sql, tuple(parametros))
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
@@ -594,7 +649,9 @@ def contexto_del_resultado(
                         conexion, cruda, modelos, *rango
                     )
                 else:
-                    ventas = _ventas_por_tienda(conexion, *rango)
+                    ventas = _ventas_por_tienda(
+                        conexion, *rango, acotado_del_resultado(df, query)
+                    )
             if not ventas.empty:
                 hojas["Ventas por tienda"] = ventas
         except Exception:  # noqa: BLE001

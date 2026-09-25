@@ -268,6 +268,96 @@ class TestExcelConContexto:
         assert openpyxl.load_workbook(ruta).sheetnames == [HOJA_DATOS]
 
 
+class TestLaHojaNoContradiceAlMensaje:
+    """Medido el 25 de septiembre de 2026 contra la base: "cuantas vendio
+    Honor en agosto" contesta 160 909 unidades, y la hoja "Ventas por
+    tienda" que acompaña al Excel traia 2 030 760 -- el mercado entero. Dos
+    numeros que no cuadran en el mismo archivo, y el que se queda es el del
+    archivo. Con el filtro, esa hoja suma 139 381 de 2 000 tiendas (el tope
+    de la hoja), que si es HONOR.
+    """
+
+    def _sql_de_la_hoja(self, motor):
+        return next(
+            (sql, par) for sql, par in motor.consultas
+            if "GROUP BY v.[Retail], v.[Store]" in sql
+        )
+
+    def _por_mes(self, extra=None):
+        datos = {"Año": [2026], "Mes": [8], "Total Unidades": [160909]}
+        datos.update(extra or {})
+        return pd.DataFrame(datos)
+
+    def test_la_marca_del_sql_acota_la_hoja(self):
+        # El resultado viene agregado: ya no trae la columna [Brand], asi que
+        # la marca solo se puede saber por el SQL que lo produjo.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes(), motor, "SELECT SUM([QTY]) FROM v WHERE [Brand] = 'HONOR'"
+        )
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Brand] IN (?)" in sql
+        assert "HONOR" in parametros
+
+    def test_la_marca_de_la_columna_manda_sobre_la_del_sql(self):
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes({"Brand": ["SAMSUNG"]}),
+            motor,
+            "... WHERE [Brand] = 'HONOR'",
+        )
+        _, parametros = self._sql_de_la_hoja(motor)
+
+        assert "SAMSUNG" in parametros and "HONOR" not in parametros
+
+    def test_varias_marcas_en_un_IN_se_respetan_todas(self):
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes(), motor, "... WHERE [Brand] IN ('HONOR', 'SAMSUNG')"
+        )
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Brand] IN (?, ?)" in sql
+        assert {"HONOR", "SAMSUNG"} <= set(parametros)
+
+    def test_la_cadena_tambien_acota(self):
+        # Los valores salen del resultado, no de un literal inventado: en la
+        # consolidada la cadena es 'Liverpool Offline', no 'LIVERPOOL'.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes({"Retail": ["Liverpool Offline"]}), motor, ""
+        )
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Retail] IN (?)" in sql
+        assert "Liverpool Offline" in parametros
+
+    def test_una_pregunta_sin_marca_trae_la_hoja_entera(self):
+        # "Cuanto se vendio en agosto" es del mercado: acotarla seria mentir
+        # al reves.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(self._por_mes(), motor, "SELECT SUM([QTY]) FROM v")
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Brand]" not in sql
+        assert parametros == ("2026-08-01", "2026-09-01")
+
+    def test_un_resultado_con_muchas_marcas_no_esta_acotado_a_ninguna(self):
+        df = pd.DataFrame({
+            "Año": [2026] * 9,
+            "Brand": list("abcdefghi"),
+            "Total": list(range(9)),
+        })
+        assert "Brand" not in contexto.acotado_del_resultado(df, "")
+
+    def test_el_desglose_por_modelo_no_necesita_este_filtro(self):
+        # Esa otra hoja ya se acota con los modelos del propio resultado.
+        assert contexto.acotado_del_resultado(
+            pd.DataFrame({"HOMOLOGACION MODELO": ["HONOR X5B"], "QTY": [5]}), ""
+        ) == {}
+
+
 class TestDatosCrudosParaElPivot:
     """La hoja Raw_Data que alimenta el PIVOT: 'quiero las ventas de Elektra
     junio julio agosto y el share por tienda y por mes'. A diferencia de
