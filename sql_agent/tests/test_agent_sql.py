@@ -617,6 +617,19 @@ class TestConsultarSql:
             buena = consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 30"})
         assert "tienda-0" in buena
 
+    def test_no_ejecuta_una_consulta_cuyo_filtro_no_casa_con_nada(self, engine):
+        # Sin esto la consulta corre, devuelve menos filas de las que debia y
+        # nadie se entera: no es un error, son cero filas de Liverpool.
+        mala = (
+            "SELECT [Retail], SUM([QTY]) FROM ETL_Consolidado_B2B "
+            "WHERE [Retail] IN ('LIVERPOOL') GROUP BY [Retail]"
+        )
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke({"query": mala})
+
+        assert "No la ejecute" in salida
+        assert "Liverpool Offline" in salida
+
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "DROP TABLE ventas"})

@@ -13,6 +13,7 @@ archivo. Se regenera desde INFORMATION_SCHEMA y sys.partitions.
 """
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,6 +49,77 @@ def valores_conocidos(objeto: str, columna: str) -> list[str] | None:
         if nombre.casefold() == columna.casefold():
             return valores
     return None
+
+# `[Retail] = 'LIVERPOOL'` o `[Retail] IN ('LIVERPOOL', 'Coppel')`, con el
+# alias de la tabla delante si lo lleva. Solo el igual y el IN: un LIKE lleva
+# comodines y un <> con un valor que no existe no esconde nada.
+_FILTRO_DE_TEXTO = re.compile(
+    r"(?:\b\w+\s*\.\s*)?\[?(\w+)\]?\s*(?<![!<>])(?:=|\bIN\b)\s*"
+    r"\(?\s*((?:'(?:[^']|'')*'\s*,\s*)*'(?:[^']|'')*')\s*\)?",
+    re.IGNORECASE,
+)
+_LITERAL = re.compile(r"'((?:[^']|'')*)'")
+
+# Cuantos valores reales se le muestran al modelo cuando su filtro no casa.
+# [Brand] tiene 222: volcarlos todos es gastar el contexto de la vuelta en la
+# que tiene que corregir. Los parecidos a lo que pidio van primero, que es lo
+# que de verdad resuelve el caso -- quien pide 'HUAWEI HONOR' necesita ver
+# 'HONOR', no la lista alfabetica desde ABS.
+MAX_VALORES_SUGERIDOS = 25
+
+
+def _objetos_nombrados(query: str) -> list[str]:
+    """Los objetos con foto de valores que esta consulta menciona."""
+    return [o for o in cargar_valores() if re.search(rf"\b{re.escape(o)}\b", query, re.I)]
+
+
+def _parecidos_primero(conocidos: list[str], pedidos: list[str]) -> str:
+    """Los valores reales a mostrar: los que se parecen a lo pedido, primero."""
+    def se_parece(valor: str) -> bool:
+        v = valor.casefold()
+        return any(v in p.casefold() or p.casefold() in v for p in pedidos)
+
+    ordenados = sorted(conocidos, key=lambda v: not se_parece(v))
+    listado = ", ".join(ordenados[:MAX_VALORES_SUGERIDOS])
+    sobran = len(ordenados) - MAX_VALORES_SUGERIDOS
+    return f"{listado} (y {sobran} mas)" if sobran > 0 else listado
+
+
+def filtros_que_no_casan(query: str) -> list[str]:
+    """Filtros de la consulta cuyo valor no existe en esa columna.
+
+    El caso: `[Retail] IN ('LIVERPOOL')` sobre la consolidada. Ahi la cadena
+    se llama 'Liverpool Offline' y 'Liverpool Online', asi que ese filtro se
+    lleva las ventas de Liverpool EN SILENCIO -- no es un error, son cero
+    filas, y si la consulta trae otras cadenas ni siquiera viene vacia. El
+    reporte sale sin Liverpool y nadie se entera.
+
+    Solo mira las columnas de las que hay foto (retailers, marcas, carriers,
+    regiones, periodos): son de baja cardinalidad y poco movimiento. La
+    comparacion ignora mayusculas, como el servidor.
+    """
+    objetos = _objetos_nombrados(query)
+    if not objetos:
+        return []
+
+    avisos = []
+    for columna, literales in _FILTRO_DE_TEXTO.findall(query):
+        conocidos: list[str] = []
+        for objeto in objetos:
+            conocidos.extend(valores_conocidos(objeto, columna) or [])
+        if not conocidos:
+            continue
+
+        existentes = {v.casefold() for v in conocidos}
+        pedidos = [v.replace("''", "'") for v in _LITERAL.findall(literales)]
+        faltan = [v for v in pedidos if v.casefold() not in existentes]
+        if faltan:
+            avisos.append(
+                f"En [{columna}] no existe {', '.join(repr(v) for v in faltan)}. "
+                f"Los valores que hay son: {_parecidos_primero(conocidos, faltan)}."
+            )
+    return avisos
+
 
 # Lo que el esquema NO dice y hace que el agente se equivoque con seguridad.
 #

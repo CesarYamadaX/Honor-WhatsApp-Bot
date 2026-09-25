@@ -114,6 +114,65 @@ class TestConceptosDelNegocio:
         assert "4 529" in ficha and "8 326" in ficha
         assert "2027" in ficha
 
+    def test_un_filtro_con_un_valor_que_no_existe_se_detecta(self):
+        # Medido el 25 de septiembre de 2026: en la consolidada la cadena se
+        # llama 'Liverpool Offline' y 'Liverpool Online'. 'LIVERPOOL' a secas
+        # no existe, y ese filtro se lleva Liverpool entero SIN dar error.
+        avisos = catalogo.filtros_que_no_casan(
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] IN ('LIVERPOOL')"
+        )
+        assert len(avisos) == 1
+        assert "no existe 'LIVERPOOL'" in avisos[0]
+        assert "Liverpool Offline" in avisos[0]
+
+    def test_avisa_aunque_los_demas_valores_del_IN_si_existan(self):
+        # Este es el peor caso: la consulta devuelve filas, asi que ni
+        # siquiera viene vacia. Solo falta Liverpool.
+        avisos = catalogo.filtros_que_no_casan(
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] IN ('LIVERPOOL', 'Coppel')"
+        )
+        assert len(avisos) == 1 and "'LIVERPOOL'" in avisos[0]
+
+    def test_los_valores_buenos_no_molestan(self):
+        for query in (
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] IN ('Liverpool Offline')",
+            # El servidor no distingue mayusculas; esta comprobacion tampoco.
+            "SELECT * FROM ETL_Consolidado_B2B v WHERE v.[Retail] = 'elektra'",
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Brand] = 'HONOR'",
+        ):
+            assert catalogo.filtros_que_no_casan(query) == []
+
+    def test_la_misma_palabra_puede_existir_en_otra_tabla(self):
+        # 'Liverpool' a secas SI es un valor de Complete_Scrap.retail. La
+        # comprobacion es por objeto, no por nombre de columna.
+        assert catalogo.filtros_que_no_casan(
+            "SELECT * FROM Complete_Scrap WHERE [retail] = 'Liverpool'"
+        ) == []
+
+    def test_lo_que_no_se_puede_comprobar_se_deja_pasar(self):
+        for query in (
+            # Sin foto de esa columna no hay con que comparar.
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Store] = 'CUAUHTEMOC'",
+            # Ni de esa tabla.
+            "SELECT * FROM [UNICOS$] WHERE [Retail] = 'LIVERPOOL'",
+            # Un LIKE lleva comodines: 'LIVERPOOL' no tiene que existir tal cual.
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] LIKE '%LIVERPOOL%'",
+            # Y un <> con un valor que no existe no esconde ninguna fila.
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] <> 'LIVERPOOL'",
+        ):
+            assert catalogo.filtros_que_no_casan(query) == []
+
+    def test_no_se_vuelcan_las_222_marcas_en_el_aviso(self):
+        # Volcarlas seria gastar el contexto de la vuelta en la que tiene que
+        # corregir. Lo parecido a lo que pidio va primero.
+        aviso = catalogo.filtros_que_no_casan(
+            "SELECT * FROM ETL_Consolidado_B2B WHERE [Brand] = 'HUAWEI HONOR'"
+        )[0]
+        assert aviso.count(",") <= catalogo.MAX_VALORES_SUGERIDOS
+        assert "mas)" in aviso
+        listados = aviso.split("son: ")[1]
+        assert listados.startswith("Honor") or listados.startswith("HUAWEI")
+
     def test_la_ficha_mensual_dice_que_el_promotor_es_un_numero(self):
         # Paso en produccion: la nota decia "[status_of_promoter] es promotor
         # fijo + promotor doble" y el modelo lo leyo como una lista de

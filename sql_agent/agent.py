@@ -33,6 +33,7 @@ from catalogo import (
     buscar,
     cargar_catalogo,
     describir_objeto,
+    filtros_que_no_casan,
     indice,
     valores_conocidos,
 )
@@ -1191,6 +1192,19 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "algo concreto -- el tipo del valor que comparas, la columna, la "
             "tabla -- y si no sabes que hay del otro lado, miralo primero "
             "con `describir_objeto` o `valores_distintos`."
+        )
+
+    # Un filtro cuyo valor no existe en esa columna no da error: da cero
+    # filas, y si la consulta trae otras cadenas ni siquiera viene vacia.
+    # `[Retail] IN ('LIVERPOOL')` se lleva Liverpool entero en silencio.
+    no_casan = filtros_que_no_casan(query)
+    if no_casan:
+        bitacora.paso("un filtro no casa con ningun valor de la columna", bitacora.NOTA)
+        return (
+            "No la ejecute: asi como esta, ese filtro no deja pasar ninguna "
+            "fila y el resultado saldria incompleto sin avisar. "
+            + " ".join(no_casan)
+            + " Corrige el valor y vuelve a mandarla."
         )
 
     comenzo = time.monotonic()
