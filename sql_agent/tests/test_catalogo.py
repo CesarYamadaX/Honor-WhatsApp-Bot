@@ -114,6 +114,18 @@ class TestConceptosDelNegocio:
         assert "4 529" in ficha and "8 326" in ficha
         assert "2027" in ficha
 
+    def test_la_ficha_mensual_dice_que_el_promotor_es_un_numero(self):
+        # Paso en produccion: la nota decia "[status_of_promoter] es promotor
+        # fijo + promotor doble" y el modelo lo leyo como una lista de
+        # valores de texto. Escribio `IN ('promotor fijo','promotor doble')`
+        # contra una columna float, reviento con "Error converting data type
+        # varchar to float", lo reintento igual y se rindio: la pregunta se
+        # quedo sin contestar.
+        ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
+        assert "NUMERO" in ficha
+        assert ">= 1" in ficha
+        assert "varchar to float" in ficha
+
     def test_la_ficha_semanal_avisa_del_cero_en_la_semana(self):
         ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})
         assert "W01" in ficha
