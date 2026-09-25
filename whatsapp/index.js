@@ -14,6 +14,7 @@ import { autorizado, idiomaDelChat, preguntar } from "./agentClient.js";
 import { calcularEsperaReconexion } from "./backoff.js";
 import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
+import { aFormatoWhatsApp } from "./markdown.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
@@ -137,7 +138,10 @@ async function enviarMensajeSimple(jid, texto) {
 }
 
 async function enviarTexto(jid, texto) {
-  const fragmentos = trocear(texto);
+  // La traduccion va ANTES de trocear: `**` convertido a `*` cambia el
+  // largo, y hacerlo despues podria dejar un par partido entre dos
+  // fragmentos, que se veria peor que el markdown crudo.
+  const fragmentos = trocear(aFormatoWhatsApp(texto));
   for (const [indice, fragmento] of fragmentos.entries()) {
     if (!socketActual) {
       console.error(`[whatsapp] sin conexion activa, se perdio la respuesta para ${jid}`);
