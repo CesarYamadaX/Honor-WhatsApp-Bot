@@ -20,15 +20,40 @@ const TEXTOS = {
     en: "I'm working on what you asked for; this may take a little while.",
     zh: "我正在处理你的请求，这可能需要一点时间。",
   },
+  // El segundo aviso, para las de verdad largas. El primero dice "un poco" y
+  // a los dos minutos eso ya se quedo corto: un reporte de un anio de Coppel
+  // tarda ~290s y uno de toda la historia ~440s (medido). Sin esta segunda
+  // señal quedan cinco o siete minutos de silencio, y ahi es donde en los
+  // logs se ve al usuario reenviando la pregunta -- que es lo peor que puede
+  // hacer, porque el mensaje nuevo cancela el trabajo ya hecho y la espera
+  // vuelve a empezar. Por eso pide paciencia Y dice que no hace falta
+  // repetirla, sin explicar el mecanismo de cancelacion: saber que se puede
+  // cancelar invita a reescribir la pregunta.
+  espera_larga: {
+    es:
+      "El reporte que pediste es grande y lo estoy armando. Puede tardar " +
+      "varios minutos, asi que tenme un poco de paciencia: no hace falta " +
+      "que repitas la pregunta, te aviso en cuanto este.",
+    en:
+      "The report you asked for is a big one and I'm putting it together. " +
+      "It can take several minutes, so please bear with me: no need to " +
+      "resend your question, I'll let you know as soon as it's ready.",
+    zh:
+      "你要的报表比较大，我正在生成。可能需要几分钟，请耐心等待：" +
+      "不用重复发送问题，做好我会立刻告诉你。",
+  },
   ocupado: {
     es: "Sigo trabajando en tu pregunta anterior. Dame un momento.",
     en: "I'm still working on your previous question. Give me a moment.",
     zh: "我还在处理你上一个问题，请稍等。",
   },
+  // No dice "limita el rango de fechas": esta medido que NO ayuda -- contra
+  // la vista consolidada, un SUM de un solo mes tarda lo mismo que el de un
+  // anio. Lo que si ayuda es preguntar por UNA cadena.
   demasiado_lenta: {
-    es: "La consulta tardo demasiado y la cancele. Intenta acotarla, por ejemplo limitando el rango de fechas.",
-    en: "The query took too long and I cancelled it. Try narrowing it down, for example by limiting the date range.",
-    zh: "查询用时过长，我已取消。请缩小范围，例如限定日期区间。",
+    es: "La consulta tardo demasiado y la cancele. Intenta preguntar por una sola cadena (Coppel, Elektra, Telcel...).",
+    en: "The query took too long and I cancelled it. Try asking about a single retailer (Coppel, Elektra, Telcel...).",
+    zh: "查询用时过长，我已取消。请只针对一个渠道提问（Coppel、Elektra、Telcel…）。",
   },
   servicio_caido: {
     es: "El sistema no esta disponible en este momento. Avisale al administrador.",

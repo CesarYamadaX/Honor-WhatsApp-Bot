@@ -11,7 +11,9 @@ import pino from "pino";
 import qrcode from "qrcode-terminal";
 
 import { autorizado, idiomaDelChat, preguntar } from "./agentClient.js";
+import { programarAvisos } from "./avisos.js";
 import { calcularEsperaReconexion } from "./backoff.js";
+import { repararCredenciales, respaldarCredenciales } from "./credenciales.js";
 import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
 import { aFormatoWhatsApp } from "./markdown.js";
@@ -28,7 +30,14 @@ const CARPETA_AUTH = "auth_info";
 // cruzan tablas grandes pasan del medio minuto y ahi el silencio se siente
 // como que el bot se cayo -- en los logs se ve al usuario reenviando.
 const AVISO_DE_ESPERA_MS = leerEnteroPositivo("WAIT_NOTICE_SECONDS", 12) * 1000;
-// El texto sale traducido segun el idioma del chat (ver textos.js).
+
+// Y el segundo aviso, el que pide paciencia. A los dos minutos el primero
+// ("esto puede tardar un poco") ya se quedo corto y todavia faltan varios
+// minutos: un reporte de un anio de Coppel tarda ~290s y uno de toda la
+// historia ~440s, medido. 120s esta elegido para que una consulta normal
+// -- que se responde en segundos -- no lo vea nunca.
+const AVISO_DE_PACIENCIA_MS = leerEnteroPositivo("PATIENCE_NOTICE_SECONDS", 120) * 1000;
+// Los textos salen traducidos segun el idioma del chat (ver textos.js).
 
 // WhatsApp expira el indicador de "escribiendo" solo, hay que renovarlo.
 const INTERVALO_PRESENCIA_MS = 8000;
@@ -307,14 +316,17 @@ async function atender(mensaje) {
       return;
     }
 
-    // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo
-    // y, si la consulta se alarga, un aviso para que el usuario sepa que
-    // sigue viva y que puede cancelarla.
+    // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo,
+    // un aviso a los pocos segundos para que sepa que la consulta sigue
+    // viva, y otro mas si la cosa se alarga de verdad.
     const detener = mantenerEscribiendo(jid);
-    const avisoDeEspera = setTimeout(async () => {
-      const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
-      enviarMensajeSimple(jid, traducir("espera", idioma));
-    }, AVISO_DE_ESPERA_MS);
+    const cancelarAvisos = programarAvisos(
+      async (clave) => {
+        const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+        await enviarMensajeSimple(jid, traducir(clave, idioma));
+      },
+      { esperaMs: AVISO_DE_ESPERA_MS, pacienciaMs: AVISO_DE_PACIENCIA_MS },
+    );
 
     try {
       const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
@@ -341,7 +353,7 @@ async function atender(mensaje) {
         await enviarMensajeSimple(jid, traducir("sin_respuesta", idioma));
       }
     } finally {
-      clearTimeout(avisoDeEspera);
+      cancelarAvisos();
       detener();
     }
   } catch (error) {
@@ -380,6 +392,17 @@ function programarReconexion() {
 }
 
 async function arrancar() {
+  // Antes de que Baileys lea nada: si creds.json quedo truncado por un
+  // apagon o un kill a medio escribir, se repone del respaldo. Sin esto,
+  // Baileys lo ve vacio, asume que no hay sesion y pide un QR -- y el bot
+  // deja de atender hasta que alguien vuelva a vincularlo con el telefono.
+  if (repararCredenciales(CARPETA_AUTH)) {
+    console.log(
+      "[whatsapp] creds.json estaba ilegible y se repuso del respaldo. " +
+        "Suele significar que el proceso murio a medio guardar.",
+    );
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState(CARPETA_AUTH);
 
   const sock = makeWASocket({
@@ -389,7 +412,12 @@ async function arrancar() {
   });
   socketActual = sock;
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", async () => {
+    await saveCreds();
+    // El respaldo se hace DESPUES de guardar y solo si lo guardado sirve,
+    // para no copiar un archivo a medio escribir.
+    respaldarCredenciales(CARPETA_AUTH);
+  });
 
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     // Baileys dispara este evento de forma SINCRONA desde dentro de su
