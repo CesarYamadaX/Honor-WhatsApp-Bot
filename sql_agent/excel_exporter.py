@@ -24,6 +24,42 @@ ANCHO_MINIMO = 8
 ANCHO_MAXIMO = 50
 MARGEN_COLUMNA = 2
 
+# Cuantas filas de datos caben en UNA hoja de Excel. El formato admite
+# 1 048 576 en total y la primera se va en el encabezado. No es una decision
+# nuestra ni un presupuesto que se pueda ajustar: es el techo del archivo, y
+# pasarse no da un Excel grande, da uno que no abre.
+MAX_FILAS_POR_HOJA_DE_EXCEL = 1_048_575
+
+
+def partir_en_hojas(nombre: str, df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    """Esa tabla, en tantas hojas como Excel necesite para no perder una fila.
+
+    Devuelve [(nombre, df)] mientras quepa en una, que es el caso normal --
+    el peor caso medido son 301 319 filas, un tercio del limite. Si alguna
+    vez no cabe, salen "Raw_Data", "Raw_Data (2)", ... en vez de cortarse.
+
+    Los nombres se recortan a los 31 caracteres que Excel admite CONTANDO el
+    sufijo: si se recortara antes, dos trozos de una hoja de nombre largo
+    terminarian llamandose igual y el archivo no se escribiria.
+    """
+    if df is None or df.empty:
+        return [(nombre, df)]
+
+    total = len(df)
+    if total <= MAX_FILAS_POR_HOJA_DE_EXCEL:
+        return [(str(nombre)[:31], df)]
+
+    trozos = []
+    for numero, comienzo in enumerate(
+        range(0, total, MAX_FILAS_POR_HOJA_DE_EXCEL), start=1
+    ):
+        sufijo = "" if numero == 1 else f" ({numero})"
+        trozos.append((
+            f"{str(nombre)[:31 - len(sufijo)]}{sufijo}",
+            df.iloc[comienzo:comienzo + MAX_FILAS_POR_HOJA_DE_EXCEL],
+        ))
+    return trozos
+
 
 def _formatear_columnas_de_fecha(hoja, df: pd.DataFrame) -> None:
     """Muestra las fechas como dia, sin hora.
@@ -148,22 +184,22 @@ class ExcelExporter:
             for nombre, ficha in (contexto or {}).items()
         }
 
+        # Cada tabla puede ocupar MAS de una hoja: ninguna fila se tira por no
+        # caber. Se lleva el mapa hoja -> tabla porque despues hay que dar
+        # formato a cada una con SU trozo, no con la tabla entera.
+        por_hoja: list[tuple[str, pd.DataFrame]] = partir_en_hojas(HOJA_DATOS, df)
+        for nombre, ficha in (contexto or {}).items():
+            if ficha is None or ficha.empty:
+                continue
+            por_hoja.extend(partir_en_hojas(nombre, ficha))
+
         with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
-            df.to_excel(escritor, index=False, sheet_name=HOJA_DATOS)
-            for nombre, ficha in (contexto or {}).items():
-                if ficha is None or ficha.empty:
-                    continue
-                # Excel corta los nombres de hoja a 31 caracteres y revienta
-                # con los duplicados; los nuestros son cortos, pero se recorta
-                # por si alguien agrega uno largo.
-                ficha.to_excel(escritor, index=False, sheet_name=str(nombre)[:31])
+            for nombre, trozo in por_hoja:
+                trozo.to_excel(escritor, index=False, sheet_name=nombre)
             try:
-                for nombre in escritor.book.sheetnames:
-                    tabla = df if nombre == HOJA_DATOS else (contexto or {}).get(nombre)
-                    if tabla is None:
-                        continue
-                    _formatear_columnas_de_fecha(escritor.book[nombre], tabla)
-                    _ajustar_ancho_de_columnas(escritor.book[nombre], tabla)
+                for nombre, trozo in por_hoja:
+                    _formatear_columnas_de_fecha(escritor.book[nombre], trozo)
+                    _ajustar_ancho_de_columnas(escritor.book[nombre], trozo)
             except Exception:
                 # Los datos son lo que el usuario pidio; el formato es un
                 # extra. Un resultado con una forma que no se previo aqui no

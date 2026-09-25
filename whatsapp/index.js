@@ -19,6 +19,7 @@ import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
 const MAX_FILE_MB = leerMaxFileMB();
+const MAX_IMAGE_MB = leerMaxImagenMB();
 const CARPETA_AUTH = "auth_info";
 
 // A partir de aqui la consulta se considera "de las dificiles" y se avisa que
@@ -69,8 +70,25 @@ function leerEnteroPositivo(clave, defecto) {
   return valor;
 }
 
+// WhatsApp tiene DOS limites distintos, y usar el chico para todo era el
+// error: 16 MB es el tope de MEDIA (imagenes, video, audio), y un .xlsx no
+// viaja como media sino como DOCUMENTO, que admite mucho mas. Con el limite
+// de media aplicado al Excel, un reporte grande no se entregaba y el usuario
+// recibia "el archivo es demasiado grande" por un archivo que WhatsApp si
+// habria aceptado.
+//
+// Los 100 MB son el limite documentado de WhatsApp para documentos, no uno
+// medido aqui: mandar un archivo de prueba de ese tamano habria significado
+// escribirle de verdad a alguien. Se deja configurable por si el limite real
+// resulta ser otro.
 function leerMaxFileMB() {
-  return leerEnteroPositivo("MAX_FILE_MB", 16);
+  return leerEnteroPositivo("MAX_FILE_MB", 100);
+}
+
+// El de la grafica, que si es media. Una grafica pesa ~55 KB, asi que esto
+// no se acerca nunca; esta por correccion, no por necesidad.
+function leerMaxImagenMB() {
+  return leerEnteroPositivo("MAX_IMAGE_MB", 16);
 }
 
 const dormir = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -162,8 +180,10 @@ async function enviarArchivo(jid, ruta, idioma) {
     return;
   }
 
-  if (tamano > MAX_FILE_MB * 1024 * 1024) {
-    await enviarMensajeSimple(jid, textoArchivoMuyGrande(MAX_FILE_MB, idioma));
+  const esImagen = path.extname(ruta).toLowerCase() === ".png";
+  const limite = esImagen ? MAX_IMAGE_MB : MAX_FILE_MB;
+  if (tamano > limite * 1024 * 1024) {
+    await enviarMensajeSimple(jid, textoArchivoMuyGrande(limite, idioma));
     return;
   }
 
@@ -188,7 +208,7 @@ async function enviarArchivo(jid, ruta, idioma) {
   // La grafica va como IMAGEN, no como documento: asi se ve en la propia
   // conversacion, sin abrir nada. Antes viajaba dentro del Excel, en una
   // segunda hoja que en el telefono nadie abre.
-  if (path.extname(ruta).toLowerCase() === ".png") {
+  if (esImagen) {
     await socketActual.sendMessage(jid, { image: contenido, mimetype: "image/png" });
     return;
   }

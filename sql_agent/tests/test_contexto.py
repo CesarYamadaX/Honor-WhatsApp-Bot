@@ -402,32 +402,22 @@ class TestLaHojaNoContradiceAlMensaje:
         ) == {}
 
 
-class TestElTopeNoParteUnTotal:
-    """Cortar una hoja de VENTA no es "menos ruido": es un total que no
-    cuadra. Con el tope viejo de 2 000, "ventas de Honor por mes en 2026"
-    entregaba un mensaje que decia 1 634 670 unidades y una hoja que sumaba
-    1 381 369 -- el 84% -- sin decirlo en ningun lado.
+class TestLasHojasDeVentaVanEnteras:
+    """Se pidio que fueran TODAS las filas relacionadas a la pregunta, aunque
+    haya que repartirlas en mas hojas. Antes se topaban, y un tope que corta
+    no es "menos ruido": es un total que no cuadra con el mensaje, y quien
+    abre el Excel no tiene como saberlo.
 
-    Medido el 25 de septiembre de 2026, estas hojas no se pueden desbordar:
-    el techo lo pone cuantas tiendas existen. Retail x Store en la
+    No se pueden desbordar, y esta medido (25/09/2026): Retail x Store en la
     consolidada da 6 626 filas para un mes y 9 760 para el ano entero con
-    todas las marcas.
+    todas las marcas, y el crudo de Coppel 301 319 en toda su historia. Lo
+    unico que puede no caber es una hoja de Excel, y para eso se parte.
     """
 
     def _sql_de(self, motor, fragmento):
         return next(sql for sql, _ in motor.consultas if fragmento in sql)
 
-    def test_la_hoja_por_tienda_cabe_entera(self):
-        motor = _MotorDeCatalogos()
-        contexto_del_resultado(
-            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [160909]}), motor, ""
-        )
-        sql = self._sql_de(motor, "GROUP BY v.[Retail], v.[Store]")
-
-        assert f"TOP {contexto.MAX_FILAS_DE_VENTA}" in sql
-        assert contexto.MAX_FILAS_DE_VENTA > 9760, "el peor caso medido"
-
-    def test_la_hoja_por_modelo_tambien(self):
+    def test_ninguna_de_las_tres_consultas_de_venta_lleva_TOP(self):
         motor = _MotorDeCatalogos()
         contexto_del_resultado(
             pd.DataFrame({
@@ -437,11 +427,19 @@ class TestElTopeNoParteUnTotal:
             motor,
             "FROM EKT_B2B",
         )
-        assert f"TOP {contexto.MAX_FILAS_DE_VENTA}" in self._sql_de(motor, "u.[modelo]")
+        for fragmento in ("u.[modelo]", "v.[Marca] AS [Marca]"):
+            assert "TOP" not in self._sql_de(motor, fragmento)
+
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [160909]}), motor, ""
+        )
+        assert "TOP" not in self._sql_de(motor, "GROUP BY v.[Retail], v.[Store]")
 
     def test_las_hojas_de_catalogo_si_siguen_topadas(self):
         # Ahi cortar SI es lo correcto: un volcado de CustomerStores entero
-        # (7k filas) no es contexto del resultado, es ruido.
+        # (7k filas) no es contexto del resultado, es ruido, y no pretende
+        # sumar ningun total.
         motor = _MotorDeCatalogos()
         contexto_del_resultado(_resultado(), motor)
         sql = self._sql_de(motor, "CustomerStores")
@@ -450,48 +448,104 @@ class TestElTopeNoParteUnTotal:
         assert contexto.MAX_FILAS_POR_HOJA == 2000
 
 
-class TestCuandoUnaHojaSaleTopada:
-    """Un tope que corta en silencio es el mismo bug que el de 2 000 filas:
-    dos numeros que no cuadran en el mismo archivo. El tope sigue
-    existiendo -- lo impone el limite de adjunto de WhatsApp, no la base --
-    pero cuando muerde hay que decirlo.
+class TestElCrudoTraeLasDosMitades:
+    """Coppel y Liverpool viven partidos en dos, y la tabla cruda es solo
+    una mitad. Sin unir la otra, la hoja Raw_Data de "ventas de Coppel en
+    2026" se quedaba 880 689 unidades corta -- el 17% -- mientras el mensaje
+    decia el total bueno.
+
+    Medido el 25/09/2026 contra la base, ya unidas: Coppel 5 067 544 y
+    Liverpool 1 596 748 en 2026, que es exactamente lo que la consolidada
+    reporta para cada una. Sin region quedan el 0.03% y el 1.44%.
     """
 
-    def _hoja(self, nombre, filas):
-        return {nombre: pd.DataFrame({"Unidades": range(filas)})}
+    def _sql(self, cadena):
+        motor = _MotorDeCatalogos()
+        contexto.ventas_crudas(
+            motor, contexto.CRUDAS[cadena], "2026-01-01", "2027-01-01"
+        )
+        return motor.consultas[0]
 
-    def test_una_hoja_en_su_tope_se_reporta(self):
-        assert contexto.hojas_cortadas(
-            self._hoja("Raw_Data", contexto.MAX_FILAS_RAW_DATA)
-        ) == ["Raw_Data"]
-        assert contexto.hojas_cortadas(
-            self._hoja("Ventas por tienda", contexto.MAX_FILAS_DE_VENTA)
-        ) == ["Ventas por tienda"]
+    def test_coppel_y_liverpool_unen_su_feed_iot(self):
+        for cadena, iot in (
+            ("COPPEL", "vw_ETL_COPPEL_IOT"),
+            ("LIVERPOOL", "vw_ETL_Liverpool_IOT"),
+        ):
+            sql, _ = self._sql(cadena)
+            assert "UNION ALL" in sql
+            assert iot in sql
 
-    def test_una_hoja_que_cabe_entera_no_se_reporta(self):
-        # 58 066 son los tres meses de Coppel, el reporte tipico.
-        assert contexto.hojas_cortadas(self._hoja("Raw_Data", 58066)) == []
+    def test_las_demas_no_tienen_nada_que_unir(self):
+        for cadena in ("ELEKTRA", "TELCEL", "AT&T", "SEARS"):
+            sql, _ = self._sql(cadena)
+            assert "UNION ALL" not in sql
+            assert "_IOT" not in sql
 
-    def test_las_hojas_de_catalogo_no_entran_aqui(self):
-        # Esas si se topan a proposito y no pretenden sumar ningun total.
-        assert contexto.hojas_cortadas(
-            self._hoja("Tiendas", contexto.MAX_FILAS_POR_HOJA)
-        ) == []
+    def test_se_prueban_los_dos_caminos_a_la_region(self):
+        # El [Store] del IOT no se escribe igual en las dos: en Liverpool es
+        # un nombre ('L POLANCO') que casa directo contra el catalogo, y en
+        # Coppel un numero pelado ('249') que contra el catalogo casa 0% y
+        # necesita el puente de la vista principal. Se intentan los dos, en
+        # ese orden, para no tener que saber de antemano cual sirve.
+        sql, _ = self._sql("COPPEL")
+        assert "COALESCE(csi.[Region], csi2.[Region], p.[Region])" in sql
+        assert "vw_ETL_COPPEL] w" in sql, "el puente sale de la vista principal"
 
-    def test_sin_hojas_no_revienta(self):
-        assert contexto.hojas_cortadas({}) == []
-        assert contexto.hojas_cortadas(None) == []
+    def test_la_tienda_del_iot_se_funde_con_la_del_feed_principal(self):
+        # Si no, la misma tienda sale dos veces: '1159 - TETLAN' por un lado
+        # y '1159' por el otro.
+        sql, _ = self._sql("COPPEL")
+        assert "COALESCE(p.[nombre], i.[Store]) AS [Tienda]" in sql
 
-    def test_el_tope_del_crudo_cubre_un_anio_de_la_cadena_mas_grande(self):
-        # Medido el 25 de septiembre de 2026: un anio de Coppel son 164 507
-        # filas ya agrupadas, y toda la historia 301 319. Con el tope viejo
-        # de 80 000 el anio se cortaba a la mitad.
-        assert contexto.MAX_FILAS_RAW_DATA >= 164507
+    def test_los_dos_lados_del_union_traen_el_mismo_tipo(self):
+        # En Liverpool la tienda cruda es numerica ([Centro]) y la del IOT es
+        # texto: sin el CAST, SQL Server intenta convertir el texto a float y
+        # revienta con "Error converting data type nvarchar to float".
+        sql, _ = self._sql("LIVERPOOL")
+        assert "CAST(v.[STORE] AS NVARCHAR(200)) AS [Tienda]" in sql
+        assert "CAST(v.[Centro] AS NVARCHAR(200)) AS [Clave]" in sql
 
-    def test_pero_no_tanto_como_para_no_caber_en_whatsapp(self):
-        # Medido con el pivot ya armado: 500 000 filas pesan 18.1 MB y ya no
-        # pasan el limite de 16 MB; 300 000 quedan en ~11.6 MB.
-        assert contexto.MAX_FILAS_RAW_DATA <= 400000
+    def test_los_parametros_van_completos_y_en_orden(self):
+        sql, parametros = self._sql("COPPEL")
+        # 2 del catalogo para la mitad cruda, 3 para la del IOT, y el rango
+        # de fechas de cada una.
+        assert parametros == (
+            "COPPEL", "COPPEL", "2026-01-01", "2027-01-01",
+            "COPPEL", "COPPEL", "COPPEL", "2026-01-01", "2027-01-01",
+        )
+        assert sql.count("?") == len(parametros)
+
+
+class TestElPresupuestoDelDesglose:
+    """El desglose recibe lo que QUEDA de la peticion, no un numero fijo.
+
+    Un presupuesto mas largo que el que resta no hace esperar mas: hace que
+    la peticion entera se caiga por timeout y el usuario no reciba NADA --
+    ni el Excel ni el texto. Con el plazo correcto, en el peor caso sale sin
+    esa hoja.
+    """
+
+    def _plazos(self, segundos):
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [1]}),
+            motor, "", segundos,
+        )
+        return motor.timeout
+
+    def test_se_respeta_lo_que_queda(self):
+        assert self._plazos(45) == 45
+
+    def test_sin_presupuesto_se_usa_el_propio(self):
+        assert self._plazos(None) == contexto.SEGUNDOS_PARA_EL_DESGLOSE
+
+    def test_no_se_pide_mas_de_lo_que_el_modulo_se_permite(self):
+        assert self._plazos(99999) == contexto.SEGUNDOS_PARA_EL_DESGLOSE
+
+    def test_un_presupuesto_agotado_no_queda_en_cero_ni_negativo(self):
+        # timeout=0 en pyodbc significa "sin limite", justo lo contrario.
+        assert self._plazos(0) >= 1
+        assert self._plazos(-30) >= 1
 
 
 class TestDatosCrudosParaElPivot:
@@ -541,8 +595,7 @@ class TestDatosCrudosParaElPivot:
         contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
 
         sql_crudo = next(
-            sql for sql, _ in motor.consultas
-            if "GROUP BY cs.[Region], v.[Tienda #], v.[Marca]" in sql
+            sql for sql, _ in motor.consultas if "v.[Marca] AS [Marca]" in sql
         )
         assert "IN (" not in sql_crudo.split("WHERE")[1].split("GROUP BY")[0]
 
@@ -557,16 +610,18 @@ class TestDatosCrudosParaElPivot:
         )
         assert "HOMOLOGACION" not in sql_crudo
 
-    def test_topea_las_filas(self):
-        # Medido: Elektra 3 meses da 28 887 filas asi, Coppel (la tabla mas
-        # grande) 58 066. El tope deja margen sin acercarse al limite de
-        # adjunto de WhatsApp.
+    def test_no_topea_las_filas(self):
+        # Van todas. Medido: Elektra 3 meses da 28 887 filas asi, Coppel (la
+        # tabla mas grande) 58 066, y toda la historia de Coppel 301 319 --
+        # un tercio de lo que cabe en una hoja de Excel. Lo que antes las
+        # topaba era el limite de adjunto, y estaba mal leido: los 16 MB son
+        # el tope de media, y un .xlsx viaja como documento.
         motor = self._motor_con_crudo()
         contexto_del_resultado(self._resultado_por_modelo(), motor, "FROM EKT_B2B")
         sql_crudo = next(
             sql for sql, _ in motor.consultas if "v.[Marca] AS [Marca]" in sql
         )
-        assert f"TOP {contexto.MAX_FILAS_RAW_DATA}" in sql_crudo
+        assert "TOP" not in sql_crudo
 
     def test_sin_cadena_identificada_no_se_genera(self):
         # Sin tabla cruda no hay de donde sacar datos crudos.

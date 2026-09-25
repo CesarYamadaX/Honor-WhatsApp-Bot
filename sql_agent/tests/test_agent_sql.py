@@ -549,7 +549,7 @@ class TestConsultarSql:
         monkeypatch.setattr(
             modulo_agente,
             "contexto_del_resultado",
-            lambda df, engine, query: {
+            lambda df, engine, query, segundos=None: {
                 "Raw_Data": pd.DataFrame(
                     {"Tienda": ["a"], "Marca": ["HONOR"], "Mes": [1], "Unidades": [1]}
                 )
@@ -630,21 +630,42 @@ class TestConsultarSql:
         assert "No la ejecute" in salida
         assert "Liverpool Offline" in salida
 
-    def test_avisa_cuando_una_hoja_del_excel_salio_cortada(
+    def test_si_el_crudo_no_cabe_en_una_hoja_va_sin_pivot_y_se_dice(
         self, engine, tmp_path, monkeypatch
     ):
+        # Un pivot solo puede mirar UNA hoja. Con el crudo repartido, la hoja
+        # "Raw_Data" es apenas el primer trozo, y resumir solo ese seria
+        # enganoso -- justo lo que se viene corrigiendo. Antes que un resumen
+        # a medias, ninguno: las filas estan todas.
         monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        grande = pd.DataFrame({
+            "Tienda": ["a"] * 3, "Marca": ["HONOR"] * 3,
+            "Mes": [1, 2, 3], "Unidades": [1, 2, 3],
+        })
         monkeypatch.setattr(
-            modulo_agente, "contexto_hojas_cortadas", lambda hojas: ["Raw_Data"]
+            modulo_agente, "contexto_del_resultado",
+            lambda df, engine, query, segundos=None: {"Raw_Data": grande},
         )
+        # Dos filas ya "no caben": asi la prueba no tiene que fabricar un
+        # millon de filas para ejercer el camino.
+        monkeypatch.setattr(modulo_agente, "MAX_FILAS_POR_HOJA_DE_EXCEL", 2)
+        llamadas = []
+        monkeypatch.setattr(
+            modulo_agente.excel_pivot, "agregar_pivot",
+            lambda *a, **k: llamadas.append(1) or True,
+        )
+
         with contexto_peticion(engine):
+            # entregar_archivo: sin Excel no hay hojas que partir ni pivot
+            # que omitir, y este camino no llegaria a correr.
             salida = consultar_sql.invoke(
-                {"query": "SELECT * FROM ventas WHERE monto < 30"}
+                {"query": "SELECT * FROM ventas WHERE monto < 30",
+                 "entregar_archivo": True}
             )
 
-        assert "OJO:" in salida
-        assert "'Raw_Data'" in salida
-        assert "NO suma el total" in salida
+        assert llamadas == [], "con el crudo partido no se arma pivot"
+        assert "OJO:" in salida and "SIN tabla dinamica" in salida
+        assert "TODAS las filas" in salida
 
     def test_no_ejecuta_una_consulta_que_es_solo_media_cadena(
         self, engine, tmp_path, monkeypatch

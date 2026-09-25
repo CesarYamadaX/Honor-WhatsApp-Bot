@@ -14,12 +14,12 @@ const MENSAJES = {
 // muerto a media peticion, socket a medio abrir, etc). Deliberadamente por
 // encima del peor caso del lado Python: hasta CANCEL_WAIT_SECONDS (25s)
 // esperando a que la consulta anterior se de por cancelada, MAS los
-// AGENT_TIMEOUT_SECONDS (300s) de la consulta nueva. Si este numero fuera
+// AGENT_TIMEOUT_SECONDS (600s) de la consulta nueva. Si este numero fuera
 // menor que esa suma, el sidecar abandonaria una peticion que todavia iba a
 // contestar y le diria al usuario que el sistema no esta disponible, que es
 // falso. En el caso normal el 504 del servicio gana primero y da un mensaje
 // mas especifico; esto solo cubre que ni siquiera eso llegue.
-const TIMEOUT_MS_DEFAULT = 400_000;
+const TIMEOUT_MS_DEFAULT = 900_000;
 
 // Timeout corto: es una comprobacion en memoria contra la allowlist, sin base
 // de datos ni modelo de por medio.
@@ -95,7 +95,7 @@ export async function idiomaDelChat(baseUrl, chatId, timeoutMs = TIMEOUT_AUTORIZ
  * @param {string} baseUrl
  * @param {string} chatId
  * @param {string} texto
- * @param {number} [timeoutMs] - por defecto 120s (ver TIMEOUT_MS_DEFAULT).
+ * @param {number} [timeoutMs] - por defecto 900s (ver TIMEOUT_MS_DEFAULT).
  *   Parametro pensado para pruebas; la Tarea 9 no necesita pasarlo.
  * @returns {Promise<null | {reply: string, files: string[], idioma: string}>}
  */

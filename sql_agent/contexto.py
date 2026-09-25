@@ -68,26 +68,29 @@ MAX_VALORES_POR_COLUMNA = 200
 # (7k filas) no es contexto, es ruido.
 MAX_FILAS_POR_HOJA = 2000
 
-# Tope de las hojas de VENTA, que es otra cosa: ahi cortar no es "menos
-# ruido", es un total que no cuadra. Con el tope de 2 000, "ventas de Honor
-# por mes en 2026" entregaba un mensaje que decia 1 634 670 unidades y una
-# hoja que sumaba 1 381 369 -- el 84% --, sin decir en ningun lado que
-# estaba cortada.
+# Las hojas de VENTA NO se topan. Se pidio explicitamente: "que sea todas
+# las filas relacionadas a la pregunta, no importa si las colocas en mas
+# hojas". Cortarlas nunca fue "menos ruido" -- era un total que no cuadra con
+# el mensaje, y quien abre el Excel no tiene como saberlo.
 #
-# Medido el 25 de septiembre de 2026, estas hojas no se pueden desbordar: el
-# techo lo pone cuantas tiendas existen, no el periodo. Retail x Store en la
-# consolidada da 6 626 filas para un mes y 9 760 para el ano entero con
-# todas las marcas, que es el peor caso. La de tienda x modelo va acotada
-# ademas a MAX_MODELOS_DESGLOSADOS, asi que su techo son ~25 000 (1 700
-# tiendas de Coppel x 15 modelos).
+# No se pueden desbordar, y eso esta medido (25 de septiembre de 2026): lo
+# que cada una entrega lo acota la propia realidad, no un TOP.
 #
-# 80 000 deja margen de sobra sin acercarse al limite de adjunto de WhatsApp
-# (16 MB): a ~7-8 bytes por celda, 80 000 filas x 4 columnas pesan bajo 3 MB.
-MAX_FILAS_DE_VENTA = 80000
+#   hoja                que la acota                     peor caso medido
+#   Ventas por tienda   cuantas tiendas existen          9 760 (ano, todas
+#                                                        las marcas)
+#   " (por modelo)      tiendas x MAX_MODELOS_DESGLOSADOS  ~25 000 (Coppel)
+#   Raw_Data            tiendas x marcas x meses         301 319 (Coppel,
+#                                                        toda la historia)
+#
+# Si alguna vez una superara el millon de filas de Excel, se parte en varias
+# hojas en vez de perderse: ver `excel_exporter.partir_en_hojas`.
 
-# Lo que se le da al desglose antes de rendirse. El reporte ya costo minutos;
-# esta hoja es un extra y no puede duplicar la espera.
-SEGUNDOS_PARA_EL_DESGLOSE = 90
+# Lo que se le da al desglose antes de rendirse. Es generoso a proposito: la
+# alternativa no es "esperar menos", es entregar un Excel sin la hoja que se
+# pidio. El techo real de la peticion lo pone AGENT_TIMEOUT_SECONDS, y quien
+# llama recorta este presupuesto a lo que quede (ver `contexto_del_resultado`).
+SEGUNDOS_PARA_EL_DESGLOSE = 240
 
 # Hasta cuantas cadenas se separan en hojas propias. La vista consolidada
 # tiene 16 valores de [Retail] -- Telcel sola aporta seis canales -- y ese es
@@ -103,14 +106,14 @@ MIN_FILAS_POR_CADENA = 10
 # Caracteres que Excel no acepta en el nombre de una hoja.
 _PROHIBIDOS_EN_HOJA = ':\\/?*[]'
 
-# Tope de filas para la hoja de datos crudos que alimenta el PIVOT. Se
-# agrupa por tienda, marca y mes -- sin el modelo, que ya tiene su propia
-# hoja mas fina ("Ventas por tienda") -- porque a nivel modelo la misma
-# consulta de tres meses de Elektra da 127 602 filas, cuatro veces mas.
+# La hoja de datos crudos que alimenta el PIVOT se agrupa por tienda, marca
+# y mes -- sin el modelo, que ya tiene su propia hoja mas fina ("Ventas por
+# tienda") -- porque a nivel modelo la misma consulta de tres meses de
+# Elektra da 127 602 filas, cuatro veces mas.
 #
-# Lo que entrega esta hoja YA AGRUPADA, medido el 25 de septiembre de 2026
-# (las tablas crudas detras suman 37M de filas: Telcel 14.8M, Coppel 12.2M,
-# AT&T 5.0M, Liverpool 3.4M, Elektra 1.7M, Sears 90k):
+# Lo que entrega, YA AGRUPADA, medido el 25 de septiembre de 2026 (las
+# tablas crudas detras suman 37M de filas: Telcel 14.8M, Coppel 12.2M, AT&T
+# 5.0M, Liverpool 3.4M, Elektra 1.7M, Sears 90k):
 #
 #   cadena      1 mes    3 meses    1 anio   todo (2024->hoy)
 #   COPPEL     19 355     58 066   164 507        301 319
@@ -120,32 +123,9 @@ _PROHIBIDOS_EN_HOJA = ':\\/?*[]'
 #   LIVERPOOL   2 116      6 341    16 878         35 806
 #   SEARS         717      2 159     5 561          7 964
 #
-# Con el tope viejo de 80 000, un anio de Coppel se cortaba a la mitad.
-#
-# El techo NO lo pone la base: lo pone el limite de adjunto de WhatsApp
-# (MAX_FILE_MB, 16 MB por defecto). Un archivo mas grande no se entrega --
-# el sidecar avisa y el usuario se queda sin nada. Medido con el PIVOT ya
-# armado: 80 000 filas pesan 4.5 MB, 200 000 pesan 8.4 MB, 500 000 pesan
-# 18.1 MB (ya no pasa) y un millon 34.3 MB. 300 000 quedan en ~11.6 MB, con
-# margen de sobra, y el pivot tarda 25-30s de los 90 que tiene.
-MAX_FILAS_RAW_DATA = 300000
-
-# Que hoja se corta con que tope. Si una sale EXACTAMENTE con su tope de
-# filas es que el TOP la corto, y entonces sus totales no cuadran con la
-# respuesta: eso hay que decirlo, no dejarlo pasar. Ver `hojas_cortadas`.
-_TOPES = {
-    "Raw_Data": MAX_FILAS_RAW_DATA,
-    "Ventas por tienda": MAX_FILAS_DE_VENTA,
-}
-
-
-def hojas_cortadas(hojas: dict[str, pd.DataFrame]) -> list[str]:
-    """Las hojas de venta que salieron topadas, y por eso no suman el total."""
-    return [
-        nombre
-        for nombre, tope in _TOPES.items()
-        if (hoja := (hojas or {}).get(nombre)) is not None and len(hoja) >= tope
-    ]
+# Van TODAS. Lo que antes las topaba era el limite de adjunto, y ese limite
+# estaba mal leido: los 16 MB son el tope de MEDIA de WhatsApp, y un .xlsx
+# viaja como DOCUMENTO, que admite mucho mas (ver MAX_FILE_MB en el sidecar).
 
 # Cuantos modelos del resultado se desglosan. Un reporte con cien modelos no
 # se lee de todos modos: se toman los mas vendidos del propio resultado.
@@ -217,6 +197,11 @@ class Cruda:
     # nombre distinto: [Marca] en Coppel/Elektra/Telcel, [Brand] en
     # Liverpool/Sears, [BRAND] en AT&T.
     marca: str = ""
+    # La vista con el feed _IOT de esa cadena, si lo tiene. Coppel y
+    # Liverpool son las dos unicas partidas en dos, y la tabla cruda solo
+    # trae una mitad: sin esto, "las ventas de Coppel" en la hoja Raw_Data
+    # se quedan 880 689 unidades cortas (medido, 2026).
+    vista_iot: str = ""
 
 
 # Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
@@ -237,7 +222,7 @@ CRUDAS = {
     "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",),
                     "CONCAT(v.[Marca], ' ', v.[Modelo])", _FINAL,
                     "Tienda", "Tienda", "Día", "Unidades", "COPPEL",
-                    _POR_NOMBRE, marca="Marca"),
+                    _POR_NOMBRE, marca="Marca", vista_iot="vw_ETL_COPPEL_IOT"),
     "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "v.[Desc Sku]", _DESCRIPCION,
                      "Tienda #", "POS", "Day", "QTY", "ELEKTRA", _POR_NUMERO,
                      marca="Marca"),
@@ -247,7 +232,8 @@ CRUDAS = {
     "LIVERPOOL": Cruda("LIVERPOOL_B2B$", ("LIVERPOOL",),
                        "v.[Material Description]", _DESCRIPCION,
                        "Centro", "STORE", "Día/Periodo", "Vtas# U Per 1",
-                       "LIVERPOOL", _POR_NOMBRE, marca="Brand"),
+                       "LIVERPOOL", _POR_NOMBRE, marca="Brand",
+                       vista_iot="vw_ETL_Liverpool_IOT"),
     # Los dos [Retail] de AT&T: con DEALERS solo se casa el 80.7% del mes, con
     # los dos el 88.9% (medido, agosto de 2026).
     "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "v.[Model]",
@@ -608,7 +594,7 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
     huecos_modelo = ", ".join("?" * len(modelos))
     join_region, region, parametros_region = _join_region(cruda)
     sql = f"""
-        SELECT TOP {MAX_FILAS_DE_VENTA}
+        SELECT
                MAX({region}) AS [Region],
                MAX(v.[{cruda.etiqueta}]) AS [Tienda],
                u.[modelo] AS [Modelo],
@@ -641,6 +627,52 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
+# La otra mitad de Coppel y Liverpool. La vista _IOT tiene la forma de la
+# consolidada ([Retail][Store][Brand][Date][QTY]...), asi que sus columnas no
+# son las de la tabla cruda y hay que nombrarlas aparte.
+#
+# Su [Store] NO se escribe igual en las dos cadenas, y por eso se intentan
+# los dos caminos en vez de asumir uno (medido el 25/09/2026):
+#
+#   Liverpool  es un NOMBRE ('L POLANCO'), como el resto -> casa directo
+#              contra CustomerStores, 92.8%, y sube con la normalizacion de
+#              espacios que ya se usa para la mitad cruda.
+#   Coppel     es un NUMERO pelado ('249') y el resto usa nombres
+#              ('1159 - TETLAN') -> contra el catalogo casa 0%. Ahi el
+#              puente es la vista principal, que da nombre y region para ese
+#              numero: 880 661 de 880 689 unidades, el 100.0%.
+#
+# El COALESCE los prueba en ese orden, asi que cada cadena toma el que le
+# sirve sin que haya que saber de antemano cual es.
+_MITAD_IOT = """
+        SELECT COALESCE(csi.[Region], csi2.[Region], p.[Region]) AS [Region],
+               COALESCE(p.[nombre], i.[Store]) AS [Tienda],
+               COALESCE(p.[nombre], i.[Store]) AS [Clave],
+               i.[Brand] AS [Marca],
+               MONTH(i.[Date]) AS [Mes],
+               i.[QTY] AS [Unidades]
+        FROM [RAW_DATA_B2B].dbo.[{iot}] i
+        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                   FROM [GTM BI Database].dbo.[CustomerStores]
+                   WHERE [RetailName] = ?) csi
+          ON csi.[nombre] = i.[Store]
+        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                   FROM [GTM BI Database].dbo.[CustomerStores]
+                   WHERE [RetailName] = ?) csi2
+          ON {normalizado_catalogo} = {normalizado_iot}
+        LEFT JOIN (
+            SELECT TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1)) AS [numero],
+                   MIN(cs.[Region]) AS [Region],
+                   MIN(w.[Store]) AS [nombre]
+            FROM [RAW_DATA_B2B].dbo.[{principal}] w
+            JOIN [GTM BI Database].dbo.[CustomerStores] cs
+              ON cs.[Coppel Name] = w.[Store] AND cs.[RetailName] = ?
+            GROUP BY TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1))
+        ) p ON p.[numero] = TRY_CONVERT(int, i.[Store])
+        WHERE i.[Date] >= ? AND i.[Date] < ? AND i.[QTY] >= 1
+"""
+
+
 def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     """Ventas de toda la cadena en el periodo, por tienda, marca y mes.
 
@@ -656,22 +688,41 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     un pivot de tienda x mes, y para eso la marca alcanza.
     """
     join_region, region, parametros_region = _join_region(cruda)
-    sql = f"""
-        SELECT TOP {MAX_FILAS_RAW_DATA}
-               MAX({region}) AS [Region],
-               MAX(v.[{cruda.etiqueta}]) AS [Tienda],
+    mitad_cruda = f"""
+        SELECT {region} AS [Region],
+               CAST(v.[{cruda.etiqueta}] AS NVARCHAR(200)) AS [Tienda],
+               CAST(v.[{cruda.clave}] AS NVARCHAR(200)) AS [Clave],
                v.[{cruda.marca}] AS [Marca],
                MONTH(v.[{cruda.fecha}]) AS [Mes],
-               SUM(v.[{cruda.unidades}]) AS [Unidades]
+               v.[{cruda.unidades}] AS [Unidades]
         FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
         {join_region}
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
           AND v.[{cruda.unidades}] >= 1
-        GROUP BY {region}, v.[{cruda.clave}], v.[{cruda.marca}],
-                 MONTH(v.[{cruda.fecha}])
-        ORDER BY SUM(v.[{cruda.unidades}]) DESC
     """
-    parametros = (*parametros_region, desde, hasta)
+    partes, parametros = [mitad_cruda], [*parametros_region, desde, hasta]
+
+    if cruda.vista_iot:
+        partes.append(_MITAD_IOT.format(
+            iot=cruda.vista_iot,
+            principal=cruda.vista_iot[: -len("_IOT")],
+            normalizado_catalogo=_NORMALIZAR.format(expr="csi2.[nombre]"),
+            normalizado_iot=_NORMALIZAR.format(expr="i.[Store]"),
+        ))
+        parametros.extend(
+            [cruda.retail_en_catalogo] * 3 + [desde, hasta]
+        )
+
+    sql = f"""
+        SELECT MAX([Region]) AS [Region],
+               MAX([Tienda]) AS [Tienda],
+               [Marca], [Mes],
+               SUM([Unidades]) AS [Unidades]
+        FROM ({" UNION ALL ".join(partes)}) todo
+        GROUP BY [Region], [Clave], [Marca], [Mes]
+        ORDER BY SUM([Unidades]) DESC
+    """
+    parametros = tuple(parametros)
     cursor = conexion.exec_driver_sql(sql, parametros)
     filas = cursor.fetchall()
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
@@ -692,7 +743,7 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str,
         parametros.extend(valores)
 
     sql = f"""
-        SELECT TOP {MAX_FILAS_DE_VENTA}
+        SELECT
                v.[Retail], v.[Store], SUM(v.[QTY]) AS [Unidades]
         FROM {VENTAS} v
         WHERE {' AND '.join(condiciones)}
@@ -705,11 +756,23 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str,
 
 
 def contexto_del_resultado(
-    df: pd.DataFrame, engine, query: str = ""
+    df: pd.DataFrame, engine, query: str = "", segundos: int | None = None
 ) -> dict[str, pd.DataFrame]:
-    """Hojas de contexto para el resultado, vacio si no hay nada que agregar."""
+    """Hojas de contexto para el resultado, vacio si no hay nada que agregar.
+
+    `segundos` es lo que queda de la peticion. Quien llama lo sabe y este
+    modulo no, asi que se recibe en vez de adivinarlo: un presupuesto fijo
+    mas largo que el que queda no hace esperar mas, hace que la peticion
+    entera se caiga por timeout y el usuario no reciba NADA.
+    """
     if df is None or df.empty:
         return {}
+
+    # `segundos or ...` estaria mal: un presupuesto de 0 es "ya no queda
+    # tiempo", no "usa el tuyo". Y el piso es 1 porque en pyodbc timeout=0
+    # significa SIN limite, justo lo contrario de lo que se quiere decir.
+    pedido = SEGUNDOS_PARA_EL_DESGLOSE if segundos is None else segundos
+    plazo = max(1, min(pedido, SEGUNDOS_PARA_EL_DESGLOSE))
 
     # Primero una hoja por cadena, si el reporte trae varias: van pegadas a
     # la hoja de datos, que es de donde salen.
@@ -726,7 +789,7 @@ def contexto_del_resultado(
         modelos = modelos_a_desglosar(df)
         try:
             with engine.connect() as conexion:
-                conexion.connection.dbapi_connection.timeout = SEGUNDOS_PARA_EL_DESGLOSE
+                conexion.connection.dbapi_connection.timeout = plazo
                 if cruda and modelos:
                     ventas = _ventas_por_tienda_y_modelo(
                         conexion, cruda, modelos, *rango
@@ -749,7 +812,7 @@ def contexto_del_resultado(
         if cruda:
             try:
                 with engine.connect() as conexion:
-                    conexion.connection.dbapi_connection.timeout = SEGUNDOS_PARA_EL_DESGLOSE
+                    conexion.connection.dbapi_connection.timeout = plazo
                     crudos = ventas_crudas(conexion, cruda, *rango)
                 if not crudos.empty:
                     hojas["Raw_Data"] = crudos

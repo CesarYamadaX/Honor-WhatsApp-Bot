@@ -38,9 +38,9 @@ from catalogo import (
     indice,
     valores_conocidos,
 )
-from contexto import contexto_del_resultado, hojas_cortadas as contexto_hojas_cortadas
+from contexto import contexto_del_resultado
 import excel_pivot
-from excel_exporter import ExcelExporter
+from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import idioma as idiomas
@@ -726,7 +726,13 @@ def buscar_modelos(texto: str) -> str:
 # Debe coincidir con AGENT_TIMEOUT_SECONDS: es el presupuesto que la API le
 # da a la peticion completa. Aqui solo se usa para repartirlo, no para
 # imponerlo.
-TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 300)
+# Sube a 600 porque se pidio que con muchos datos NO se rinda y entregue el
+# Excel completo. Un reporte de un anio de Coppel son 164 507 filas crudas:
+# la consulta, el Excel y el pivot juntos pasan de los 300 que habia, y el
+# usuario recibia una respuesta a medias o ninguna. El sidecar espera mas que
+# esto a proposito (ver TIMEOUT_MS_DEFAULT en agentClient.js): si fuera al
+# reves, cortaria el la respuesta que el servicio si alcanzo a producir.
+TIMEOUT_PETICION = _leer_entero_de_entorno("AGENT_TIMEOUT_SECONDS", 600)
 # Lo que se reserva para armar el Excel y la grafica y devolver la respuesta.
 MARGEN_DE_ENTREGA = 20
 # Por debajo de esto no vale la pena intentar: contra la vista consolidada,
@@ -1267,8 +1273,12 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 "ayudar (medido: un SUM de un solo mes tarda lo mismo). Si "
                 "filtraste ETL_Consolidado_B2B por [Retail], ESE es el "
                 "problema: repite la consulta sobre la vista de ese retailer "
-                "(vw_ETL_COPPEL, vw_ETL_Elektra, vw_ETL_TELCEL_B2B...), que "
-                "trae las mismas columnas y no recorre las otras ocho."
+                "(vw_ETL_Elektra, vw_ETL_TELCEL_B2B, vw_ETL_Sears...), que "
+                "trae las mismas columnas y no recorre las otras ocho. OJO con "
+                "Coppel y Liverpool: cada uno vive en DOS vistas y una sola da "
+                "de menos, asi que ahi va UNION ALL de las dos "
+                "(vw_ETL_COPPEL con vw_ETL_COPPEL_IOT, vw_ETL_Liverpool con "
+                "vw_ETL_Liverpool_IOT)."
             )
         return (
             f"Error al ejecutar la consulta: {error}"
@@ -1312,12 +1322,18 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # no puede convertir un "sin resultados" en un error de exportacion.
     excel = None
     contexto: dict = {}
+    crudo_partido = False
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
         # reporte sale igual con la hoja de datos.
         try:
-            contexto = contexto_del_resultado(df, ctx.engine, query)
+            # Lo que de verdad queda, no un numero fijo: si el desglose
+            # pidiera mas de lo que resta, la peticion entera se caeria por
+            # timeout y el usuario no recibiria NADA -- ni el Excel ni el
+            # texto. Asi, en el peor caso sale sin esa hoja.
+            queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
+            contexto = contexto_del_resultado(df, ctx.engine, query, queda)
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
             contexto = {}
@@ -1346,7 +1362,22 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             and not any(a.lower().endswith(".png") for a in ctx.archivos)
         )
         crudos = contexto.get("Raw_Data")
-        if sera_el_reporte_bueno and crudos is not None and not crudos.empty:
+        # Un pivot solo puede mirar UNA hoja. Si el crudo no cupo en una, la
+        # hoja "Raw_Data" es apenas el primer trozo y el pivot estaria
+        # resumiendo una parte sin decirlo -- justo lo que se viene
+        # corrigiendo. Antes que un resumen a medias, ninguno.
+        crudo_partido = crudos is not None and len(crudos) > MAX_FILAS_POR_HOJA_DE_EXCEL
+        if crudo_partido:
+            bitacora.paso(
+                "el crudo ocupa varias hojas; va sin pivot para no resumir solo una",
+                bitacora.NOTA,
+            )
+        if (
+            sera_el_reporte_bueno
+            and not crudo_partido
+            and crudos is not None
+            and not crudos.empty
+        ):
             config = excel_pivot.config_ventas_por_tienda(crudos)
             if config:
                 bitacora.paso("armando el pivot de tienda y mes", bitacora.NOTA)
@@ -1375,24 +1406,21 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
     # aclara que el mes va por la mitad: el numero es correcto y la lectura
     # es un desplome que no ocurrio.
+    if crudo_partido:
+        partes.append(
+            "OJO: los datos crudos no caben en una sola hoja de Excel, asi que "
+            "van repartidos en varias ('Raw_Data', 'Raw_Data (2)'...) y el "
+            "archivo va SIN tabla dinamica: un pivot solo puede resumir una "
+            "hoja, y resumir solo la primera seria enganoso. Estan TODAS las "
+            "filas. Dilo al responder."
+        )
+
     incompleto = tiempo.ultimo_periodo_incompleto(df)
     if incompleto:
         partes.append(
             f"OJO: {incompleto} todavia va incompleto -- el periodo no ha "
             "terminado de cargar, por eso sale mucho mas bajo. Dilo al "
             "responder y NO lo presentes como una caida."
-        )
-
-    # Una hoja que salio topada no suma el total de la respuesta, y quien
-    # abre el Excel no tiene como saberlo. Es el mismo problema que el tope
-    # de 2 000 ya habia causado: dos numeros que no cuadran en el mismo
-    # archivo, y el que se queda es el del archivo.
-    for hoja in contexto_hojas_cortadas(contexto):
-        partes.append(
-            f"OJO: la hoja '{hoja}' del Excel salio con el maximo de filas "
-            "que cabe en un adjunto, asi que esta cortada y NO suma el total "
-            "de arriba. Dilo al responder, y si hace falta el detalle "
-            "completo sugiere pedir un periodo mas corto."
         )
 
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y

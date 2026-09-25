@@ -90,6 +90,28 @@ cadena completa. A las crudas no se les ofrece el `UNION ALL`: `Coppel_IOT` es
 `[Tienda][Familia][Marca][Modelo][Attribute][Value]`, sin fecha ni cantidad, y
 ponerlas en la misma forma es justo lo que hace la vista `vw_ETL_*`.
 
+### La hoja `Raw_Data` une las dos mitades
+
+`contexto.ventas_crudas` lee la tabla cruda, que es solo una mitad, así que para
+estas dos cadenas hace `UNION ALL` con la vista `_IOT`. Sin eso el Excel decía
+4 186 855 donde el mensaje decía 5 067 544.
+
+La región del lado `_IOT` no sale igual en las dos, y por eso se intentan **los
+dos caminos** en vez de asumir uno (`COALESCE(csi, csi2, p)`):
+
+| | `[Store]` del `_IOT` | Camino que sirve | Cobertura |
+|---|---|---|---|
+| Liverpool | `L POLANCO` (un nombre) | directo contra `CustomerStores` | 92.8%, más con la normalización de espacios |
+| Coppel | `249` (un número pelado) | puente por la vista principal: número → nombre → región | **100.0%** (880 661 de 880 689) |
+
+En Coppel el join directo casa **0%**: el resto de la cadena usa nombres
+(`1159 - TETLAN`) y el `_IOT` números. El puente saca del feed principal qué
+número corresponde a qué nombre, y ese nombre es además el que se muestra, para
+que la tienda no salga dos veces (`1159 - TETLAN` por un lado y `249` por otro).
+
+Verificado contra el bot: las tres hojas del reporte de Coppel 2026 suman
+5 067 544, y quedan 136 filas sin región de 266 270.
+
 ## Las tres rutas de homologación
 
 El modelo de teléfono se agrupa SIEMPRE por `UNICOS$.[HOMOLOGACION MODELO]`;
