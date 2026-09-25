@@ -9,7 +9,15 @@ final.
 
 import pandas as pd
 
-from tiempo import ES_ANIO, ES_MES, columna, enteros, ordenar_por_tiempo
+from tiempo import (
+    ES_ANIO,
+    ES_MES,
+    columna,
+    enteros,
+    medida,
+    ordenar_por_tiempo,
+    ultimo_periodo_incompleto,
+)
 
 
 class TestOrdenCronologico:
@@ -72,6 +80,53 @@ class TestOrdenCronologico:
         assert ordenar_por_tiempo(None) is None
         vacio = pd.DataFrame()
         assert ordenar_por_tiempo(vacio).empty
+
+
+class TestElMesAMedioCargar:
+    """El caso real del 24 de septiembre de 2026: "ventas de Honor por mes"
+    daba 15 584 unidades para septiembre contra 160 909 de agosto. No era
+    una caida: el mes iba por la mitad y la carga venia atrasada (datos
+    hasta el dia 20). En la grafica eso es un precipicio que no existe.
+    """
+
+    def _meses(self, totales):
+        return pd.DataFrame(
+            {
+                "Año": [2026] * len(totales),
+                "Mes": list(range(1, len(totales) + 1)),
+                "Total Unidades": totales,
+            }
+        )
+
+    def test_marca_el_mes_que_va_a_medio_cargar(self):
+        df = self._meses([249184, 191976, 200552, 207000, 219000, 220500,
+                          170234, 160909, 15584])
+        assert ultimo_periodo_incompleto(df) == "2026-09"
+
+    def test_un_mes_normal_no_se_marca(self):
+        df = self._meses([249184, 191976, 200552, 207000, 219000, 220500,
+                          170234, 160909, 158000])
+        assert ultimo_periodo_incompleto(df) is None
+
+    def test_una_caida_de_verdad_no_se_marca(self):
+        # 60% del mes anterior es una caida fea, pero es real: el umbral
+        # esta en 40%, el mismo que el pronostico ya tenia medido.
+        df = self._meses([100, 100, 100, 60])
+        assert ultimo_periodo_incompleto(df) is None
+
+    def test_con_pocos_periodos_no_se_adivina(self):
+        # Sin al menos tres meses previos no hay con que comparar.
+        df = self._meses([100, 100, 5])
+        assert ultimo_periodo_incompleto(df) is None
+
+    def test_sin_linea_de_tiempo_no_aplica(self):
+        df = pd.DataFrame({"Tienda": ["a", "b"], "QTY": [10, 1]})
+        assert ultimo_periodo_incompleto(df) is None
+
+    def test_la_medida_no_es_el_anio(self):
+        # [Año] es numerica y va primero; medir por ella seria medir 2026.
+        df = pd.DataFrame({"Año": [2026], "Mes": [8], "Unidades": [5]})
+        assert medida(df) == "Unidades"
 
 
 class TestComoSeReconocenLasColumnas:

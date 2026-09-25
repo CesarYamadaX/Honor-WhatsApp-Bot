@@ -292,21 +292,9 @@ def _buscar(conexion, tabla: str, columnas: tuple[str, ...], valores: list[str])
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
-def _medida(df: pd.DataFrame):
-    """La columna numerica que MIDE algo, o None.
-
-    No basta con "la primera numerica": en un resultado por mes, la primera
-    numerica es [Año], y ordenar por ella es ordenar por 2026 -- o sea, por
-    numero de filas. Las columnas de periodo dicen cuando, no cuanto.
-    """
-    for nombre in df.columns:
-        if not pd.api.types.is_numeric_dtype(df[nombre]):
-            continue
-        texto = str(nombre)
-        if tiempo.ES_ANIO.match(texto) or tiempo.ES_MES.match(texto):
-            continue
-        return nombre
-    return None
+# Vive en tiempo.py, junto con las demas reglas de periodo; aqui se deja el
+# nombre con el que ya se le llama en este modulo.
+_medida = tiempo.medida
 
 
 def modelos_a_desglosar(df: pd.DataFrame) -> list[str]:

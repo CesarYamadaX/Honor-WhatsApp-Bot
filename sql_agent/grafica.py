@@ -8,6 +8,7 @@ conversacion misma, de un vistazo. El Excel queda de puros datos.
 import logging
 import os
 import re
+import statistics
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -80,6 +81,9 @@ class Plan:
     series: dict[str, list]
     titulo: str
     es_temporal: bool
+    # La etiqueta del ultimo periodo cuando viene a medio cargar, para
+    # avisarlo encima de la grafica. Ver tiempo.ultimo_periodo_incompleto.
+    incompleto: str = ""
 
 
 def _eje_de_tiempo(df: pd.DataFrame):
@@ -143,6 +147,29 @@ def _por_periodo(etiquetas, columnas: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _ultimo_a_medio_cargar(etiquetas: list[str], totales: list) -> str:
+    """La etiqueta del ultimo periodo si viene a medio cargar, o "".
+
+    Mismo criterio que `tiempo.ultimo_periodo_incompleto`, aplicado a la
+    serie que la grafica ya tiene armada en vez de al DataFrame crudo.
+    """
+    if len(etiquetas) < tiempo.PERIODOS_PARA_COMPARAR + 1:
+        return ""
+    try:
+        anteriores = [
+            float(v) for v in totales[-(tiempo.PERIODOS_PARA_COMPARAR + 1):-1]
+        ]
+        ultimo = float(totales[-1])
+    except (TypeError, ValueError):
+        return ""
+    referencia = statistics.median(anteriores)
+    if referencia <= 0:
+        return ""
+    if ultimo / referencia < tiempo.FRACCION_DE_PERIODO_INCOMPLETO:
+        return etiquetas[-1]
+    return ""
+
+
 def _plan_temporal(df, tiempo, medidas, categorias):
     """(Plan, motivo) para un resultado con tiempo.
 
@@ -195,7 +222,12 @@ def _plan_temporal(df, tiempo, medidas, categorias):
         )
 
     series = {str(c): list(tabla[c]) for c in tabla.columns}
-    return Plan(eje, [str(i) for i in tabla.index], series, titulo, True), None
+    totales = [sum(v for v in fila if pd.notna(v)) for fila in tabla.values]
+    incompleto = _ultimo_a_medio_cargar([str(i) for i in tabla.index], totales)
+    return (
+        Plan(eje, [str(i) for i in tabla.index], series, titulo, True, incompleto),
+        None,
+    )
 
 
 # Lo que alguien escribe cuando quiere ver una grafica, sin acentos y en
@@ -388,6 +420,14 @@ def grafica_del_resultado(df: pd.DataFrame) -> tuple[str | None, str | None]:
                 ejes.set_xticklabels(etiquetas)
 
         ejes.set_title(plan.titulo, color=COLOR_TEXTO, fontsize=13, pad=14)
+        if plan.incompleto:
+            # El ultimo punto va a medio cargar: sin decirlo, la linea
+            # dibuja un precipicio que no existe.
+            ejes.text(
+                0.5, 1.005, f"{plan.incompleto} va incompleto",
+                transform=ejes.transAxes, ha="center", va="bottom",
+                color=COLOR_TEXTO_SUAVE, fontsize=9,
+            )
 
         # Una sola serie se nombra sola en el titulo; una leyenda de un
         # elemento es ruido. Con dos o mas es obligatoria: el color no puede
