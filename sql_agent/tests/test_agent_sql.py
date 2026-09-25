@@ -574,6 +574,49 @@ class TestConsultarSql:
 
         assert len(llamadas) == 1
 
+    def test_avisa_cuando_el_ultimo_mes_va_a_medio_cargar(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Sin este aviso, el modelo reporta septiembre como un desplome.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            modulo_agente.tiempo, "ultimo_periodo_incompleto", lambda df: "2026-09"
+        )
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 30"})
+
+        assert "2026-09" in salida
+        assert "incompleto" in salida
+        assert "NO lo presentes como una caida" in salida
+
+    def test_no_deja_repetir_una_consulta_que_ya_fallo(self, engine):
+        # Paso en produccion: el modelo mando dos veces la misma consulta
+        # con `IN ('promotor fijo',...)` contra una columna float, recibio el
+        # mismo error de conversion y se rindio sin probar otra cosa.
+        mala = "SELECT * FROM tabla_que_no_existe"
+        with contexto_peticion(engine) as ctx:
+            primera = consultar_sql.invoke({"query": mala})
+            segunda = consultar_sql.invoke({"query": mala})
+
+        assert "ejecutar la consulta" in primera.lower()
+        assert "identica a una que ya fallo" in segunda
+        assert "No la repitas" in segunda
+        assert len(ctx.consultas_fallidas) == 1
+
+    def test_el_no_repetir_ignora_espacios_y_mayusculas(self, engine):
+        with contexto_peticion(engine):
+            consultar_sql.invoke({"query": "SELECT * FROM tabla_que_no_existe"})
+            otra = consultar_sql.invoke(
+                {"query": "select   *   FROM   tabla_que_no_existe"}
+            )
+        assert "identica a una que ya fallo" in otra
+
+    def test_una_consulta_distinta_si_se_ejecuta(self, engine):
+        with contexto_peticion(engine):
+            consultar_sql.invoke({"query": "SELECT * FROM tabla_que_no_existe"})
+            buena = consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 30"})
+        assert "tienda-0" in buena
+
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "DROP TABLE ventas"})

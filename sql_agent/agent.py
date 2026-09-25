@@ -44,6 +44,7 @@ import bitacora
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from sugerencias import sugerir
+import tiempo
 from formatting import formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
@@ -405,6 +406,9 @@ class ContextoPeticion:
     # El idioma detectado de la pregunta, para los textos que escribe el
     # servicio y no el modelo.
     idioma: str = idiomas.POR_DEFECTO
+    # Las consultas que ya fallaron en esta vuelta, normalizadas, con su
+    # error. Evita que el modelo reintente LETRA POR LETRA lo mismo.
+    consultas_fallidas: dict[str, str] = field(default_factory=dict)
     # Cuando empezo la peticion, para saber cuanto queda del presupuesto.
     inicio: float = field(default_factory=time.monotonic)
     # Lo pone la API cuando llega un mensaje nuevo del mismo chat. No hay
@@ -1172,6 +1176,23 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "pesada y sugierele preguntar por un retailer o un periodo "
             "concretos."
         )
+    # Identica a una que ya fallo en esta misma pregunta: no tiene sentido
+    # mandarla otra vez. Paso en produccion -- el modelo escribio dos veces
+    # `[status_of_promoter] IN ('promotor fijo','promotor doble')` contra una
+    # columna float, recibio el mismo error de conversion las dos veces y se
+    # rindio sin probar nada distinto.
+    huella = " ".join(query.split()).casefold()
+    fallo_antes = ctx.consultas_fallidas.get(huella)
+    if fallo_antes:
+        bitacora.paso("repitio una consulta que ya habia fallado", bitacora.NOTA)
+        return (
+            "Esta consulta es identica a una que ya fallo en esta misma "
+            f"pregunta, con este error: {fallo_antes} No la repitas. Cambia "
+            "algo concreto -- el tipo del valor que comparas, la columna, la "
+            "tabla -- y si no sabes que hay del otro lado, miralo primero "
+            "con `describir_objeto` o `valores_distintos`."
+        )
+
     comenzo = time.monotonic()
     bitacora.paso(f"SQL: {' '.join(query.split())}", bitacora.SQL)
     try:
@@ -1194,6 +1215,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             " ".join(query.split())[:400],
         )
         bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}", bitacora.ERROR)
+        ctx.consultas_fallidas[huella] = str(error)[:300]
         if _es_por_tiempo(error) or tardo >= presupuesto:
             # Se agoto el presupuesto, no es un error de sintaxis: decirselo
             # tal cual para que acote en vez de reintentar lo mismo.
@@ -1305,6 +1327,18 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         ctx.sugerencias = sugerir(ctx.pregunta, df, query)
 
     partes = [resultado.texto]
+
+    # El mes que va a medio cargar. Sin esto, "ventas por mes" contesta que
+    # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
+    # aclara que el mes va por la mitad: el numero es correcto y la lectura
+    # es un desplome que no ocurrio.
+    incompleto = tiempo.ultimo_periodo_incompleto(df)
+    if incompleto:
+        partes.append(
+            f"OJO: {incompleto} todavia va incompleto -- el periodo no ha "
+            "terminado de cargar, por eso sale mucho mas bajo. Dilo al "
+            "responder y NO lo presentes como una caida."
+        )
 
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
     # que tendria que cambiar para que la haya. Sin esto no se entera de que
