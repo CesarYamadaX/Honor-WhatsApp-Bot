@@ -377,6 +377,22 @@ def es_select(sql: str) -> bool:
 # solo, apuntando a rutas que no existen. Ver `_sin_enlaces_inventados`.
 _ENLACE_SIN_DESTINO = re.compile(r"\[([^\]\n]+)\]\((?!https?://)[^)\n]*\)")
 
+# El modelo cierra ofreciendo mas trabajo ("¿Quieres que lo abra por
+# cadena?"), y debajo va la ficha de sugerencias que arma el servicio. Son
+# tres preguntas en un mensaje y la del modelo es la peor de las tres: no
+# dice si lo que ofrece se puede o no. Ver `_sin_ofrecimiento_propio`.
+_OFRECIMIENTO_FINAL = re.compile(
+    r"(\bquieres\b|\bgustas\b|te\s+gustaria|\bgustaría\b|"
+    r"puedo\s+(?:sacar|armar|hacer|prepararte|mandarte|darte)|"
+    r"dime\s+si|avisame\s+si|avísame\s+si|"
+    r"would\s+you\s+like|do\s+you\s+want|i\s+can\s+also|let\s+me\s+know|"
+    r"需要|要不要|告诉我)",
+    re.IGNORECASE,
+)
+# Hasta donde se considera "la despedida" y no contenido. Un parrafo largo
+# que casualmente termine en pregunta es una respuesta, no un ofrecimiento.
+MAX_LARGO_DEL_OFRECIMIENTO = 220
+
 
 class ConsultaCancelada(Exception):
     """El usuario mando otra pregunta (o pidio cancelar) y esta ya no importa."""
@@ -1709,6 +1725,29 @@ class SQLAgent:
         )
 
     @staticmethod
+    def _sin_ofrecimiento_propio(texto: str) -> str:
+        """Quita la pregunta con la que el modelo cierra, si la hay.
+
+        Solo se llama cuando el servicio YA tiene sugerencias que pegar: sin
+        esto el mensaje termina con la pregunta del modelo ("¿Quieres que te
+        lo abra por cadena?") y debajo la lista de "Tambien te puedo decir:".
+        Tres preguntas seguidas, y la del modelo es la que no se puede
+        confiar -- la escribe sin haber mirado si eso se puede consultar.
+
+        Se recorta el ULTIMO parrafo, y solo si es corto y OFRECE algo. No
+        basta con que termine en interrogacion: "¿Revisaste la hoja
+        Raw_Data?" al final de un parrafo de contenido es contenido, y
+        perderlo es peor que dejar una pregunta de mas.
+        """
+        partes = texto.rstrip().split("\n\n")
+        ultimo = partes[-1].strip()
+        if len(partes) < 2 or len(ultimo) > MAX_LARGO_DEL_OFRECIMIENTO:
+            return texto
+        if not _OFRECIMIENTO_FINAL.search(ultimo):
+            return texto
+        return "\n\n".join(partes[:-1]).rstrip()
+
+    @staticmethod
     def _sin_enlaces_inventados(texto: str) -> str:
         """Quita los enlaces de descarga que el modelo se inventa.
 
@@ -1759,7 +1798,9 @@ class SQLAgent:
             # final lo que se puede preguntar despues.
             ofrecimiento = idiomas.sugerencias(self.idioma, ctx.sugerencias)
             if ofrecimiento:
-                texto = f"{texto}\n\n{ofrecimiento}"
+                # El recorte va DESPUES de `_recordar`: en el historial se
+                # guarda lo que el modelo escribio de verdad.
+                texto = f"{self._sin_ofrecimiento_propio(texto)}\n\n{ofrecimiento}"
             return texto, list(ctx.archivos)
 
     def _recordar(self, pregunta: str, respuesta: str) -> None:

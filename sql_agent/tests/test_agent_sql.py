@@ -630,6 +630,44 @@ class TestConsultarSql:
         assert "No la ejecute" in salida
         assert "Liverpool Offline" in salida
 
+    def test_no_quedan_tres_preguntas_al_final_del_mensaje(self):
+        # El modelo cierra con su propia oferta y debajo va la ficha de
+        # sugerencias que arma el servicio: el usuario recibe la respuesta y
+        # tres preguntas. La del modelo es la que sobra -- la escribe sin
+        # haber mirado si eso se puede consultar.
+        recortar = modulo_agente.SQLAgent._sin_ofrecimiento_propio
+        texto = (
+            "En agosto HONOR vendio 160,909 unidades.\n\n"
+            "Te adjunto el Excel.\n\n"
+            "¿Quieres que te lo abra por cadena?"
+        )
+        assert recortar(texto) == (
+            "En agosto HONOR vendio 160,909 unidades.\n\nTe adjunto el Excel."
+        )
+
+    def test_el_ofrecimiento_se_reconoce_en_los_tres_idiomas(self):
+        recortar = modulo_agente.SQLAgent._sin_ofrecimiento_propio
+        for cierre in (
+            "Si quieres te saco el detalle por tienda.",
+            "Would you like the breakdown by chain?",
+            "需要我按渠道拆分吗？",
+        ):
+            assert recortar(f"160,909 unidades.\n\n{cierre}") == "160,909 unidades."
+
+    def test_una_pregunta_que_es_contenido_no_se_toca(self):
+        # No basta con que el parrafo acabe en interrogacion: perder
+        # contenido es peor que dejar una pregunta de mas.
+        recortar = modulo_agente.SQLAgent._sin_ofrecimiento_propio
+        for texto in (
+            "Elektra cayo 12%.\n\n¿La causa? Dos tiendas cerraron en agosto.",
+            "Dato.\n\nEl reporte incluye las seis cadenas con su desglose "
+            "mensual y el comparativo contra el mismo periodo del ano pasado, "
+            "mas la hoja de datos crudos. ¿Revisaste la hoja Raw_Data?",
+            "En agosto HONOR vendio 160,909 unidades.",
+            "160,909 unidades.\n\nElektra fue la que mas movio, con 31,402.",
+        ):
+            assert recortar(texto) == texto
+
     def test_rechaza_sql_que_no_es_select(self, engine):
         with contexto_peticion(engine) as ctx:
             salida = consultar_sql.invoke({"query": "DROP TABLE ventas"})
