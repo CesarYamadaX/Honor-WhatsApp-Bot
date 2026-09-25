@@ -27,7 +27,7 @@ VENTA                                    CATÁLOGOS                 PROMOTORÍA
      │ insumo                                                   [ID] [Coppel Name]
      ▼                                                          [Region] [RetailName]
  9 vistas vw_ETL_*        ──(B)──►                                     ▲
- (una por retailer)                                                    │ por NOMBRE
+ (Liverpool usa DOS)                                                   │ por NOMBRE
      │ unión                                                           │ (parcial)
      ▼                            ─────────────────────────────────────┘
  ETL_Consolidado_B2B
@@ -48,6 +48,31 @@ PRECIOS  [Scrap]
         └── mismo vocabulario que UNICOS$.[HOMOLOGACION MODELO]
             (156 de los 183 modelos que Elektra vendio en agosto 2026)
 ```
+
+## Una vista `vw_ETL_*` no es siempre la cadena entera
+
+Son nueve vistas y seis cadenas, así que la cuenta no cierra sola. Medido en
+agosto de 2026 contra las nueve, sumando `[QTY]`:
+
+| Vista | Unidades | Contra la consolidada |
+|---|---|---|
+| `vw_ETL_COPPEL` | 483 430 | = `Coppel` ✔ (su `_IOT` está **vacía**) |
+| `vw_ETL_Elektra` | 167 949 | = `ELEKTRA` ✔ |
+| `vw_ETL_Sears` | 17 639 | = `SEARS` ✔ |
+| `vw_ETL_TELCEL_B2B` | 1 074 478 | = los 6 canales `TELCEL *` ✔ |
+| `vw_ETL_Movistar_CAC` | 22 038 | = `Movistar CACs` + `Movistar Call Center` ✔ |
+| `vw_ETL_ATT_Postpaid` | 118 758 | = `AT&T Cacs` + `AT&T Dealers` + `Unknown` ✔ |
+| **`vw_ETL_Liverpool`** | **99 040** | **solo el 57%** de Liverpool |
+| **`vw_ETL_Liverpool_IOT`** | **73 608** | **el 43% restante** |
+
+**Liverpool es la única cadena partida en dos**, y usar una sola no da error:
+da la mitad. 99 040 + 73 608 = **172 648**, que es exactamente
+`Liverpool Offline` (130 876) + `Liverpool Online` (41 772) en la consolidada.
+
+A "cuánto vendió Liverpool en agosto de 2026" el bot contestaba **99 040**, sin
+una sola señal de que faltaba algo. `catalogo.avisos_de_media_cadena()` lo
+detecta antes de responder y le dice al modelo que vuelva a consultar la cadena
+completa; verificado contra el bot, ahora contesta 172 648.
 
 ## Las tres rutas de homologación
 
