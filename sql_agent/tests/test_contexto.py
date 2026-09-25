@@ -321,6 +321,50 @@ class TestLaHojaNoContradiceAlMensaje:
         assert "v.[Brand] IN (?, ?)" in sql
         assert {"HONOR", "SAMSUNG"} <= set(parametros)
 
+    def test_la_cadena_del_sql_acota_aunque_el_resultado_no_la_traiga(self):
+        # "Ventas de Coppel por mes en 2026" son nueve filas de Year/Month/
+        # Total: la cadena solo vive en el WHERE. Sin leerla de ahi, la hoja
+        # salia con 18 034 947 unidades -- el mercado entero -- contra los
+        # 4 186 855 del mensaje. Medido contra el bot el 25/09/2026.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes(),
+            motor,
+            "SELECT [Year],[Month],SUM([QTY]) FROM ETL_Consolidado_B2B "
+            "WHERE [Retail] = 'Coppel' GROUP BY [Year],[Month]",
+        )
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Retail] IN (?)" in sql
+        assert "Coppel" in parametros
+
+    def test_la_cadena_sale_del_nombre_de_la_tabla_cuando_no_hay_otra_forma(self):
+        # Tercera forma de decir de que cadena es el reporte: la tabla cruda.
+        # COPPEL_B2B NO tiene columna [Retail] -- la cadena esta en el nombre
+        # y en ningun otro lado. Medido contra el bot el 25/09/2026: el
+        # modelo eligio justo esa ruta y la hoja volvia a traer el mercado.
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            self._por_mes(),
+            motor,
+            "SELECT YEAR([Dia]),MONTH([Dia]),SUM([Unidades]) "
+            "FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B]",
+        )
+        sql, parametros = self._sql_de_la_hoja(motor)
+
+        assert "v.[Retail] IN (?)" in sql
+        assert "Coppel" in parametros
+
+    def test_los_literales_de_la_cadena_no_se_escriben_a_mano(self):
+        # Telcel son SEIS canales y Liverpool DOS. Escribir 'TELCEL' a mano
+        # no casaria con ninguno: los valores salen de la columna real.
+        telcel = contexto._retail_de_la_cadena("TELCEL")
+        assert len(telcel) == 6 and "TELCEL RETAIL" in telcel
+        assert contexto._retail_de_la_cadena("LIVERPOOL") == [
+            "Liverpool Offline", "Liverpool Online",
+        ]
+        assert contexto._retail_de_la_cadena(None) == []
+
     def test_la_cadena_tambien_acota(self):
         # Los valores salen del resultado, no de un literal inventado: en la
         # consolidada la cadena es 'Liverpool Offline', no 'LIVERPOOL'.
@@ -404,6 +448,50 @@ class TestElTopeNoParteUnTotal:
 
         assert f"TOP {contexto.MAX_FILAS_POR_HOJA}" in sql
         assert contexto.MAX_FILAS_POR_HOJA == 2000
+
+
+class TestCuandoUnaHojaSaleTopada:
+    """Un tope que corta en silencio es el mismo bug que el de 2 000 filas:
+    dos numeros que no cuadran en el mismo archivo. El tope sigue
+    existiendo -- lo impone el limite de adjunto de WhatsApp, no la base --
+    pero cuando muerde hay que decirlo.
+    """
+
+    def _hoja(self, nombre, filas):
+        return {nombre: pd.DataFrame({"Unidades": range(filas)})}
+
+    def test_una_hoja_en_su_tope_se_reporta(self):
+        assert contexto.hojas_cortadas(
+            self._hoja("Raw_Data", contexto.MAX_FILAS_RAW_DATA)
+        ) == ["Raw_Data"]
+        assert contexto.hojas_cortadas(
+            self._hoja("Ventas por tienda", contexto.MAX_FILAS_DE_VENTA)
+        ) == ["Ventas por tienda"]
+
+    def test_una_hoja_que_cabe_entera_no_se_reporta(self):
+        # 58 066 son los tres meses de Coppel, el reporte tipico.
+        assert contexto.hojas_cortadas(self._hoja("Raw_Data", 58066)) == []
+
+    def test_las_hojas_de_catalogo_no_entran_aqui(self):
+        # Esas si se topan a proposito y no pretenden sumar ningun total.
+        assert contexto.hojas_cortadas(
+            self._hoja("Tiendas", contexto.MAX_FILAS_POR_HOJA)
+        ) == []
+
+    def test_sin_hojas_no_revienta(self):
+        assert contexto.hojas_cortadas({}) == []
+        assert contexto.hojas_cortadas(None) == []
+
+    def test_el_tope_del_crudo_cubre_un_anio_de_la_cadena_mas_grande(self):
+        # Medido el 25 de septiembre de 2026: un anio de Coppel son 164 507
+        # filas ya agrupadas, y toda la historia 301 319. Con el tope viejo
+        # de 80 000 el anio se cortaba a la mitad.
+        assert contexto.MAX_FILAS_RAW_DATA >= 164507
+
+    def test_pero_no_tanto_como_para_no_caber_en_whatsapp(self):
+        # Medido con el pivot ya armado: 500 000 filas pesan 18.1 MB y ya no
+        # pasan el limite de 16 MB; 300 000 quedan en ~11.6 MB.
+        assert contexto.MAX_FILAS_RAW_DATA <= 400000
 
 
 class TestDatosCrudosParaElPivot:

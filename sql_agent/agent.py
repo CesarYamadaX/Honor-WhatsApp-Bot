@@ -38,7 +38,7 @@ from catalogo import (
     indice,
     valores_conocidos,
 )
-from contexto import contexto_del_resultado
+from contexto import contexto_del_resultado, hojas_cortadas as contexto_hojas_cortadas
 import excel_pivot
 from excel_exporter import ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
@@ -1214,6 +1214,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # Un filtro cuyo valor no existe en esa columna no da error: da cero
     # filas, y si la consulta trae otras cadenas ni siquiera viene vacia.
     # `[Retail] IN ('LIVERPOOL')` se lleva Liverpool entero en silencio.
+    # Media cadena: Coppel y Liverpool viven partidos en dos, y consultar uno
+    # solo da de menos sin dar error. Esto BLOQUEA en vez de avisar, y no
+    # empezo asi: primero se pegaba un "OJO:" al resultado, el modelo lo leyo
+    # y lo ignoro -- ya habia gastado dos minutos y tenia el Excel armado, y
+    # contesto igual con el 83% de Coppel. Un aviso es opcional; un numero
+    # mal por el 17% no puede depender de que al modelo le parezca bien.
+    media_cadena = avisos_de_media_cadena(query)
+    if media_cadena:
+        bitacora.paso("la consulta es solo parte de su cadena", bitacora.NOTA)
+        return "No la ejecute. " + " ".join(media_cadena)
+
     no_casan = filtros_que_no_casan(query)
     if no_casan:
         bitacora.paso("un filtro no casa con ningun valor de la columna", bitacora.NOTA)
@@ -1300,6 +1311,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # `not df.empty`: sin filas no hay nada que exportar, y pedir el archivo
     # no puede convertir un "sin resultados" en un error de exportacion.
     excel = None
+    contexto: dict = {}
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -1371,12 +1383,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "responder y NO lo presentes como una caida."
         )
 
-    # Media cadena. Avisa en vez de bloquear: el numero que salio es
-    # correcto para lo que se consulto, lo que falta es decir de que mitad
-    # es -- o volver a preguntar por la cadena entera.
-    for aviso in avisos_de_media_cadena(query):
-        bitacora.paso("la vista consultada es solo parte de su cadena", bitacora.NOTA)
-        partes.append(f"OJO: {aviso}")
+    # Una hoja que salio topada no suma el total de la respuesta, y quien
+    # abre el Excel no tiene como saberlo. Es el mismo problema que el tope
+    # de 2 000 ya habia causado: dos numeros que no cuadran en el mismo
+    # archivo, y el que se queda es el del archivo.
+    for hoja in contexto_hojas_cortadas(contexto):
+        partes.append(
+            f"OJO: la hoja '{hoja}' del Excel salio con el maximo de filas "
+            "que cabe en un adjunto, asi que esta cortada y NO suma el total "
+            "de arriba. Dilo al responder, y si hace falta el detalle "
+            "completo sugiere pedir un periodo mas corto."
+        )
 
     # Solo cuando la pidieron: se le dice al agente POR QUE no hay grafica y
     # que tendria que cambiar para que la haya. Sin esto no se entera de que

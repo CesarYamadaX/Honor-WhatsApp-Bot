@@ -44,6 +44,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 import tiempo
+from catalogo import valores_conocidos
 
 logger = logging.getLogger("sql_agent.contexto")
 
@@ -105,12 +106,46 @@ _PROHIBIDOS_EN_HOJA = ':\\/?*[]'
 # Tope de filas para la hoja de datos crudos que alimenta el PIVOT. Se
 # agrupa por tienda, marca y mes -- sin el modelo, que ya tiene su propia
 # hoja mas fina ("Ventas por tienda") -- porque a nivel modelo la misma
-# consulta de tres meses de Elektra da 127 602 filas, cuatro veces mas. Sin
-# modelo, medido en agosto de 2026: Elektra 28 887, Coppel 58 066 (la tabla
-# cruda mas grande, 12M filas). 80 000 deja margen sin acercarse al limite
-# de adjunto de WhatsApp (16 MB por defecto): a ~7-8 bytes por celda, 80 000
-# filas x 5 columnas pesan bajo 3 MB antes del pivot.
-MAX_FILAS_RAW_DATA = 80000
+# consulta de tres meses de Elektra da 127 602 filas, cuatro veces mas.
+#
+# Lo que entrega esta hoja YA AGRUPADA, medido el 25 de septiembre de 2026
+# (las tablas crudas detras suman 37M de filas: Telcel 14.8M, Coppel 12.2M,
+# AT&T 5.0M, Liverpool 3.4M, Elektra 1.7M, Sears 90k):
+#
+#   cadena      1 mes    3 meses    1 anio   todo (2024->hoy)
+#   COPPEL     19 355     58 066   164 507        301 319
+#   AT&T        9 785     29 068    86 620        115 976
+#   ELEKTRA     9 540     28 887    76 253        106 317
+#   TELCEL      8 865     26 520    69 576        119 821
+#   LIVERPOOL   2 116      6 341    16 878         35 806
+#   SEARS         717      2 159     5 561          7 964
+#
+# Con el tope viejo de 80 000, un anio de Coppel se cortaba a la mitad.
+#
+# El techo NO lo pone la base: lo pone el limite de adjunto de WhatsApp
+# (MAX_FILE_MB, 16 MB por defecto). Un archivo mas grande no se entrega --
+# el sidecar avisa y el usuario se queda sin nada. Medido con el PIVOT ya
+# armado: 80 000 filas pesan 4.5 MB, 200 000 pesan 8.4 MB, 500 000 pesan
+# 18.1 MB (ya no pasa) y un millon 34.3 MB. 300 000 quedan en ~11.6 MB, con
+# margen de sobra, y el pivot tarda 25-30s de los 90 que tiene.
+MAX_FILAS_RAW_DATA = 300000
+
+# Que hoja se corta con que tope. Si una sale EXACTAMENTE con su tope de
+# filas es que el TOP la corto, y entonces sus totales no cuadran con la
+# respuesta: eso hay que decirlo, no dejarlo pasar. Ver `hojas_cortadas`.
+_TOPES = {
+    "Raw_Data": MAX_FILAS_RAW_DATA,
+    "Ventas por tienda": MAX_FILAS_DE_VENTA,
+}
+
+
+def hojas_cortadas(hojas: dict[str, pd.DataFrame]) -> list[str]:
+    """Las hojas de venta que salieron topadas, y por eso no suman el total."""
+    return [
+        nombre
+        for nombre, tope in _TOPES.items()
+        if (hoja := (hojas or {}).get(nombre)) is not None and len(hoja) >= tope
+    ]
 
 # Cuantos modelos del resultado se desglosan. Un reporte con cien modelos no
 # se lee de todos modos: se toman los mas vendidos del propio resultado.
@@ -124,12 +159,17 @@ _ES_MODELO = re.compile(
 _ES_RETAIL = re.compile(r".*(retail|cadena)", re.IGNORECASE)
 _ES_MARCA = re.compile(r"^\[?(brand|marca)\]?$", re.IGNORECASE)
 
-# `[Brand] = 'HONOR'` o `[Brand] IN ('HONOR','SAMSUNG')`, para cuando el
-# resultado viene agregado y ya no trae la columna.
-_MARCA_EN_SQL = re.compile(
-    r"\[?\bbrand\b\]?\s*(?:=|in)\s*\(?\s*((?:'[^']*'\s*,?\s*)+)\)?",
-    re.IGNORECASE,
-)
+# `[Brand] = 'HONOR'` o `[Retail] IN ('Liverpool Offline','Liverpool
+# Online')`, para cuando el resultado viene agregado y ya no trae la columna.
+# "Ventas de Coppel por mes" es justo eso: nueve filas de Year/Month/Total
+# donde la cadena solo vive en el WHERE.
+_EN_SQL = {
+    columna: re.compile(
+        rf"\[?\b{columna}\b\]?\s*(?:=|in)\s*\(?\s*((?:'[^']*'\s*,?\s*)+)\)?",
+        re.IGNORECASE,
+    )
+    for columna in ("brand", "retail")
+}
 _LITERAL = re.compile(r"'([^']*)'")
 
 # Cuantos valores distintos puede tener un filtro antes de dejar de serlo. Si
@@ -461,13 +501,38 @@ def acotado_del_resultado(df: pd.DataFrame, query: str = "") -> dict[str, list[s
         if 0 < len(valores) <= MAX_VALORES_ACOTADOS:
             acotado[destino] = valores
 
-    if "Brand" not in acotado:
-        encontrado = _MARCA_EN_SQL.search(query or "")
-        if encontrado:
-            marcas = sorted(set(_LITERAL.findall(encontrado.group(1))))
-            if 0 < len(marcas) <= MAX_VALORES_ACOTADOS:
-                acotado["Brand"] = marcas
+    for destino, patron in (("Brand", _EN_SQL["brand"]), ("Retail", _EN_SQL["retail"])):
+        if destino in acotado:
+            continue
+        encontrado = patron.search(query or "")
+        if not encontrado:
+            continue
+        valores = sorted(set(_LITERAL.findall(encontrado.group(1))))
+        if 0 < len(valores) <= MAX_VALORES_ACOTADOS:
+            acotado[destino] = valores
+
+    # Y la tercera forma de decir de que cadena es: el nombre de la tabla.
+    # "Ventas de Coppel por mes" sale de COPPEL_B2B, que NO tiene columna
+    # [Retail] -- la cadena esta en el nombre y en ningun otro lado.
+    if "Retail" not in acotado:
+        valores = _retail_de_la_cadena(retailer_del_resultado(df, query))
+        if valores:
+            acotado["Retail"] = valores
     return acotado
+
+
+def _retail_de_la_cadena(cadena: str | None) -> list[str]:
+    """Como se llama esa cadena en [Retail] de la consolidada.
+
+    No se escriben a mano: se filtran los valores REALES de la columna por
+    la cadena que nombran. Telcel son seis canales y Liverpool dos, y
+    escribir 'TELCEL' o 'LIVERPOOL' a mano no casaria con ninguno -- que es
+    justo el error que `catalogo.filtros_que_no_casan` existe para atrapar.
+    """
+    if not cadena:
+        return []
+    conocidos = valores_conocidos("ETL_Consolidado_B2B", "Retail") or []
+    return [v for v in conocidos if _cual_retailer(v) == cadena]
 
 
 def periodo(df: pd.DataFrame) -> tuple[str, str] | None:

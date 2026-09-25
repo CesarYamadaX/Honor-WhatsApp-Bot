@@ -130,16 +130,42 @@ class TestConceptosDelNegocio:
     def test_si_ya_estan_las_dos_no_falta_nada(self):
         for query in (
             "SELECT * FROM vw_ETL_Liverpool UNION ALL SELECT * FROM vw_ETL_Liverpool_IOT",
+            "SELECT * FROM vw_ETL_COPPEL UNION ALL SELECT * FROM vw_ETL_COPPEL_IOT",
             # El sufijo _IOT no puede leerse como la vista de al lado.
             "SELECT SUM([QTY]) FROM vw_ETL_Liverpool_IOT",
+            "SELECT SUM([QTY]) FROM vw_ETL_COPPEL_IOT",
             "SELECT * FROM ETL_Consolidado_B2B WHERE [Retail] LIKE 'Liverpool%'",
         ):
             assert catalogo.avisos_de_media_cadena(query) == []
 
-    def test_las_demas_cadenas_si_cuadran_y_no_se_avisan(self):
-        # vw_ETL_COPPEL da el Coppel entero (su _IOT esta vacia), y Elektra,
-        # Sears, Movistar y Telcel casan al dedo con la consolidada.
-        for vista in ("vw_ETL_COPPEL", "vw_ETL_Elektra", "vw_ETL_TELCEL_B2B"):
+    def test_coppel_tambien_va_partido_y_la_medicion_de_un_mes_lo_escondia(self):
+        # Esto empezo siendo una prueba de que Coppel SI cuadraba, escrita
+        # sobre una medicion de agosto de 2026 -- el unico mes de 2026 en que
+        # vw_ETL_COPPEL_IOT viene vacio. Sobre toda la historia no cuadra:
+        # 19 542 084 + 880 689 = 20 422 773, que es 'Coppel' en la
+        # consolidada. En produccion, "ventas de Coppel por mes en 2026"
+        # contestaba 4 186 855 de 5 067 544: faltaba el 17%.
+        avisos = catalogo.avisos_de_media_cadena("SELECT * FROM vw_ETL_COPPEL")
+        assert len(avisos) == 1 and "vw_ETL_COPPEL_IOT" in avisos[0]
+
+    def test_tambien_cuenta_la_tabla_cruda_no_solo_la_vista(self):
+        # El caso de produccion fue justo por ahi: el modelo consulto
+        # COPPEL_B2B directo. Y la tabla de Liverpool se llama
+        # LIVERPOOL_B2B$, con un $ que un \b no sabe delimitar.
+        for tabla, falta in (
+            ("[RAW_DATA_B2B].dbo.[COPPEL_B2B]", "Coppel_IOT"),
+            ("[RAW_DATA_B2B].dbo.[LIVERPOOL_B2B$]", "Liverpool_IOT"),
+        ):
+            avisos = catalogo.avisos_de_media_cadena(f"SELECT * FROM {tabla}")
+            assert len(avisos) == 1 and falta in avisos[0]
+            # A las crudas no se les ofrece el UNION: Coppel_IOT no tiene ni
+            # fecha ni cantidad, y ponerlas en la misma forma es lo que hace
+            # justamente la vista vw_ETL_*.
+            assert "UNION ALL" not in avisos[0]
+
+    def test_las_cadenas_de_una_sola_vista_no_se_avisan(self):
+        for vista in ("vw_ETL_Elektra", "vw_ETL_TELCEL_B2B", "vw_ETL_Sears",
+                      "vw_ETL_Movistar_CAC", "EKT_B2B"):
             assert catalogo.avisos_de_media_cadena(f"SELECT * FROM {vista}") == []
 
     def test_un_filtro_con_un_valor_que_no_existe_se_detecta(self):

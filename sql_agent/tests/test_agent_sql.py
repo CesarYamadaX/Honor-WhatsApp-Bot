@@ -630,11 +630,29 @@ class TestConsultarSql:
         assert "No la ejecute" in salida
         assert "Liverpool Offline" in salida
 
-    def test_avisa_cuando_la_vista_es_solo_media_cadena(
+    def test_avisa_cuando_una_hoja_del_excel_salio_cortada(
         self, engine, tmp_path, monkeypatch
     ):
-        # Avisa en vez de bloquear: el numero que salio es correcto para lo
-        # que se consulto; lo que falta es decir de que mitad es.
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            modulo_agente, "contexto_hojas_cortadas", lambda hojas: ["Raw_Data"]
+        )
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke(
+                {"query": "SELECT * FROM ventas WHERE monto < 30"}
+            )
+
+        assert "OJO:" in salida
+        assert "'Raw_Data'" in salida
+        assert "NO suma el total" in salida
+
+    def test_no_ejecuta_una_consulta_que_es_solo_media_cadena(
+        self, engine, tmp_path, monkeypatch
+    ):
+        # Esto empezo como un aviso pegado al resultado, y no alcanzo: el
+        # modelo lo leyo y contesto igual con el 83% de Coppel -- ya habia
+        # gastado dos minutos y tenia el Excel armado. Un numero mal por el
+        # 17% no puede depender de que al modelo le parezca bien.
         monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
         monkeypatch.setattr(
             modulo_agente,
@@ -646,10 +664,10 @@ class TestConsultarSql:
                 {"query": "SELECT * FROM ventas WHERE monto < 30"}
             )
 
-        assert "OJO:" in salida
+        assert "No la ejecute" in salida
         assert "SOLO una parte de Liverpool" in salida
-        # Y el resultado sigue ahi: no se bloqueo nada.
-        assert "tienda-0" in salida
+        # Y los datos NO salieron: la consulta no llego a correr.
+        assert "tienda-0" not in salida
 
     def test_no_quedan_tres_preguntas_al_final_del_mensaje(self):
         # El modelo cierra con su propia oferta y debajo va la ficha de

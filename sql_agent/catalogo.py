@@ -67,36 +67,77 @@ _LITERAL = re.compile(r"'((?:[^']|'')*)'")
 # 'HONOR', no la lista alfabetica desde ABS.
 MAX_VALORES_SUGERIDOS = 25
 
-# Liverpool es la UNICA cadena que vive partida en dos vistas, y usar una
-# sola no da error: da la mitad. Medido en agosto de 2026,
-# vw_ETL_Liverpool son 99 040 unidades y vw_ETL_Liverpool_IOT otras 73 608;
-# juntas dan 172 648, que es exactamente lo que la consolidada reporta para
-# 'Liverpool Offline' + 'Liverpool Online'. El bot contesto 99 040 a
-# "cuanto vendio Liverpool en agosto": el 57% de la verdad, sin una sola
-# señal de que faltaba algo.
+# Coppel y Liverpool viven PARTIDOS en dos vistas cada uno, y usar una sola
+# no da error: da de menos, en silencio. Medido el 25 de septiembre de 2026
+# sobre toda la historia, y cuadra al dedo con la consolidada:
 #
-# Las demas cuadran: vw_ETL_COPPEL da el Coppel entero (su _IOT esta vacia),
-# y Elektra, Sears, Movistar y Telcel casan al dedo con la consolidada.
+#   vista                    2024        2025        2026         TODO
+#   vw_ETL_COPPEL       7 860 449   7 494 780   4 186 855   19 542 084
+#   vw_ETL_COPPEL_IOT           0           0     880 689      880 689
+#                                           suma =  20 422 773 = 'Coppel'
+#   vw_ETL_Liverpool    1 597 169   1 601 575     875 494    4 074 238
+#   vw_ETL_Liverpool_IOT        0      12 163     721 254      733 417
+#          suma = 4 807 655 = 'Liverpool Offline' + 'Liverpool Online'
+#
+# El feed _IOT es cosa de 2026: cero en 2024 y 2025 en las dos cadenas. Por
+# eso una medicion de UN mes puede no verlo -- en agosto de 2026 el de
+# Coppel viene vacio, y de ahi salio la conclusion equivocada de que esa
+# vista traia el Coppel entero. No lo trae: en 2026 le falta el 17%.
+#
+# Los dos casos se vieron en produccion. "Cuanto vendio Liverpool en agosto
+# de 2026" contestaba 99 040 de 172 648 (el 57%), y "ventas de Coppel por
+# mes en 2026" contestaba 4 186 855 de 5 067 544 (faltaban 880 689).
+#
+# Las demas cadenas si tienen una sola vista: Elektra, Sears, Movistar y
+# Telcel casan al dedo con la consolidada.
+# La tabla CRUDA tiene el mismo problema que su vista, y ahi el UNION ni
+# siquiera es una opcion: Coppel_IOT es [Tienda][Familia][Marca][Modelo]
+# [Attribute][Value] -- ni fecha ni cantidad --, y quien las pone en la misma
+# forma es justamente la vista vw_ETL_*. Por eso el remedio que se ofrece
+# para las crudas es solo la consolidada.
+_AVISO = (
+    "{objeto} es SOLO una parte de {cadena}: la otra esta en {otra}. {medido} "
+    "NO contestes con ese numero como si fuera {cadena} entero. Salvo que te "
+    "hayan pedido justamente esa parte, vuelve a consultar la cadena completa "
+    "con ETL_Consolidado_B2B y [Retail] IN ({literales}){union}."
+)
+_UNION = ", o haz UNION ALL de las dos vistas vw_ETL_*"
+
+
+def _media(objeto, otra, cadena, literales, medido, union):
+    return (objeto, otra, _AVISO.format(
+        objeto=objeto, otra=otra, cadena=cadena, literales=literales,
+        medido=medido, union=_UNION if union else ""))
+
+
+_LP = ("Medido en agosto de 2026, esto solo da 99 040 unidades de las "
+       "172 648 que vendio Liverpool -- el 57%.")
+_CP = ("Medido en 2026, esto solo da 4 186 855 unidades de las 5 067 544 "
+       "que vendio Coppel -- le falta el 17%.")
+_LIT_LP = "'Liverpool Offline', 'Liverpool Online'"
+
 _MEDIA_CADENA = (
-    ("vw_ETL_Liverpool", "vw_ETL_Liverpool_IOT",
-     "vw_ETL_Liverpool es SOLO una parte de Liverpool: la otra esta en "
-     "vw_ETL_Liverpool_IOT. Medido en agosto de 2026, esta vista sola da "
-     "99 040 unidades de las 172 648 que vendio Liverpool -- el 57%. NO "
-     "contestes con este numero como si fuera Liverpool. Salvo que te hayan "
-     "pedido justamente esta parte, vuelve a consultar la cadena completa: "
-     "ETL_Consolidado_B2B con [Retail] IN ('Liverpool Offline', 'Liverpool "
-     "Online'), o UNION ALL de las dos vistas."),
+    _media("vw_ETL_Liverpool", "vw_ETL_Liverpool_IOT", "Liverpool", _LIT_LP, _LP, True),
+    _media("vw_ETL_COPPEL", "vw_ETL_COPPEL_IOT", "Coppel", "'Coppel'", _CP, True),
+    _media("LIVERPOOL_B2B$", "Liverpool_IOT", "Liverpool", _LIT_LP, _LP, False),
+    _media("COPPEL_B2B", "Coppel_IOT", "Coppel", "'Coppel'", _CP, False),
 )
 
 
 def avisos_de_media_cadena(query: str) -> list[str]:
     """Avisos por consultar una vista que es solo un pedazo de su cadena."""
-    avisos = []
-    for vista, la_otra, aviso in _MEDIA_CADENA:
-        usa = re.search(rf"\b{re.escape(vista)}\b(?!_)", query, re.IGNORECASE)
-        if usa and not re.search(rf"\b{re.escape(la_otra)}\b", query, re.IGNORECASE):
-            avisos.append(aviso)
-    return avisos
+    # `(?<!\w)...(?!\w)` y no `\b...\b`: la tabla de Liverpool se llama
+    # LIVERPOOL_B2B$ y `\b` detras del `$` nunca casa. De paso, el lookahead
+    # es lo que impide que vw_ETL_COPPEL se reconozca dentro de
+    # vw_ETL_COPPEL_IOT, que seria el aviso justo al reves.
+    def nombra(objeto):
+        return re.search(rf"(?<!\w){re.escape(objeto)}(?!\w)", query, re.IGNORECASE)
+
+    return [
+        aviso
+        for objeto, la_otra, aviso in _MEDIA_CADENA
+        if nombra(objeto) and not nombra(la_otra)
+    ]
 
 
 def _objetos_nombrados(query: str) -> list[str]:
