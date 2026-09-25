@@ -223,6 +223,7 @@ _SUGERENCIAS = {
     ESPANOL: {
         "titulo": "Tambien te puedo decir:",
         "share_honor": "que parte de eso fue HONOR (el share)",
+        "share_sobre_el_mercado": "que share fue eso sobre el total del mercado",
         "por_tienda": "como se reparte por tienda",
         "capa": "el CAPA de esas tiendas, para ver cuanto les falta para su maximo",
         "mismo_periodo_anterior": "como venia el mismo periodo del ano pasado",
@@ -233,6 +234,7 @@ _SUGERENCIAS = {
     INGLES: {
         "titulo": "I can also tell you:",
         "share_honor": "how much of that was HONOR (the share)",
+        "share_sobre_el_mercado": "what share that was of the whole market",
         "por_tienda": "how it breaks down by store",
         "capa": "the CAPA of those stores, to see how far they are from their peak",
         "mismo_periodo_anterior": "how the same period looked last year",
@@ -243,6 +245,7 @@ _SUGERENCIAS = {
     CHINO: {
         "titulo": "我还可以告诉你：",
         "share_honor": "其中荣耀（HONOR）占多少（份额）",
+        "share_sobre_el_mercado": "这个数字在整个市场中占多少份额",
         "por_tienda": "按门店的分布情况",
         "capa": "这些门店的 CAPA，看看距离各自的峰值还有多远",
         "mismo_periodo_anterior": "去年同期的情况",

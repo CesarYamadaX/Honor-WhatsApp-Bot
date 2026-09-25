@@ -50,6 +50,11 @@ _DE_PROMOTORIA = re.compile(r"HCReport", re.IGNORECASE)
 _UN_SOLO_RETAILER = re.compile(r"vw_ETL_|_B2B\b|_IOT\b", re.IGNORECASE)
 _CONSOLIDADO = re.compile(r"ETL_Consolidado_B2B", re.IGNORECASE)
 
+# La consulta ya se acoto a una marca ([Brand] = 'HONOR'). Ahi "que parte de
+# eso fue HONOR" no significa nada -- es el 100% --, pero la pregunta que
+# sigue SI es interesante: cuanto pesa ese numero dentro del mercado.
+_FILTRA_MARCA = re.compile(r"\[?brand\]?\s*(=|in)\s*", re.IGNORECASE)
+
 
 def _tiene(df: pd.DataFrame, patron: re.Pattern) -> bool:
     return any(patron.search(str(c)) for c in df.columns)
@@ -74,7 +79,9 @@ def sugerir(pregunta: str, df: pd.DataFrame, query: str) -> list[str]:
     # filtro la marca (ahi falta el total) ni cuando no la filtro (ahi falta
     # separar la marca).
     if de_venta and not _tiene(df, _ES_MARCA) and not _ES_SHARE.search(pregunta):
-        claves.append("share_honor")
+        claves.append(
+            "share_sobre_el_mercado" if _FILTRA_MARCA.search(query) else "share_honor"
+        )
 
     # Contra que. Sin columna de tiempo no hay periodo con que comparar, y
     # sobre un pronostico no se ofrece: el metodo ya es el mismo mes del ano

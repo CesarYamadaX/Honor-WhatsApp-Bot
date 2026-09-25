@@ -25,6 +25,21 @@ class TestQueSeOfrece:
             "por_tienda",
         ]
 
+    def test_si_la_consulta_ya_filtro_la_marca_el_share_es_otro(self):
+        # "Que parte de eso fue HONOR" sobre una consulta que ya filtro
+        # HONOR es el 100%: no significa nada. Lo que si abre camino es
+        # cuanto pesa ese numero dentro del mercado.
+        df = pd.DataFrame({"Total": [160909]})
+        de_honor = "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] WHERE [Brand] = 'HONOR'"
+        claves = sugerir("cuantas vendio Honor en agosto", df, de_honor)
+
+        assert "share_sobre_el_mercado" in claves
+        assert "share_honor" not in claves
+
+    def test_sin_marca_filtrada_se_ofrece_el_share_de_honor(self):
+        df = pd.DataFrame({"Total": [1268566]})
+        assert "share_honor" in sugerir("ventas totales de Elektra", df, VENTA)
+
     def test_una_serie_mensual_ofrece_comparar_contra_el_ano_pasado(self):
         df = pd.DataFrame({"Año": [2026] * 3, "Mes": [1, 2, 3], "Total": [1, 2, 3]})
         assert "mismo_periodo_anterior" in sugerir("ventas por mes", df, VENTA)
