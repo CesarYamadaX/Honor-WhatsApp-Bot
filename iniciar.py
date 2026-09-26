@@ -269,18 +269,62 @@ def _lanzar(comando: list[str], cwd: Path) -> subprocess.Popen:
         errors="replace",
         bufsize=1,
         env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"},
+        # Su propio grupo de procesos, para que al bajarlo se pueda bajar
+        # tambien lo que haya lanzado (ver `_matar_arbol`). Sin esto,
+        # `os.killpg` apuntaria al grupo de ESTE script y el apagado se
+        # llevaria por delante al propio lanzador. En Windows no hace nada:
+        # ahi el arbol lo resuelve `taskkill /T`.
+        start_new_session=True,
     )
 
 
-def _terminar(proceso: subprocess.Popen, nombre: str) -> None:
-    if proceso.poll() is not None:
+def _matar_arbol(pid: int, forzando: bool) -> None:
+    """Manda la señal de apagado al proceso Y a todo lo que colgo de el."""
+    if sys.platform == "win32":
+        comando = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if forzando else [])
+    else:
+        # En POSIX el equivalente es el grupo de procesos, que _lanzar crea
+        # con start_new_session.
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL if forzando else signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
         return
-    print(f"[iniciar] deteniendo {nombre}...", flush=True)
-    proceso.terminate()
     try:
-        proceso.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proceso.kill()
+        subprocess.run(comando, capture_output=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _terminar(proceso: subprocess.Popen, nombre: str, espera: float = 10.0) -> None:
+    """Baja ese proceso y TODO lo que haya dejado colgando.
+
+    El `/T` no es decoracion. `proceso.terminate()` le pega solo al hijo
+    directo, y ninguno de los dos que se lanzan aqui es una hoja: el
+    python.exe de un venv es un stub que re-ejecuta el interprete de verdad,
+    asi que el que abre el puerto 8000 es un NIETO. Sin el arbol moriria el
+    stub, el nieto quedaria vivo con el puerto tomado, y el siguiente
+    `python iniciar.py` se negaria a arrancar con "Ya hay un servicio
+    contestando".
+
+    El barrido final con /F va siempre, aunque el hijo directo ya haya
+    muerto, por si quedo algo a medio cerrar. Si no queda nada, taskkill no
+    encuentra el PID y no pasa nada.
+
+    Lo que esto NO alcanza: si el padre ya desaparecio, `taskkill /T` no
+    tiene desde donde recorrer y sus nietos quedan re-parentados, fuera de
+    alcance por PID. Ese caso es el de `apagar.py`, que los busca por la
+    marca de su linea de comando. Pasa, por ejemplo, cuando algo mata a este
+    script por fuera en vez de dejarlo llegar a su `finally`.
+    """
+    if proceso.poll() is None:
+        print(f"[iniciar] deteniendo {nombre}...", flush=True)
+        _matar_arbol(proceso.pid, forzando=False)
+        try:
+            proceso.wait(timeout=espera)
+        except subprocess.TimeoutExpired:
+            pass
+    _matar_arbol(proceso.pid, forzando=True)
 
 
 def main(abrir_el_panel: bool = True) -> int:

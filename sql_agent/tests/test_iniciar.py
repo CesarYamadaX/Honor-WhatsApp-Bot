@@ -8,6 +8,7 @@ script existe para evitar.
 """
 
 import sys
+import time
 from pathlib import Path
 
 # iniciar.py vive en la raiz del repo, un nivel arriba de sql_agent, que es
@@ -142,6 +143,76 @@ class TestAnotacionDeEncendido:
 
     def test_olvidar_no_se_queja_si_ya_no_estaba(self, tmp_path):
         iniciar.olvidar_encendido(tmp_path / "no-existe.json")
+
+
+class TestApagarNoDejaHuerfanos:
+    """Ninguno de los dos procesos que se lanzan es una hoja: el python.exe
+    de un venv es un stub que re-ejecuta el interprete de verdad, asi que el
+    que abre el puerto 8000 es un NIETO. Con `proceso.terminate()`, que solo
+    le pega al hijo directo, ese nieto sobrevive y se queda con el puerto: el
+    siguiente `python iniciar.py` se niega a arrancar con "Ya hay un servicio
+    contestando".
+
+    Se vieron huerfanos asi el 25 de septiembre de 2026, aunque en ese caso
+    la causa fue otra -- algo mato al script por fuera y nunca llego a su
+    `finally` --. El arbol de procesos es real igual, y estas pruebas lo
+    ejercen con un padre y un nieto de mentira.
+    """
+
+    def _arbol(self, tmp_path):
+        """Lanza un proceso que a su vez lanza otro, y devuelve los dos."""
+        nieto = tmp_path / "nieto.py"
+        nieto.write_text(
+            "import time\nwhile True: time.sleep(0.2)\n", encoding="utf-8"
+        )
+        padre = tmp_path / "padre.py"
+        padre.write_text(
+            "import subprocess, sys, time\n"
+            f"h = subprocess.Popen([sys.executable, r'{nieto}'])\n"
+            "print(h.pid, flush=True)\n"
+            "while True: time.sleep(0.2)\n",
+            encoding="utf-8",
+        )
+        proceso = iniciar._lanzar([sys.executable, str(padre)], tmp_path)
+        pid_nieto = int(proceso.stdout.readline().strip())
+        return proceso, pid_nieto
+
+    def _vivo(self, pid):
+        return iniciar.linea_de_comando(pid) is not None
+
+    def test_se_lleva_tambien_al_nieto(self, tmp_path):
+        proceso, pid_nieto = self._arbol(tmp_path)
+        assert self._vivo(pid_nieto), "el nieto tiene que arrancar vivo"
+
+        iniciar._terminar(proceso, "el arbol de prueba", espera=5)
+
+        assert proceso.poll() is not None, "el hijo directo murio"
+        limite = time.monotonic() + 10
+        while self._vivo(pid_nieto) and time.monotonic() < limite:
+            time.sleep(0.3)
+        assert not self._vivo(pid_nieto), "el nieto se quedo vivo (el bug)"
+
+    def test_si_el_padre_ya_murio_el_nieto_queda_fuera_de_alcance(self, tmp_path):
+        # Lo que este apagado NO puede hacer, escrito para que nadie lo
+        # asuma: `taskkill /T` recorre el arbol desde el PID del padre, y si
+        # ese PID ya no existe sus nietos quedan re-parentados y son
+        # inalcanzables por PID. Para eso esta `apagar.py`, que los busca por
+        # la marca de su linea de comando y no por el parentesco.
+        proceso, pid_nieto = self._arbol(tmp_path)
+        proceso.kill()
+        proceso.wait(timeout=10)
+
+        iniciar._terminar(proceso, "el arbol de prueba", espera=5)
+        assert self._vivo(pid_nieto), "si esto cambia, la limitacion se fue"
+
+        # Sin dejar el nieto tirado en la maquina de quien corra las pruebas.
+        iniciar.detener_pid(pid_nieto)
+
+    def test_sobre_un_proceso_ya_muerto_no_revienta(self, tmp_path):
+        proceso, _ = self._arbol(tmp_path)
+        iniciar._terminar(proceso, "el arbol de prueba", espera=5)
+        # Dos veces seguidas: el PID ya no existe y taskkill no lo encuentra.
+        iniciar._terminar(proceso, "el arbol de prueba", espera=5)
 
 
 class TestIdentidadDelProceso:
