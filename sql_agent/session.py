@@ -3,7 +3,13 @@
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Callable
+
+
+def dia_local(instante: float) -> date:
+    """El dia calendario de ese instante, en la hora local de la maquina."""
+    return date.fromtimestamp(instante)
 
 
 @dataclass
@@ -18,7 +24,17 @@ class Sesion:
 
 
 class RegistroSesiones:
-    """Mapea chat_id a su sesion, con lock por chat y expiracion por TTL.
+    """Mapea chat_id a su sesion, con lock por chat y expiracion por dia.
+
+    La memoria de una conversacion dura el DIA NATURAL: lo que se pregunto a
+    las 9 de la manana se sigue recordando a las 6 de la tarde, y a
+    medianoche se olvida todo y el dia siguiente empieza en blanco. Antes
+    vencia tras 60 minutos sin mensajes, y quien volvia de comer tenia que
+    repetir de que cadena y que periodo venia hablando.
+
+    `ttl_segundos` queda como tope ADICIONAL por inactividad, apagado por
+    defecto (None o 0). Si se pone, la sesion vence por lo que ocurra
+    primero: la medianoche o ese rato sin mensajes.
 
     El lock es por conversacion, no global: dos personas distintas pueden
     consultar a la vez, pero una misma persona no dispara dos consultas en
@@ -28,12 +44,16 @@ class RegistroSesiones:
     def __init__(
         self,
         fabrica: Callable[[], Any],
-        ttl_segundos: float,
-        reloj: Callable[[], float] = time.monotonic,
+        ttl_segundos: float | None = None,
+        # Reloj de PARED, no time.monotonic: para saber que cambio el dia hay
+        # que saber que hora es, y el monotono solo sabe cuanto paso.
+        reloj: Callable[[], float] = time.time,
+        dia: Callable[[float], date] = dia_local,
     ):
         self._fabrica = fabrica
-        self._ttl = ttl_segundos
+        self._ttl = ttl_segundos or None
         self._reloj = reloj
+        self._dia = dia
         self._sesiones: dict[str, Sesion] = {}
         # Protege el diccionario, no la ejecucion del agente.
         self._candado = threading.Lock()
@@ -108,13 +128,24 @@ class RegistroSesiones:
         with self._candado:
             return sorted(self._sesiones)
 
+    def _vencida(self, sesion: Sesion, ahora: float) -> bool:
+        """True si la sesion es de otro dia, o paso su tope de inactividad."""
+        if self._dia(sesion.ultimo_uso) != self._dia(ahora):
+            return True
+        return self._ttl is not None and sesion.ultimo_uso <= ahora - self._ttl
+
     def purgar(self) -> int:
-        """Elimina las sesiones inactivas. Devuelve cuantas se eliminaron."""
-        limite = self._reloj() - self._ttl
+        """Elimina las sesiones vencidas. Devuelve cuantas se eliminaron.
+
+        Se llama al principio de cada /ask, ANTES de `obtener`: el primer
+        mensaje despues de medianoche encuentra la sesion de ayer todavia
+        con su `ultimo_uso` de ayer, la tira, y `obtener` arma una nueva.
+        """
+        ahora = self._reloj()
         eliminadas = 0
         with self._candado:
             for chat_id, sesion in list(self._sesiones.items()):
-                if sesion.ultimo_uso > limite:
+                if not self._vencida(sesion, ahora):
                     continue
                 # Una sesion con una consulta en curso no se toca.
                 if not sesion.lock.acquire(blocking=False):

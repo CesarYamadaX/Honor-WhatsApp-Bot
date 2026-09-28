@@ -201,3 +201,76 @@ class TestRegistroSesiones:
         # El agente que quedó registrado NO debe estar cerrado.
         agente_registrado = sesiones[0].agente
         assert agente_registrado.engine.dispose_llamadas == []
+
+
+class TestLaMemoriaDuraElDiaNatural:
+    """Se pidio que la memoria de cada conversacion dure el dia natural y no
+    un plazo corrido. Antes vencia tras 60 minutos sin mensajes: quien volvia
+    de comer tenia que repetir de que cadena y que periodo venia hablando.
+    """
+
+    def _registro(self, ttl=None):
+        # Un "dia" de mentira de 100 segundos, para no depender de la zona
+        # horaria de la maquina que corre las pruebas.
+        reloj = RelojFalso()
+        registro = RegistroSesiones(
+            AgenteFalso, ttl_segundos=ttl, reloj=reloj, dia=lambda t: int(t // 100)
+        )
+        return registro, reloj
+
+    def test_horas_sin_mensajes_dentro_del_mismo_dia_no_la_borran(self):
+        registro, reloj = self._registro()
+        reloj.ahora = 1000.0        # dia 10, al empezar
+        registro.obtener("chat-a")
+        reloj.ahora = 1099.0        # dia 10, al terminar
+        assert registro.purgar() == 0
+        assert len(registro) == 1
+
+    def test_a_medianoche_se_olvida(self):
+        registro, reloj = self._registro()
+        reloj.ahora = 1099.0        # 23:59
+        viejo = registro.obtener("chat-a").agente
+        reloj.ahora = 1100.0        # 00:00, un segundo despues
+        assert registro.purgar() == 1
+        assert registro.obtener("chat-a").agente is not viejo
+
+    def test_el_corte_es_por_dia_no_por_24_horas(self):
+        # Una conversacion que empieza tarde no se lleva un dia entero: vence
+        # igual a medianoche, aunque haya durado un minuto.
+        registro, reloj = self._registro()
+        reloj.ahora = 1098.0
+        registro.obtener("chat-a")
+        reloj.ahora = 1101.0
+        assert registro.purgar() == 1
+
+    def test_una_consulta_en_curso_a_medianoche_no_se_corta(self):
+        registro, reloj = self._registro()
+        reloj.ahora = 1099.0
+        sesion = registro.obtener("chat-a")
+        sesion.lock.acquire()
+        try:
+            reloj.ahora = 1101.0
+            assert registro.purgar() == 0
+        finally:
+            sesion.lock.release()
+        # Y en cuanto termina, el siguiente mensaje ya empieza el dia nuevo.
+        assert registro.purgar() == 1
+
+    def test_sin_tope_de_inactividad_por_defecto(self):
+        registro = RegistroSesiones(AgenteFalso)
+        assert registro._ttl is None
+
+    def test_el_tope_de_inactividad_sigue_disponible_como_extra(self):
+        # Vence por lo que llegue primero: la medianoche o ese rato quieto.
+        registro, reloj = self._registro(ttl=30)
+        reloj.ahora = 1000.0
+        registro.obtener("chat-a")
+        reloj.ahora = 1031.0        # mismo dia, pero 31s sin mensajes
+        assert registro.purgar() == 1
+
+    def test_el_reloj_por_defecto_es_de_pared(self):
+        # time.monotonic no sabe que hora es, asi que no puede saber cuando
+        # cambia el dia.
+        import time as modulo_time
+        registro = RegistroSesiones(AgenteFalso)
+        assert registro._reloj is modulo_time.time

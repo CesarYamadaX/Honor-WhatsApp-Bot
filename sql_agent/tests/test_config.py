@@ -55,8 +55,9 @@ class TestConfigDesdeEntorno:
     def test_valores_por_defecto(self, monkeypatch):
         self._entorno_valido(monkeypatch)
         config = Config.desde_entorno()
-        assert config.timeout_segundos == 300
-        assert config.ttl_minutos == 60
+        assert config.timeout_segundos == 600
+        # 0 = sin tope por inactividad: la memoria vence a medianoche.
+        assert config.ttl_minutos == 0
         assert config.api_host == "127.0.0.1"
         assert config.api_port == 8000
 

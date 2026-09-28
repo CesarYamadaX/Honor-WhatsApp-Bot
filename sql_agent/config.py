@@ -75,8 +75,11 @@ class Config:
     def desde_entorno(cls) -> "Config":
         return cls(
             allowlist=_leer_allowlist(),
-            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 300),
-            ttl_minutos=_leer_entero("SESSION_TTL_MINUTES", 60),
+            # El mismo default que agent.TIMEOUT_PETICION: si difieren, el
+            # agente se reparte un presupuesto que la API no le va a dar.
+            timeout_segundos=_leer_entero("AGENT_TIMEOUT_SECONDS", 600),
+            # 0 = sin tope por inactividad: la memoria vence a medianoche.
+            ttl_minutos=_leer_entero("SESSION_TTL_MINUTES", 0),
             api_host=os.getenv("API_HOST", "127.0.0.1"),
             api_port=_leer_entero("API_PORT", 8000),
             espera_cancelacion=_leer_entero("CANCEL_WAIT_SECONDS", 25),

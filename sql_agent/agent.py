@@ -1566,7 +1566,7 @@ class SQLAgent:
     El historial vive en la instancia y no en un almacen aparte porque
     `RegistroSesiones` ya crea un SQLAgent por chat_id y serializa sus
     consultas con un lock por conversacion: no hay dos hilos tocando el mismo
-    historial, y cuando la sesion expira por TTL el historial se va con ella.
+    historial, y cuando la sesion vence -- a medianoche -- el historial se va con ella.
     """
 
     # Cuantos mensajes del historial se le repiten al modelo. El prompt ya

@@ -135,7 +135,9 @@ def crear_app(
     app = FastAPI(title="sql_agent")
     registro = RegistroSesiones(
         fabrica=fabrica_agente,
-        ttl_segundos=config.ttl_minutos * 60,
+        # La memoria dura el dia natural; SESSION_TTL_MINUTES es solo un tope
+        # extra por inactividad, y en 0 (el valor por defecto) no aplica.
+        ttl_segundos=config.ttl_minutos * 60 or None,
     )
     # Sin registro en disco se trabaja con uno en memoria sembrado del .env:
     # el comportamiento es el de siempre y las pruebas no necesitan archivos.
