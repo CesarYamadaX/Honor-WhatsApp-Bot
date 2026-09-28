@@ -425,3 +425,96 @@ class TestMensajesEnElIdiomaDelUsuario:
         agente.idioma = "zh"
         r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "总销量"})
         assert r.json()["idioma"] == "zh"
+
+
+# El mensaje real que devolvio el driver el 28 de septiembre de 2026, cuando
+# DESKTOP-GOE584A dejo de resolverse desde la maquina del bot.
+_SIN_CONEXION = (
+    "('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]Named Pipes "
+    "Provider: Could not open a connection to SQL Server [53]. (53) "
+    "(SQLDriverConnect); [08001] [Microsoft][ODBC Driver 18 for SQL Server]"
+    "Login timeout expired (0)')"
+)
+
+
+class ErrorDeODBC(Exception):
+    """Hace las veces de pyodbc.OperationalError: lo que importa es el texto."""
+
+
+class TestBaseDeDatosCaida:
+    """Con la base caida, cada pregunta tardaba ~18s y devolvia un 500 que el
+    sidecar traducia a "no pude procesar tu pregunta", o un "reformula la
+    pregunta". Las dos mandan a buscar el problema en la pregunta, y ahi no
+    esta: reformular no sirve de nada.
+    """
+
+    def _cliente(self, fabrica):
+        return TestClient(crear_app(_config(), fabrica))
+
+    def test_si_no_se_puede_abrir_la_conversacion_lo_dice(self):
+        # Abrir la conversacion construye un SQLAgent, que se conecta a la
+        # base. Ahi era donde salia el 500.
+        def fabrica():
+            raise ErrorDeODBC(_SIN_CONEXION)
+
+        with self._cliente(fabrica) as c:
+            r = c.post("/ask", json={"chat_id": AUTORIZADO, "text": "ventas de agosto"})
+
+        assert r.status_code == 200
+        assert r.json()["reply"] == idiomas.texto("base_no_disponible", "es")
+
+    def test_contesta_en_el_idioma_de_la_pregunta(self):
+        # Todavia no hay sesion de donde sacar el idioma: sale de la pregunta.
+        def fabrica():
+            raise ErrorDeODBC(_SIN_CONEXION)
+
+        with self._cliente(fabrica) as c:
+            r = c.post(
+                "/ask",
+                json={"chat_id": AUTORIZADO, "text": "how many units did Honor sell"},
+            )
+
+        assert r.json()["idioma"] == "en"
+        assert r.json()["reply"] == idiomas.texto("base_no_disponible", "en")
+
+    def test_si_se_cae_a_media_conversacion_tambien(self):
+        agente = AgenteFalso(antes=lambda: (_ for _ in ()).throw(ErrorDeODBC(_SIN_CONEXION)))
+        with self._cliente(lambda: agente) as c:
+            r = c.post("/ask", json={"chat_id": AUTORIZADO, "text": "ventas"})
+
+        assert r.json()["reply"] == idiomas.texto("base_no_disponible", "es")
+
+    def test_un_error_de_la_consulta_no_se_confunde_con_la_base_caida(self):
+        agente = AgenteFalso(
+            antes=lambda: (_ for _ in ()).throw(
+                ErrorDeODBC("('42S22', \"Invalid column name 'QTY'.\")")
+            )
+        )
+        with self._cliente(lambda: agente) as c:
+            r = c.post("/ask", json={"chat_id": AUTORIZADO, "text": "ventas"})
+
+        assert r.json()["reply"] == idiomas.texto("error_interno", "es")
+
+    def test_un_fallo_raro_al_abrir_sigue_siendo_un_error_de_verdad(self):
+        # No se disfraza cualquier cosa de "la base esta caida": solo la
+        # falta de conexion. Lo demas tiene que seguir viendose como fallo.
+        def fabrica():
+            raise RuntimeError("otra cosa")
+
+        with TestClient(crear_app(_config(), fabrica), raise_server_exceptions=False) as c:
+            r = c.post("/ask", json={"chat_id": AUTORIZADO, "text": "ventas"})
+
+        assert r.status_code == 500
+
+    def test_se_reconoce_aunque_venga_envuelto(self):
+        # sqlalchemy reenvuelve el error de pyodbc en uno suyo.
+        try:
+            try:
+                raise ErrorDeODBC(_SIN_CONEXION)
+            except ErrorDeODBC as interno:
+                raise RuntimeError("(sqlalchemy) algo") from interno
+        except RuntimeError as envuelto:
+            assert api.es_falla_de_conexion(envuelto)
+
+        assert not api.es_falla_de_conexion(RuntimeError("42S22 columna"))
+        assert not api.es_falla_de_conexion(None)

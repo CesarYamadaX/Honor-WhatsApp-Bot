@@ -54,6 +54,34 @@ def es_falla_del_servicio(error: BaseException | None) -> bool:
                 return True
         error = error.__cause__ or error.__context__
     return False
+
+
+# SQLSTATE de "no hay conexion con el servidor": 08xxx es la familia de
+# errores de conexion (08001: no se pudo establecer), y HYT00 es el login
+# timeout con el que ODBC se rinde cuando el nombre ni siquiera resuelve.
+# Visto el 28 de septiembre de 2026: DESKTOP-GOE584A dejo de resolverse y
+# cada pregunta tardaba ~18s en devolver un 500.
+_ESTADOS_SIN_CONEXION = ("08001", "08S01", "08004", "HYT00")
+
+
+def es_falla_de_conexion(error: BaseException | None) -> bool:
+    """True si el fallo es que la base no contesta, no la consulta.
+
+    Se mira el SQLSTATE y no el tipo: pyodbc usa OperationalError tanto para
+    "no encuentro al servidor" como para cosas que si son de la consulta, y
+    sqlalchemy lo reenvuelve en otro OperationalError. Por eso tambien se
+    recorre la cadena de causas.
+    """
+    vistos: set[int] = set()
+    while error is not None and id(error) not in vistos:
+        vistos.add(id(error))
+        texto = str(error)
+        if any(estado in texto for estado in _ESTADOS_SIN_CONEXION):
+            return True
+        error = error.__cause__ or error.__context__ or getattr(error, "orig", None)
+    return False
+
+
 # Los textos fijos viven en idioma.py, traducidos. Aqui solo se elige cual.
 _PALABRAS_DE_CANCELACION = {
     "cancela",
@@ -201,6 +229,13 @@ def crear_app(
                 idioma=idioma,
                 segundos=time.monotonic() - comenzo,
             )
+            if es_falla_de_conexion(error):
+                logger.error("La base de datos no contesta (%s)", chat_id)
+                return Respuesta(
+                    reply=idiomas.texto("base_no_disponible", idioma),
+                    files=[],
+                    idioma=idioma,
+                )
             if es_falla_del_servicio(error):
                 logger.error(
                     "El proveedor del modelo rechazo la peticion de %s: "
@@ -227,7 +262,21 @@ def crear_app(
             raise HTTPException(status_code=403, detail="No autorizado")
 
         registro.purgar()
-        sesion = registro.obtener(peticion.chat_id)
+        try:
+            sesion = registro.obtener(peticion.chat_id)
+        except Exception as error:
+            # Abrir una conversacion construye un SQLAgent, y ese se conecta
+            # a la base. Si la base no contesta, esto reventaba como un 500
+            # que el sidecar traducia a "no pude procesar tu pregunta".
+            if not es_falla_de_conexion(error):
+                raise
+            logger.error("La base de datos no contesta (%s)", peticion.chat_id)
+            idioma = idiomas.detectar(peticion.text) or idiomas.POR_DEFECTO
+            return Respuesta(
+                reply=idiomas.texto("base_no_disponible", idioma),
+                files=[],
+                idioma=idioma,
+            )
         idioma = _idioma_de(sesion, peticion.text)
         quiere_cancelar = es_cancelacion(peticion.text)
 

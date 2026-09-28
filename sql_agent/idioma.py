@@ -104,6 +104,30 @@ TEXTOS = {
             "请联系 lauragabrielacastellanos 或 GTM Mexico 团队的同事来处理。"
         ),
     },
+    # La base no contesta: la maquina ni siquiera encuentra al servidor.
+    # Antes esto salia como "error_interno" -- "reformula la pregunta" -- o,
+    # si pasaba al abrir la conversacion, como un 500 que el sidecar traducia
+    # a "no pude procesar tu pregunta". Las dos cosas mandan a buscar el
+    # problema en la pregunta, y ahi no esta: reformular no sirve de nada.
+    "base_no_disponible": {
+        ESPANOL: (
+            "Ahorita no me puedo conectar a la base de datos de ventas, asi "
+            "que no puedo consultar nada. No es tu pregunta: es la conexion "
+            "con el servidor. Intenta mas tarde, y si sigue igual avisale a "
+            "lauragabrielacastellanos o a alguien del equipo de GTM Mexico."
+        ),
+        INGLES: (
+            "I can't connect to the sales database right now, so I can't "
+            "look anything up. It's not your question, it's the connection "
+            "to the server. Try again later, and if it keeps happening let "
+            "lauragabrielacastellanos or someone on the GTM Mexico team know."
+        ),
+        CHINO: (
+            "我现在连接不上销售数据库，所以无法查询。这不是你问题的原因，"
+            "而是与服务器的连接出了问题。请稍后再试，如果一直这样，"
+            "请告诉 lauragabrielacastellanos 或 GTM Mexico 团队的同事。"
+        ),
+    },
     "cancelado": {
         ESPANOL: "Listo, cancele la consulta anterior.",
         INGLES: "Done, I cancelled the previous query.",
