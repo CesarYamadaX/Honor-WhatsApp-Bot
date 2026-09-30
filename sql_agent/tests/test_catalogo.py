@@ -446,3 +446,57 @@ class TestConsolidadaDeRepuesto:
 
     def test_sin_consolidada_no_hay_repuesto(self):
         assert catalogo.consolidada_de_repuesto("SELECT * FROM vw_ETL_Elektra") is None
+
+
+class TestPromotoriaNoCuentaDeMas:
+    """"Cuantas tiendas de Coppel tienen promotor" salio 1 721: el modelo
+    conto sin filtrar periodo (junta todos los meses) y sin filtrar cadena
+    (la vista no tiene columna de cadena). En agosto de 2026 eran 676 de
+    Coppel (medido el 30/09/2026).
+    """
+
+    PREGUNTA = "cuantas tiendas de Coppel tienen promotor de Honor"
+
+    def test_la_consulta_que_hizo_el_bot_no_pasa(self):
+        avisos = catalogo.avisos_de_promotoria(
+            "SELECT COUNT(DISTINCT [Coppel Name]) FROM [GTM BI Database].dbo."
+            "[V_HCReport_Informes] WHERE [status_of_promoter] >= 1",
+            self.PREGUNTA,
+        )
+        assert len(avisos) == 2
+        assert "[Period]" in avisos[0]
+        assert "RetailName" in avisos[1] and "'COPPEL'" in avisos[1]
+
+    def test_bien_hecha_pasa(self):
+        assert catalogo.avisos_de_promotoria(
+            "SELECT COUNT(DISTINCT h.[Coppel Name]) FROM V_HCReport_Informes h "
+            "JOIN (SELECT DISTINCT [Coppel Name], [RetailName] FROM CustomerStores) cs "
+            "ON cs.[Coppel Name] = h.[Coppel Name] WHERE cs.[RetailName] = 'COPPEL' "
+            "AND h.[Period] = '2026-August' AND h.[status_of_promoter] >= 1",
+            self.PREGUNTA,
+        ) == []
+
+    def test_sin_cadena_en_la_pregunta_solo_exige_el_periodo(self):
+        assert catalogo.avisos_de_promotoria(
+            "SELECT [Region], COUNT(*) FROM V_HCReport_Informes "
+            "WHERE [Period] = '2026-August' GROUP BY [Region]",
+            "promotores por region",
+        ) == []
+
+    def test_otras_vistas_no_se_tocan(self):
+        assert catalogo.avisos_de_promotoria("SELECT * FROM HCReport", self.PREGUNTA) == []
+
+    def test_la_nota_lo_explica(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
+        assert "NO HAY COLUMNA DE CADENA" in ficha
+        assert "FILTRA SIEMPRE UN [Period]" in ficha
+
+
+class TestCoberturaDeDatos:
+    def test_se_avisa_desde_cuando_hay_datos_de_cada_cadena(self):
+        # "Elektra julio 2025: 0 unidades" -- no es que no vendiera, es que
+        # la carga empieza en octubre de 2025.
+        nota = " ".join(catalogo.NOTAS_GENERALES)
+        assert "OCTUBRE DE 2025" in nota
+        assert "NUNCA pongas '0 unidades'" in nota
+

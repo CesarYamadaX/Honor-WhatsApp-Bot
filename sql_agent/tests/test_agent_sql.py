@@ -2003,3 +2003,33 @@ class TestReintentoConLaConsolidadaDeRepuesto:
                 {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
             )
         assert len(consultas) == 1
+
+
+class TestUnBotonDeDescargaInventadoNoQuedaSuelto:
+    """Visto el 30/09/2026 en dos reportes seguidos: el modelo escribio
+    "[Descargar el reporte de ventas](sandbox:/...)" en su propia linea.
+    Quitarle el destino dejaba "Descargar el reporte de ventas" suelto, como
+    un boton que no existe. El archivo ya viaja como adjunto.
+    """
+
+    def _limpiar(self, texto):
+        return SQLAgent._sin_enlaces_inventados(texto)
+
+    def test_la_linea_entera_se_va(self):
+        assert self._limpiar(
+            "He preparado el reporte.\n[Descargar el reporte](sandbox:/mnt/x.xlsx)\nFin."
+        ) == "He preparado el reporte.\nFin."
+
+    def test_con_vineta_negritas_o_emoji_tambien(self):
+        for linea in ("- **[Descargar Excel](sandbox:/x)**", "\U0001F4E5 [Descargar](sandbox:/x)"):
+            assert self._limpiar(f"Listo.\n{linea}\nFin.") == "Listo.\nFin."
+
+    def test_dentro_de_una_oracion_se_queda_el_texto(self):
+        assert self._limpiar(
+            "Te dejo el [reporte](sandbox:/x) en el adjunto."
+        ) == "Te dejo el reporte en el adjunto."
+
+    def test_un_enlace_de_verdad_no_se_toca(self):
+        texto = "[Coppel](https://www.coppel.com/x)"
+        assert self._limpiar(texto) == texto
+

@@ -238,6 +238,53 @@ def consolidada_de_repuesto(query: str) -> str | None:
     return nueva if cuantas else None
 
 
+# Cadenas que se pueden nombrar en una pregunta, y como se escriben en
+# CustomerStores.[RetailName].
+_CADENAS_EN_PREGUNTA = (
+    ("COPPEL", r"coppel"),
+    ("ELEKTRA", r"elektra"),
+    ("TELCEL", r"telcel"),
+    ("LIVERPOOL", r"liverpool"),
+    ("AT&T", r"at\s*&\s*t|\batt\b"),
+    ("SEARS", r"sears"),
+)
+
+
+def avisos_de_promotoria(query: str, pregunta: str = "") -> list[str]:
+    """Consultas a V_HCReport_Informes que van a contar de mas.
+
+    Dos errores medidos el 30 de septiembre de 2026, con "cuantas tiendas
+    de Coppel tienen promotor": el modelo conto sin filtrar periodo (junta
+    todos los meses) y sin filtrar cadena (la vista no tiene columna de
+    cadena), y contesto 1 721 cuando eran 676. La nota del catalogo ya lo
+    explica; esto no deja que se ejecute igual.
+    """
+    if not re.search(r"(?<!\w)V_HCReport_Informes(?!\w)", query, re.IGNORECASE):
+        return []
+    avisos = []
+    if not re.search(r"\[?Period\]?\s*(=|IN\b|LIKE\b)", query, re.IGNORECASE):
+        avisos.append(
+            "Falta filtrar [Period]: cada mes trae todas las tiendas otra vez, "
+            "asi que sin periodo el conteo junta todos los meses. Filtra un mes "
+            "(`[Period] = '2026-August'`); si no te dijeron cual, usa el mas "
+            "reciente y dilo."
+        )
+    nombradas = [
+        cadena for cadena, patron in _CADENAS_EN_PREGUNTA
+        if re.search(patron, pregunta or "", re.IGNORECASE)
+    ]
+    if nombradas and not re.search(r"RetailName", query, re.IGNORECASE):
+        avisos.append(
+            f"La pregunta es de {', '.join(nombradas)}, pero la vista no tiene "
+            "columna de cadena y la consulta no filtra ninguna: contaria las "
+            "tiendas de todas. Cruza con CustomerStores y filtra [RetailName]: "
+            "`JOIN (SELECT DISTINCT [Coppel Name], [RetailName] FROM "
+            "[GTM BI Database].dbo.[CustomerStores]) cs ON cs.[Coppel Name] = "
+            f"h.[Coppel Name] WHERE cs.[RetailName] = '{nombradas[0]}'`."
+        )
+    return avisos
+
+
 def avisos_de_media_cadena(query: str) -> list[str]:
     """Avisos por consultar una vista que es solo un pedazo de su cadena."""
     # `(?<!\w)...(?!\w)` y no `\b...\b`: la tabla de Liverpool se llama
@@ -328,6 +375,17 @@ NOTAS_GENERALES = [
     "por el nombre del retailer dentro de ellas siempre da cero filas.",
     "[Carrier] es el operador telefonico (TELCEL, AT&T, MOVISTAR, ABIERTA), "
     "NUNCA el retailer. Para filtrar por retailer se usa [Retail].",
+    # Medido el 30 de septiembre de 2026 contra las nueve vistas vw_ETL_*. Un
+    # comparativo de julio 2026 contra julio 2025 contesto "Elektra julio
+    # 2025: 0 unidades", como si hubiera dejado de vender.
+    "DESDE CUANDO HAY DATOS, por cadena. Coppel, Liverpool y Telcel tienen "
+    "desde enero de 2024. Elektra (2025-10-01), AT&T (2025-10-06), Sears y "
+    "Movistar (2025-10-31) empiezan en OCTUBRE DE 2025: antes de esa fecha no "
+    "vendieron cero, simplemente no hay datos cargados. En un comparativo "
+    "contra el ano anterior, o en cualquier periodo previo a octubre de 2025, "
+    "NUNCA pongas '0 unidades' para esas cuatro: di 'sin datos (la carga "
+    "empieza en octubre de 2025)' y no calcules crecimientos contra un "
+    "periodo sin datos.",
     "La vista [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] es la fuente OFICIAL de "
     "venta B2B, la que usa el negocio: unifica a todos los retailers con "
     "columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Usala por "
@@ -686,7 +744,19 @@ NOTAS_POR_OBJETO = {
         "`[status_of_promoter] >= 1`; el total de promotores es "
         "SUM([status_of_promoter]).\n"
         "La tienda es [Coppel Name] (viene de CustomerStores) y no hay "
-        "columna de ID.\n"
+        "columna de ID. OJO: [Coppel Name] es el nombre de tienda de TODAS "
+        "las cadenas, no solo de Coppel.\n"
+        "NO HAY COLUMNA DE CADENA. Para una cadena hay que cruzar con "
+        "CustomerStores y filtrar ahi: `JOIN (SELECT DISTINCT [Coppel Name], "
+        "[RetailName] FROM [GTM BI Database].dbo.[CustomerStores]) cs ON "
+        "cs.[Coppel Name] = h.[Coppel Name] WHERE cs.[RetailName] = 'COPPEL'` "
+        "(valores: COPPEL, TELCEL, LIVERPOOL, AT&T, ELEKTRA, SEARS).\n"
+        "FILTRA SIEMPRE UN [Period]. Cada mes trae todas las tiendas otra "
+        "vez, asi que sin periodo un COUNT(DISTINCT) junta todos los meses: "
+        "\"cuantas tiendas de Coppel tienen promotor\" salio 1 721 -- las "
+        "tiendas con promotor de TODAS las cadenas en TODOS los meses -- "
+        "cuando en agosto de 2026 eran 676 de Coppel (medido el 30/09/2026). "
+        "Si no dicen mes, usa el mas reciente y dilo.\n"
         "DOS AVISOS, los dos medidos:\n"
         "  1. La vista es un INNER JOIN con CustomerStores, y se queda con la "
         "mitad: en W35 de 2026, de las 8 326 tiendas de HCReport solo 4 529 "

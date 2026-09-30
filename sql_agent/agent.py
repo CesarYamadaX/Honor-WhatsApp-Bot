@@ -33,6 +33,7 @@ from catalogo import (
     buscar,
     cargar_catalogo,
     avisos_de_media_cadena,
+    avisos_de_promotoria,
     completar_media_cadena,
     consolidada_de_repuesto,
     describir_objeto,
@@ -379,6 +380,15 @@ def es_select(sql: str) -> bool:
 # Un enlace de markdown cuyo destino no es http(s): el modelo los escribe
 # solo, apuntando a rutas que no existen. Ver `_sin_enlaces_inventados`.
 _ENLACE_SIN_DESTINO = re.compile(r"\[([^\]\n]+)\]\((?!https?://)[^)\n]*\)")
+# El mismo enlace cuando ocupa una linea entera (con vineta, negritas o un
+# emoji de adorno). Ahi no es parte de una oracion: es un boton de "Descargar
+# el reporte" que no existe, y quitarle solo el destino dejaba esa linea
+# suelta en el mensaje (visto el 30/09/2026 en dos reportes seguidos).
+_LINEA_DE_ENLACE_INVENTADO = re.compile(
+    r"^[ \t>*\-•\U0001F300-\U0001FAFF]*\*{0,2}"
+    r"\[[^\]\n]+\]\((?!https?://)[^)\n]*\)\*{0,2}[ \t.:]*(?:\n|$)",
+    re.MULTILINE,
+)
 
 # El modelo cierra ofreciendo mas trabajo ("¿Quieres que lo abra por
 # cadena?"), y debajo va la ficha de sugerencias que arma el servicio. Son
@@ -1295,6 +1305,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             f"completo la cadena: {'; '.join(completadas)}", bitacora.NOTA
         )
 
+    promotoria = avisos_de_promotoria(query, ctx.pregunta)
+    if promotoria:
+        bitacora.paso("la consulta de promotoria contaria de mas", bitacora.NOTA)
+        return "No la ejecute. " + " ".join(promotoria)
+
     media_cadena = avisos_de_media_cadena(query)
     if media_cadena:
         bitacora.paso("la consulta es solo parte de su cadena", bitacora.NOTA)
@@ -1936,6 +1951,7 @@ class SQLAgent:
         Un enlace http de verdad (el que trae `precio_en_internet`) se
         conserva: ese si se puede abrir.
         """
+        texto = _LINEA_DE_ENLACE_INVENTADO.sub("", texto)
         return _ENLACE_SIN_DESTINO.sub(r"\1", texto)
 
     def responder(
