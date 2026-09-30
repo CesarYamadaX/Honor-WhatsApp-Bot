@@ -419,3 +419,30 @@ class TestLasVistasPartidasSeCompletanSolas:
             "SELECT * FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B]",
         ):
             assert catalogo.completar_media_cadena(query) == (query, [])
+
+
+class TestConsolidadaDeRepuesto:
+    """Con ETL_Consolidado_B2B rota en el servidor, la consulta se reconstruye
+    desde sus nueve vistas. Verificado contra la base el 30/09/2026: 160 909
+    unidades de Honor en agosto y 2 056 940 del mercado, lo mismo que la
+    consolidada cuando funcionaba.
+    """
+
+    def test_cambia_la_consolidada_por_sus_nueve_vistas(self):
+        nueva = catalogo.consolidada_de_repuesto(
+            "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] WHERE [Brand]='HONOR'"
+        )
+        for vista in catalogo._VISTAS_DE_LA_CONSOLIDADA:
+            assert f"[{vista}]" in nueva
+        assert nueva.count("UNION ALL") == 8
+        assert "SELECT *" not in nueva
+        assert "AS [ETL_Consolidado_B2B] WHERE" in nueva
+
+    def test_respeta_el_alias(self):
+        nueva = catalogo.consolidada_de_repuesto(
+            "SELECT v.[Retail] FROM ETL_Consolidado_B2B v GROUP BY v.[Retail]"
+        )
+        assert ") AS v GROUP BY" in nueva
+
+    def test_sin_consolidada_no_hay_repuesto(self):
+        assert catalogo.consolidada_de_repuesto("SELECT * FROM vw_ETL_Elektra") is None

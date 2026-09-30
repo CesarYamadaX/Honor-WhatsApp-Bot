@@ -167,34 +167,75 @@ def completar_media_cadena(query: str) -> tuple[str, list[str]]:
 
     Devuelve la consulta, y las vistas que se completaron para decirselo.
     """
-    columnas = ", ".join(f"[{c}]" for c in _COLUMNAS_COMUNES)
     completadas: list[str] = []
     for vista, otra in _VISTAS_PARTIDAS:
         if re.search(rf"(?<!\w){re.escape(otra)}(?!\w)", query, re.IGNORECASE):
             continue
-        union = (
-            f"(SELECT {columnas} FROM [RAW_DATA_B2B].dbo.[{vista}] "
-            f"UNION ALL SELECT {columnas} FROM [RAW_DATA_B2B].dbo.[{otra}])"
-        )
-        patron = re.compile(
-            rf"(\b(?:FROM|JOIN)\s+)"
-            rf"(?:\[?RAW_DATA_B2B\]?\s*\.\s*\[?dbo\]?\s*\.\s*)?"
-            rf"\[?{re.escape(vista)}\]?(?![\w\]])"
-            rf"(\s+(?:AS\s+)?(\[?[A-Za-z_]\w*\]?))?",
-            re.IGNORECASE,
-        )
-
-        def reemplazo(m, union=union, vista=vista):
-            antes, resto, alias = m.group(1), m.group(2) or "", m.group(3)
-            if alias and alias.strip("[]").upper() not in _NO_SON_ALIAS:
-                return f"{antes}{union} AS {alias}"
-            return f"{antes}{union} AS [{vista}]{resto}"
-
-        nueva, cuantas = patron.subn(reemplazo, query)
+        query, cuantas = _reemplazar_objeto(query, vista, _union_de((vista, otra)))
         if cuantas:
-            query = nueva
             completadas.append(f"{vista} con {otra}")
     return query, completadas
+
+
+def _union_de(vistas) -> str:
+    """Las vistas unidas por sus columnas comunes, como tabla derivada."""
+    columnas = ", ".join(f"[{c}]" for c in _COLUMNAS_COMUNES)
+    return "(" + " UNION ALL ".join(
+        f"SELECT {columnas} FROM [RAW_DATA_B2B].dbo.[{v}]" for v in vistas
+    ) + ")"
+
+
+def _reemplazar_objeto(query: str, nombre: str, derivada: str) -> tuple[str, int]:
+    """Cambia `FROM <nombre>` por `FROM <derivada> AS <alias>`.
+
+    Solo despues de FROM o JOIN: un `[nombre].[col]` en el SELECT se deja
+    como esta, y sigue funcionando porque la tabla derivada toma ese nombre
+    como alias cuando la consulta no traia otro. Si traia uno, lo respeta.
+    """
+    patron = re.compile(
+        rf"(\b(?:FROM|JOIN)\s+)"
+        rf"(?:\[?RAW_DATA_B2B\]?\s*\.\s*\[?dbo\]?\s*\.\s*)?"
+        rf"\[?{re.escape(nombre)}\]?(?![\w\]])"
+        rf"(\s+(?:AS\s+)?(\[?[A-Za-z_]\w*\]?))?",
+        re.IGNORECASE,
+    )
+
+    def reemplazo(m):
+        antes, resto, alias = m.group(1), m.group(2) or "", m.group(3)
+        if alias and alias.strip("[]").upper() not in _NO_SON_ALIAS:
+            return f"{antes}{derivada} AS {alias}"
+        return f"{antes}{derivada} AS [{nombre}]{resto}"
+
+    return patron.subn(reemplazo, query)
+
+
+# Las nueve vistas que une ETL_Consolidado_B2B. No se puede leer la
+# definicion desde aqui (el login es de solo lectura y no la ve), asi que la
+# lista es la medida: el 30 de septiembre de 2026 su union por las columnas
+# comunes dio 160 909 unidades de Honor en agosto y 2 056 940 del mercado,
+# los mismos numeros que la consolidada cuando funcionaba.
+_VISTAS_DE_LA_CONSOLIDADA = (
+    "vw_ETL_ATT_Postpaid", "vw_ETL_COPPEL", "vw_ETL_COPPEL_IOT",
+    "vw_ETL_Elektra", "vw_ETL_Liverpool", "vw_ETL_Liverpool_IOT",
+    "vw_ETL_Movistar_CAC", "vw_ETL_Sears", "vw_ETL_TELCEL_B2B",
+)
+
+
+def consolidada_de_repuesto(query: str) -> str | None:
+    """La misma consulta, con la consolidada reconstruida desde sus vistas.
+
+    Para cuando la vista del servidor esta rota: el 30 de septiembre de 2026
+    a seis de sus nueve vistas les agregaron [Key prices] y a tres no, y su
+    UNION dejo de funcionar para cualquier consulta. Sin repuesto el modelo
+    consultaba cadena por cadena y sumaba de cabeza, y se equivoco: dijo
+    116 105 unidades cuando sus propios numeros sumaban 160 909.
+
+    None si la consulta no usa la consolidada.
+    """
+    nueva, cuantas = _reemplazar_objeto(
+        query, "ETL_Consolidado_B2B", _union_de(_VISTAS_DE_LA_CONSOLIDADA)
+    )
+    return nueva if cuantas else None
 
 
 def avisos_de_media_cadena(query: str) -> list[str]:

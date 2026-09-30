@@ -34,6 +34,7 @@ from catalogo import (
     cargar_catalogo,
     avisos_de_media_cadena,
     completar_media_cadena,
+    consolidada_de_repuesto,
     describir_objeto,
     filtros_que_no_casan,
     indice,
@@ -1311,10 +1312,36 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
 
     comenzo = time.monotonic()
     bitacora.paso(f"SQL: {' '.join(query.split())}", bitacora.SQL)
+    # La etiqueta del resultado se saca de la consulta tal como la pidio el
+    # modelo: si hubo que reconstruir la consolidada, listar sus nueve vistas
+    # solo confundiria.
+    consulta_para_etiqueta = query
+    con_repuesto = False
     try:
         with ctx.engine.connect() as conexion:
             with _presupuesto_de_tiempo(conexion, presupuesto):
-                df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+                try:
+                    df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+                except ConsultaCancelada:
+                    raise
+                except Exception as primera:
+                    # La consolidada rota en el servidor: se reintenta UNA vez
+                    # con ella reconstruida desde sus vistas. Solo ante ese
+                    # error -- en cuanto la arreglen, se vuelve a usar la real.
+                    repuesto = (
+                        consolidada_de_repuesto(query)
+                        if _vista_rota_en_el_servidor(primera, query)
+                        else None
+                    )
+                    if repuesto is None:
+                        raise
+                    bitacora.paso(
+                        "la vista consolidada esta rota en el servidor; "
+                        "reintento reconstruyendola desde sus vistas",
+                        bitacora.NOTA,
+                    )
+                    query, con_repuesto = repuesto, True
+                    df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
     except ConsultaCancelada:
         raise
     except Exception as error:  # noqa: BLE001 - el mensaje (resumido) vuelve al modelo
@@ -1484,7 +1511,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "ENTERA. No hace falta consultar la otra vista."
         )
 
-    objetos = _objetos_consultados(query)
+    if con_repuesto:
+        partes.append(
+            "Nota: la vista ETL_Consolidado_B2B esta rota en el servidor, asi "
+            "que este resultado sale de sus nueve vistas unidas, que dan "
+            "exactamente los mismos numeros. Puedes seguir usando "
+            "ETL_Consolidado_B2B normalmente: cada consulta se reconstruye "
+            "sola. Mencionale al usuario, en una linea, que la vista "
+            "consolidada esta fallando en el servidor."
+        )
+
+    objetos = _objetos_consultados(consulta_para_etiqueta)
     if objetos:
         partes[0] = f"Resultado de la consulta a {', '.join(objetos)}:\n{partes[0]}"
 

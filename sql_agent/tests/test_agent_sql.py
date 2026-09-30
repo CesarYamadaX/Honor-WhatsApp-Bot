@@ -1954,3 +1954,52 @@ class TestCadaResultadoDiceDeDondeSalio:
         assert modulo_agente._objetos_consultados(
             "SELECT SUM(QTY) FROM (SELECT QTY FROM vw_ETL_Sears) t"
         ) == ["vw_ETL_Sears"]
+
+
+class TestReintentoConLaConsolidadaDeRepuesto:
+    """Sin repuesto, con la consolidada rota el modelo consultaba cadena por
+    cadena y sumaba de cabeza, y se equivoco: dijo 116 105 unidades cuando
+    sus propios numeros sumaban 160 909.
+    """
+
+    _ERROR = Exception(
+        "('42000', '[SQL Server]All queries combined using a UNION, INTERSECT or "
+        "EXCEPT operator must have an equal number of expressions in their target lists. (205)')"
+    )
+
+    def test_reintenta_una_vez_y_entrega_el_resultado(self, engine, monkeypatch):
+        consultas = []
+        original = modulo_agente._ejecutar_interrumpible
+
+        def falso(conexion, query, cancelacion):
+            consultas.append(query)
+            if len(consultas) == 1:
+                raise self._ERROR
+            return original(conexion, "SELECT * FROM ventas WHERE monto < 30", cancelacion)
+
+        monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke(
+                {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+
+        assert len(consultas) == 2
+        assert "vw_ETL_TELCEL_B2B" in consultas[1]
+        assert "tienda-0" in salida
+        assert "rota en el servidor" in salida
+        # La etiqueta nombra lo que pidio el modelo, no las nueve vistas.
+        assert salida.startswith("Resultado de la consulta a ETL_Consolidado_B2B:")
+
+    def test_otro_error_no_se_reintenta(self, engine, monkeypatch):
+        consultas = []
+
+        def falso(conexion, query, cancelacion):
+            consultas.append(query)
+            raise Exception("Invalid column name 'QTY'.")
+
+        monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
+        with contexto_peticion(engine):
+            consultar_sql.invoke(
+                {"query": "SELECT * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+        assert len(consultas) == 1
