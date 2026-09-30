@@ -605,6 +605,65 @@ def _homologacion_mal_unida(sql: str) -> str:
     )
 
 
+# `FROM [RAW_DATA_B2B].dbo.[vw_ETL_Elektra] v` -> vw_ETL_Elektra. Solo el
+# ultimo tramo del nombre: base y esquema no le dicen nada al modelo.
+_OBJETO_EN_FROM = re.compile(
+    r"\b(?:FROM|JOIN)\s+((?:\[[^\]]+\]|[\w$]+)(?:\s*\.\s*(?:\[[^\]]+\]|[\w$]+))*)",
+    re.IGNORECASE,
+)
+
+
+def _objetos_consultados(query: str) -> list[str]:
+    """Las tablas y vistas que lee la consulta, sin repetir y en orden."""
+    vistos: list[str] = []
+    for completo in _OBJETO_EN_FROM.findall(query or ""):
+        nombre = re.split(r"\s*\.\s*", completo)[-1].strip("[]")
+        if nombre and nombre not in vistos and not nombre.startswith("("):
+            vistos.append(nombre)
+    return vistos
+
+
+# Errores que no son de la consulta sino de la DEFINICION de una vista: 205
+# es un UNION cuyas partes no traen las mismas columnas, 4413 una vista que
+# no se puede resolver. Visto el 30 de septiembre de 2026: a seis de las
+# nueve vistas vw_ETL_* les agregaron la columna [Key prices] y a tres no, y
+# ETL_Consolidado_B2B -- que es el UNION de las nueve -- dejo de funcionar
+# para cualquier consulta. El modelo leia el error como suyo y reintentaba
+# la misma vista hasta agotar los pasos.
+_VISTA_ROTA = re.compile(
+    r"All queries combined using a UNION|Could not use view or function|binding errors",
+    re.IGNORECASE,
+)
+
+
+def _vista_rota_en_el_servidor(error: Exception, query: str) -> str:
+    """Si el error es de la vista consolidada y no de la consulta, lo dice.
+
+    Solo cuando la consulta NO trae un UNION propio: si lo trae, el error de
+    columnas puede ser del modelo, y ahi el mensaje correcto es el del driver.
+    """
+    if not _VISTA_ROTA.search(str(error)):
+        return ""
+    if "ETL_Consolidado_B2B".casefold() not in query.casefold():
+        return ""
+    if re.search(r"\bUNION\b", query, re.IGNORECASE):
+        return ""
+    return (
+        " ESTE ERROR NO ES DE TU CONSULTA: la vista ETL_Consolidado_B2B esta "
+        "rota en el servidor (las vistas vw_ETL_* que une ya no traen las "
+        "mismas columnas). No la vuelvas a usar en esta pregunta, falle como "
+        "falle. Consulta cadena por cadena en las vistas vw_ETL_* "
+        "(vw_ETL_Elektra, vw_ETL_TELCEL_B2B, vw_ETL_Sears, vw_ETL_ATT_Postpaid, "
+        "vw_ETL_Movistar_CAC), nombrando las columnas que necesitas y NUNCA "
+        "con SELECT *: algunas traen una columna de mas. Coppel y Liverpool "
+        "viven en dos vistas cada una y van juntas en la MISMA consulta con "
+        "UNION ALL (vw_ETL_COPPEL con vw_ETL_COPPEL_IOT, vw_ETL_Liverpool con "
+        "vw_ETL_Liverpool_IOT). Al contestar, dile al usuario que la vista "
+        "consolidada esta fallando en el servidor y que el numero sale de "
+        "sumar las cadenas una por una."
+    )
+
+
 def _donde_vive_de_verdad(error: Exception) -> str:
     """Si el objeto existe en otra base, nombra la buena. Si no, cadena vacia.
 
@@ -1282,6 +1341,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             )
         return (
             f"Error al ejecutar la consulta: {error}"
+            f"{_vista_rota_en_el_servidor(error, query)}"
             f"{_donde_vive_de_verdad(error)}"
             f"{_columnas_que_si_existen(error, query)}"
         )
@@ -1401,6 +1461,16 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         ctx.sugerencias = sugerir(ctx.pregunta, df, query)
 
     partes = [resultado.texto]
+
+    # Cada resultado dice de donde salio. Visto el 30 de septiembre de 2026:
+    # el modelo mando siete consultas en paralelo, una por cadena, y cada una
+    # le volvio como un numero pelado ("8383.0"). Dos de las siete fueron
+    # bloqueadas, y al repartir los numeros por orden corrio todo un lugar:
+    # a Coppel le puso el de Elektra, a Elektra el de AT&T... y lo contesto
+    # como si nada. Con la etiqueta pegada al numero no hay orden que valga.
+    objetos = _objetos_consultados(query)
+    if objetos:
+        partes[0] = f"Resultado de la consulta a {', '.join(objetos)}:\n{partes[0]}"
 
     # El mes que va a medio cargar. Sin esto, "ventas por mes" contesta que
     # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
@@ -1841,6 +1911,16 @@ class SQLAgent:
             texto = self._sin_enlaces_inventados(
                 respuesta.get("output", "No se obtuvo respuesta.")
             )
+            # Cuando el agente agota sus pasos, LangChain devuelve su propio
+            # texto -- "Agent stopped due to max iterations." --, en ingles y
+            # sin decir nada util, y eso llegaba tal cual al WhatsApp. Visto
+            # el 30 de septiembre de 2026, con la vista consolidada rota.
+            sin_conclusion = texto.strip().startswith("Agent stopped due to")
+            if sin_conclusion:
+                texto = idiomas.texto("sin_conclusion", self.idioma)
+                # Ofrecer "tambien te puedo decir..." debajo de un "no pude"
+                # seria prometer lo que acaba de fallar.
+                ctx.sugerencias = []
             # El historial guarda lo que escribio el modelo; la ficha se pega
             # despues, para el usuario. Repetirsela al modelo en el siguiente
             # turno solo lo invitaria a copiarla.

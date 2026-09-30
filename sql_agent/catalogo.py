@@ -101,13 +101,19 @@ _AVISO = (
     "hayan pedido justamente esa parte, vuelve a consultar la cadena completa "
     "con ETL_Consolidado_B2B y [Retail] IN ({literales}){union}."
 )
-_UNION = ", o haz UNION ALL de las dos vistas vw_ETL_*"
+_UNION = (
+    ", o haz UNION ALL de las dos vistas vw_ETL_* en la MISMA consulta, "
+    "nombrando columnas (nunca SELECT *), por ejemplo: SELECT SUM([QTY]) "
+    "FROM (SELECT [QTY] FROM [RAW_DATA_B2B].dbo.[{objeto}] WHERE ... "
+    "UNION ALL SELECT [QTY] FROM [RAW_DATA_B2B].dbo.[{otra}] WHERE ...) t"
+)
 
 
 def _media(objeto, otra, cadena, literales, medido, union):
     return (objeto, otra, _AVISO.format(
         objeto=objeto, otra=otra, cadena=cadena, literales=literales,
-        medido=medido, union=_UNION if union else ""))
+        medido=medido,
+        union=_UNION.format(objeto=objeto, otra=otra) if union else ""))
 
 
 _LP = ("Medido en agosto de 2026, esto solo da 99 040 unidades de las "

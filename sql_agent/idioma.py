@@ -128,6 +128,31 @@ TEXTOS = {
             "请告诉 lauragabrielacastellanos 或 GTM Mexico 团队的同事。"
         ),
     },
+    # El agente agoto sus pasos sin llegar a una respuesta. No dice por que
+    # -- eso ya lo sabe el log -- pero si que no es culpa de quien pregunta, y
+    # que hacer.
+    "sin_conclusion": {
+        ESPANOL: (
+            "No logre llegar a una respuesta: intente varias consultas y "
+            "ninguna funciono. Puede ser un problema pasajero de la base de "
+            "datos. Intenta de nuevo en unos minutos o hazme la pregunta mas "
+            "concreta (una cadena, un mes). Si sigue fallando, avisale a "
+            "lauragabrielacastellanos o a alguien del equipo de GTM Mexico."
+        ),
+        INGLES: (
+            "I couldn't get to an answer: I tried several queries and none "
+            "worked. It may be a temporary database problem. Try again in a "
+            "few minutes or make the question more specific (one retailer, "
+            "one month). If it keeps failing, let lauragabrielacastellanos or "
+            "someone on the GTM Mexico team know."
+        ),
+        CHINO: (
+            "我没能得出答案：我尝试了几次查询，都没有成功。可能是数据库的"
+            "临时问题。请过几分钟再试，或者把问题问得更具体一些（一个渠道、"
+            "一个月份）。如果一直失败，请告诉 lauragabrielacastellanos 或 "
+            "GTM Mexico 团队的同事。"
+        ),
+    },
     "cancelado": {
         ESPANOL: "Listo, cancele la consulta anterior.",
         INGLES: "Done, I cancelled the previous query.",

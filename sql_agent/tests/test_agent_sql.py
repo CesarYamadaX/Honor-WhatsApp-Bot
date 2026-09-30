@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 import agent as modulo_agente
 import grafica
+import idioma as idiomas
 
 from agent import (
     SQLAgent,
@@ -1828,3 +1829,128 @@ class TestCualReporteSeEntrega:
             ctx.registrar_reporte("dos.png", "dos.xlsx")
 
         assert ctx.archivos == ["uno.png", "uno.xlsx"]
+
+
+class TestCuandoElAgenteNoLlegaAUnaRespuesta:
+    """Visto el 30 de septiembre de 2026, con la vista consolidada rota: el
+    agente agoto sus pasos y al WhatsApp llego, tal cual, el texto interno de
+    LangChain "Agent stopped due to max iterations.", en ingles y sin nada
+    util.
+    """
+
+    def _responder(self, salida, idioma="es", consulta=None, pregunta="ventas de agosto"):
+        agente = SQLAgent.__new__(SQLAgent)
+        agente.engine = _engine_con_serie_mensual()
+        agente.historial = []
+        agente.idioma = idioma
+
+        class _Ejecutor:
+            def invoke(self, payload, config=None, **kwargs):
+                if consulta:
+                    consultar_sql.invoke({"query": consulta})
+                return {"output": salida}
+
+        agente.agent_executor = _Ejecutor()
+        return agente, agente.responder(pregunta)[0]
+
+    def test_no_llega_el_texto_interno_de_langchain(self):
+        _, texto = self._responder("Agent stopped due to max iterations.")
+        assert "Agent stopped" not in texto
+        assert texto == idiomas.texto("sin_conclusion", "es")
+
+    def test_tampoco_la_variante_por_tiempo(self):
+        _, texto = self._responder("Agent stopped due to iteration limit or time limit.")
+        assert "Agent stopped" not in texto
+
+    def test_va_en_el_idioma_del_usuario(self):
+        # El idioma sale de la pregunta: responder la vuelve a detectar.
+        _, texto = self._responder(
+            "Agent stopped due to max iterations.",
+            idioma="en",
+            pregunta="how many units did Honor sell in August",
+        )
+        assert texto == idiomas.texto("sin_conclusion", "en")
+
+    def test_no_ofrece_nada_debajo_de_un_no_pude(self):
+        # Habria sugerencias (la consulta de la serie si corrio), pero debajo
+        # de "no logre llegar a una respuesta" serian prometer lo que fallo.
+        _, texto = self._responder(
+            "Agent stopped due to max iterations.", consulta="SELECT * FROM serie"
+        )
+        assert "Tambien te puedo decir" not in texto
+
+    def test_una_respuesta_normal_no_se_toca(self):
+        _, texto = self._responder("Vendieron 120 mil unidades.")
+        assert texto.startswith("Vendieron 120 mil unidades.")
+
+
+class TestVistaRotaEnElServidor:
+    """El 30 de septiembre de 2026, a seis de las nueve vistas vw_ETL_* les
+    agregaron la columna [Key prices] y a tres no. ETL_Consolidado_B2B, que
+    es el UNION de las nueve, dejo de funcionar para cualquier consulta, y el
+    modelo leia el error como suyo: reintentaba la misma vista hasta agotar
+    los pasos.
+    """
+
+    _ERROR = Exception(
+        "('42000', '[42000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        "All queries combined using a UNION, INTERSECT or EXCEPT operator must "
+        "have an equal number of expressions in their target lists. (205)')"
+    )
+    _CONSOLIDADA = (
+        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] "
+        "WHERE [Brand] = 'HONOR'"
+    )
+
+    def test_le_dice_al_modelo_que_no_es_su_consulta(self):
+        pista = modulo_agente._vista_rota_en_el_servidor(self._ERROR, self._CONSOLIDADA)
+        assert "NO ES DE TU CONSULTA" in pista
+        assert "No la vuelvas a usar" in pista
+        # Y el camino alternativo, completo: las dos mitades de las cadenas
+        # partidas van juntas, o la guardia de media cadena lo bloquea.
+        assert "vw_ETL_COPPEL_IOT" in pista and "vw_ETL_Liverpool_IOT" in pista
+        assert "SELECT *" in pista
+
+    def test_si_el_union_es_del_modelo_el_error_es_suyo(self):
+        propia = self._CONSOLIDADA + " UNION ALL SELECT 1, 2"
+        assert modulo_agente._vista_rota_en_el_servidor(self._ERROR, propia) == ""
+
+    def test_solo_aplica_a_la_consolidada(self):
+        assert modulo_agente._vista_rota_en_el_servidor(
+            self._ERROR, "SELECT * FROM [RAW_DATA_B2B].dbo.[EKT_B2B]"
+        ) == ""
+
+    def test_otro_error_no_se_disfraza(self):
+        assert modulo_agente._vista_rota_en_el_servidor(
+            Exception("Invalid column name 'QTY'."), self._CONSOLIDADA
+        ) == ""
+
+
+class TestCadaResultadoDiceDeDondeSalio:
+    """Visto el 30 de septiembre de 2026: siete consultas en paralelo, una
+    por cadena, y cada resultado volvia como un numero pelado. Dos fueron
+    bloqueadas, y el modelo repartio los numeros por orden: a Coppel le puso
+    el de Elektra, a Elektra el de AT&T.
+    """
+
+    def test_el_resultado_lleva_el_nombre_de_la_tabla(self, engine):
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke({"query": "SELECT * FROM ventas WHERE monto < 30"})
+        assert salida.startswith("Resultado de la consulta a ventas:")
+        assert "tienda-0" in salida
+
+    def test_con_base_esquema_y_corchetes_queda_solo_el_nombre(self):
+        assert modulo_agente._objetos_consultados(
+            "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Elektra] WHERE x=1"
+        ) == ["vw_ETL_Elektra"]
+
+    def test_varias_tablas_en_orden_y_sin_repetir(self):
+        assert modulo_agente._objetos_consultados(
+            "SELECT 1 FROM vw_ETL_COPPEL a UNION ALL SELECT 1 FROM vw_ETL_COPPEL_IOT b "
+            "UNION ALL SELECT 1 FROM vw_ETL_COPPEL c"
+        ) == ["vw_ETL_COPPEL", "vw_ETL_COPPEL_IOT"]
+
+    def test_una_subconsulta_no_cuenta_como_tabla(self):
+        assert modulo_agente._objetos_consultados(
+            "SELECT SUM(QTY) FROM (SELECT QTY FROM vw_ETL_Sears) t"
+        ) == ["vw_ETL_Sears"]
