@@ -61,7 +61,12 @@ def es_falla_del_servicio(error: BaseException | None) -> bool:
 # timeout con el que ODBC se rinde cuando el nombre ni siquiera resuelve.
 # Visto el 28 de septiembre de 2026: DESKTOP-GOE584A dejo de resolverse y
 # cada pregunta tardaba ~18s en devolver un 500.
-_ESTADOS_SIN_CONEXION = ("08001", "08S01", "08004", "HYT00")
+#
+# Como codigo suelto, no como subcadena: "08001" aparece tambien dentro de
+# cualquier numero largo -- un timestamp como 1727508001000 en el
+# X-RateLimit-Reset de un 429 de OpenRouter -- y eso haria pasar una cuota
+# topada del modelo por una base caida.
+_ESTADOS_SIN_CONEXION = re.compile(r"(?<![0-9A-Za-z])(?:08001|08S01|08004|HYT00)(?![0-9A-Za-z])")
 
 
 def es_falla_de_conexion(error: BaseException | None) -> bool:
@@ -75,8 +80,7 @@ def es_falla_de_conexion(error: BaseException | None) -> bool:
     vistos: set[int] = set()
     while error is not None and id(error) not in vistos:
         vistos.add(id(error))
-        texto = str(error)
-        if any(estado in texto for estado in _ESTADOS_SIN_CONEXION):
+        if _ESTADOS_SIN_CONEXION.search(str(error)):
             return True
         error = error.__cause__ or error.__context__ or getattr(error, "orig", None)
     return False
@@ -165,7 +169,7 @@ def crear_app(
         fabrica=fabrica_agente,
         # La memoria dura el dia natural; SESSION_TTL_MINUTES es solo un tope
         # extra por inactividad, y en 0 (el valor por defecto) no aplica.
-        ttl_segundos=config.ttl_minutos * 60 or None,
+        ttl_segundos=config.ttl_minutos * 60,
     )
     # Sin registro en disco se trabaja con uno en memoria sembrado del .env:
     # el comportamiento es el de siempre y las pruebas no necesitan archivos.
@@ -263,7 +267,12 @@ def crear_app(
 
         registro.purgar()
         try:
-            sesion = registro.obtener(peticion.chat_id)
+            # En un hilo y no aqui: abrir una conversacion construye un
+            # SQLAgent, que se conecta a la base -- ~18s con el servidor
+            # caido. Hecho en el event loop, eso congelaba TODAS las
+            # peticiones: el /authorized de otro chat pasaba sus 5s y el
+            # sidecar descartaba ese mensaje como "no autorizado".
+            sesion = await run_in_threadpool(registro.obtener, peticion.chat_id)
         except Exception as error:
             # Abrir una conversacion construye un SQLAgent, y ese se conecta
             # a la base. Si la base no contesta, esto reventaba como un 500

@@ -518,3 +518,13 @@ class TestBaseDeDatosCaida:
 
         assert not api.es_falla_de_conexion(RuntimeError("42S22 columna"))
         assert not api.es_falla_de_conexion(None)
+
+    def test_un_numero_largo_con_esos_digitos_no_es_un_sqlstate(self):
+        # Un 429 de OpenRouter trae el reinicio de la cuota como timestamp en
+        # milisegundos. Si contiene "08001" por casualidad, no es la base.
+        cuota = RuntimeError(
+            "Error code: 429 - {'error': {'metadata': {'headers': "
+            "{'X-RateLimit-Reset': '1727508001000'}}}}"
+        )
+        assert not api.es_falla_de_conexion(cuota)
+        assert api.es_falla_de_conexion(RuntimeError("[HYT00] Login timeout expired"))

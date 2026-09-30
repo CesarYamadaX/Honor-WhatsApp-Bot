@@ -22,7 +22,13 @@
  * `finally`): sin eso, una consulta que termina en 3s igual manda el aviso
  * de paciencia dos minutos despues, cuando el usuario ya tiene su respuesta.
  *
- * @param {(clave: string) => Promise<void>|void} enviar - manda ese aviso.
+ * `enviar` recibe, ademas de la clave, un `vigente()` que dice si los avisos
+ * siguen en pie. Hace falta porque enviar suele esperar algo antes de mandar
+ * (el idioma del chat): si la respuesta llega en ese intervalo, el
+ * temporizador ya disparo y `cancelar()` no lo alcanza, asi que quien envia
+ * tiene que volver a mirar justo antes de mandar.
+ *
+ * @param {(clave: string, vigente: () => boolean) => Promise<void>|void} enviar - manda ese aviso.
  * @param {{esperaMs: number, pacienciaMs: number}} plazos
  * @returns {() => void} cancelar
  */
@@ -31,11 +37,15 @@ export function programarAvisos(enviar, { esperaMs, pacienciaMs }) {
     throw new TypeError("programarAvisos necesita una funcion para enviar");
   }
 
+  let cancelado = false;
+  const vigente = () => !cancelado;
+
   // Un fallo al avisar no puede tumbar nada: el aviso es un acompañamiento,
   // y la respuesta de verdad viene por otro lado. Se registra y se sigue.
   const mandar = (clave) => () => {
+    if (cancelado) return;
     try {
-      Promise.resolve(enviar(clave)).catch((error) => {
+      Promise.resolve(enviar(clave, vigente)).catch((error) => {
         console.error(`[avisos] no se pudo mandar "${clave}": ${error?.message ?? error}`);
       });
     } catch (error) {
@@ -48,7 +58,6 @@ export function programarAvisos(enviar, { esperaMs, pacienciaMs }) {
     setTimeout(mandar("espera_larga"), pacienciaMs),
   ];
 
-  let cancelado = false;
   return () => {
     // Idempotente: que se llame dos veces (un finally mas un catch de mas
     // arriba) no debe ser un problema.

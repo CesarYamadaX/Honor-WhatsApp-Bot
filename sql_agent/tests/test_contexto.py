@@ -32,6 +32,7 @@ class _MotorDeCatalogos:
         self.respuestas = respuestas or {}
         self.falla = falla
         self.consultas = []
+        self.plazos = []
 
     def connect(self):
         return self
@@ -54,6 +55,9 @@ class _MotorDeCatalogos:
 
     def exec_driver_sql(self, sql, parametros=None):
         self.consultas.append((sql, parametros))
+        # El plazo que tenia la conexion MIENTRAS corria esta consulta: al
+        # salir se restaura, asi que despues ya no se puede leer.
+        self.plazos.append(getattr(self, "timeout", None))
         for fragmento in self.falla:
             if fragmento in sql:
                 raise RuntimeError(f"{fragmento} no responde")
@@ -531,7 +535,18 @@ class TestElPresupuestoDelDesglose:
             pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [1]}),
             motor, "", segundos,
         )
-        return motor.timeout
+        return motor.plazos[0]
+
+    def test_el_plazo_no_se_queda_puesto_en_la_conexion(self):
+        # La conexion vuelve al pool: si se quedara con el plazo del
+        # desglose, la siguiente consulta que la reutilice moriria con el.
+        motor = _MotorDeCatalogos()
+        motor.timeout = 0
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [1]}), motor, "", 3
+        )
+        assert motor.plazos[0] == 3
+        assert motor.timeout == 0
 
     def test_se_respeta_lo_que_queda(self):
         assert self._plazos(45) == 45

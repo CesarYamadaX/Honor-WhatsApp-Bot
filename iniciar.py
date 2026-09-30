@@ -280,16 +280,19 @@ def _lanzar(comando: list[str], cwd: Path) -> subprocess.Popen:
 
 def _matar_arbol(pid: int, forzando: bool) -> None:
     """Manda la señal de apagado al proceso Y a todo lo que colgo de el."""
-    if sys.platform == "win32":
-        comando = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if forzando else [])
-    else:
+    if sys.platform != "win32":
         # En POSIX el equivalente es el grupo de procesos, que _lanzar crea
-        # con start_new_session.
+        # con start_new_session: su numero ES el pid del hijo. Se apunta a el
+        # por numero y no con os.getpgid(pid), que falla en cuanto el hijo ya
+        # fue recogido -- justo el caso del barrido final -- y dejaba vivo al
+        # resto del grupo; o, con el pid ya reciclado, devolvia el grupo de
+        # un proceso ajeno.
         try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL if forzando else signal.SIGTERM)
-        except (OSError, ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL if forzando else signal.SIGTERM)
+        except OSError:
             pass
         return
+    comando = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if forzando else [])
     try:
         subprocess.run(comando, capture_output=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
@@ -311,11 +314,12 @@ def _terminar(proceso: subprocess.Popen, nombre: str, espera: float = 10.0) -> N
     muerto, por si quedo algo a medio cerrar. Si no queda nada, taskkill no
     encuentra el PID y no pasa nada.
 
-    Lo que esto NO alcanza: si el padre ya desaparecio, `taskkill /T` no
-    tiene desde donde recorrer y sus nietos quedan re-parentados, fuera de
-    alcance por PID. Ese caso es el de `apagar.py`, que los busca por la
-    marca de su linea de comando. Pasa, por ejemplo, cuando algo mata a este
-    script por fuera en vez de dejarlo llegar a su `finally`.
+    Lo que esto NO alcanza, en Windows: si el padre ya desaparecio,
+    `taskkill /T` no tiene desde donde recorrer y sus nietos quedan
+    re-parentados, fuera de alcance por PID. `apagar.py` tampoco los
+    alcanza: solo mira los PIDs anotados, asi que un nieto huerfano queda
+    vivo con el puerto y hay que matarlo a mano. (En POSIX si se alcanza:
+    el grupo sobrevive a su lider.)
     """
     if proceso.poll() is None:
         print(f"[iniciar] deteniendo {nombre}...", flush=True)

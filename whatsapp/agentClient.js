@@ -1,6 +1,9 @@
 // Traduce el contrato HTTP del servicio Python a algo que el usuario pueda
 // leer en un chat. Devolver null significa "no contestes nada".
 
+import http from "node:http";
+import https from "node:https";
+
 import { IDIOMA_POR_DEFECTO, texto as traducir } from "./textos.js";
 
 const MENSAJES = {
@@ -20,6 +23,54 @@ const MENSAJES = {
 // falso. En el caso normal el 504 del servicio gana primero y da un mensaje
 // mas especifico; esto solo cubre que ni siquiera eso llegue.
 const TIMEOUT_MS_DEFAULT = 900_000;
+
+/**
+ * POST con cuerpo JSON por node:http, SIN el tope de cabeceras de fetch.
+ *
+ * El fetch de Node (undici) abandona cualquier peticion cuyas cabeceras no
+ * lleguen en 300s (headersTimeout), por encima de cualquier AbortController:
+ * medido, falla a los ~303s con UND_ERR_HEADERS_TIMEOUT. /ask no manda nada
+ * hasta tener la respuesta entera, y un reporte de toda la historia de
+ * Coppel tarda ~440s, asi que con fetch el usuario recibia "el sistema no
+ * esta disponible" a los cinco minutos y el reporte se perdia. Aqui el unico
+ * limite es la `signal` de quien llama.
+ *
+ * Devuelve lo poco de Response que usa `preguntar`: status, ok y json().
+ */
+function postSinTopeDeCabeceras(url, cuerpo, signal) {
+  return new Promise((resolve, reject) => {
+    const destino = new URL(url);
+    const cliente = destino.protocol === "https:" ? https : http;
+    const datos = JSON.stringify(cuerpo);
+    const peticion = cliente.request(
+      destino,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(datos),
+        },
+        signal,
+      },
+      (respuesta) => {
+        const trozos = [];
+        respuesta.on("data", (trozo) => trozos.push(trozo));
+        respuesta.on("error", reject);
+        respuesta.on("end", () => {
+          const texto = Buffer.concat(trozos).toString("utf-8");
+          const status = respuesta.statusCode;
+          resolve({
+            status,
+            ok: status >= 200 && status < 300,
+            json: async () => JSON.parse(texto),
+          });
+        });
+      },
+    );
+    peticion.on("error", reject);
+    peticion.end(datos);
+  });
+}
 
 // Timeout corto: es una comprobacion en memoria contra la allowlist, sin base
 // de datos ni modelo de por medio.
@@ -113,12 +164,11 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
 
   let respuesta;
   try {
-    respuesta = await fetch(`${baseUrl}/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: texto }),
-      signal: controlador.signal,
-    });
+    respuesta = await postSinTopeDeCabeceras(
+      `${baseUrl}/ask`,
+      { chat_id: chatId, text: texto },
+      controlador.signal,
+    );
   } catch (error) {
     if (error.name === "AbortError") {
       console.error(`[agentClient] el servicio nunca contesto (timeout de ${timeoutMs}ms)`);

@@ -39,6 +39,7 @@ usuario.
 
 import logging
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import pandas as pd
@@ -755,6 +756,24 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str,
     return pd.DataFrame.from_records(filas, columns=list(cursor.keys()))
 
 
+@contextmanager
+def _con_plazo(conexion, segundos: int):
+    """Le pone plazo a la conexion mientras dura el bloque, y lo deja como estaba.
+
+    El timeout de pyodbc vive en la conexion, y el pool de SQLAlchemy la
+    recicla: sin restaurarlo, la siguiente consulta que la reutilice -- el
+    pronostico, buscar_modelos, los precios, que no fijan plazo propio --
+    heredaria este (que puede ser de 1s) y moriria con HYT00 sin razon.
+    """
+    bruta = conexion.connection.dbapi_connection
+    anterior = getattr(bruta, "timeout", 0)
+    bruta.timeout = segundos
+    try:
+        yield
+    finally:
+        bruta.timeout = anterior
+
+
 def contexto_del_resultado(
     df: pd.DataFrame, engine, query: str = "", segundos: int | None = None
 ) -> dict[str, pd.DataFrame]:
@@ -788,8 +807,7 @@ def contexto_del_resultado(
         cruda = CRUDAS.get(retailer_del_resultado(df, query) or "")
         modelos = modelos_a_desglosar(df)
         try:
-            with engine.connect() as conexion:
-                conexion.connection.dbapi_connection.timeout = plazo
+            with engine.connect() as conexion, _con_plazo(conexion, plazo):
                 if cruda and modelos:
                     ventas = _ventas_por_tienda_y_modelo(
                         conexion, cruda, modelos, *rango
@@ -811,8 +829,7 @@ def contexto_del_resultado(
         # al reves.
         if cruda:
             try:
-                with engine.connect() as conexion:
-                    conexion.connection.dbapi_connection.timeout = plazo
+                with engine.connect() as conexion, _con_plazo(conexion, plazo):
                     crudos = ventas_crudas(conexion, cruda, *rango)
                 if not crudos.empty:
                     hojas["Raw_Data"] = crudos

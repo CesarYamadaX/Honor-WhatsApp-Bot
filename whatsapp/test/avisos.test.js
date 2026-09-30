@@ -79,3 +79,21 @@ test("una promesa rechazada tampoco queda sin manejar", async () => {
 test("sin una funcion para enviar, falla al programar y no despues", () => {
   assert.throws(() => programarAvisos(null, PLAZOS), TypeError);
 });
+
+test("un aviso cuyo envio espera algo no sale si se cancelo en medio", async () => {
+  // El temporizador ya disparo y el envio esta averiguando el idioma cuando
+  // llega la respuesta: cancelar() no alcanza al temporizador, asi que el
+  // envio tiene que poder preguntar si sigue en pie.
+  const mandados = [];
+  let cancelar;
+  cancelar = programarAvisos(async (clave, vigente) => {
+    await esperar(20);
+    if (!vigente()) return;
+    mandados.push(clave);
+  }, { esperaMs: 5, pacienciaMs: 1000 });
+
+  await esperar(10);
+  cancelar();
+  await esperar(30);
+  assert.deepEqual(mandados, []);
+});

@@ -321,8 +321,11 @@ async function atender(mensaje) {
     // viva, y otro mas si la cosa se alarga de verdad.
     const detener = mantenerEscribiendo(jid);
     const cancelarAvisos = programarAvisos(
-      async (clave) => {
+      async (clave, vigente) => {
         const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+        // Mientras se averiguaba el idioma pudo llegar la respuesta: un
+        // "ten paciencia" DESPUES del reporte es peor que ningun aviso.
+        if (!vigente()) return;
         await enviarMensajeSimple(jid, traducir(clave, idioma));
       },
       { esperaMs: AVISO_DE_ESPERA_MS, pacienciaMs: AVISO_DE_PACIENCIA_MS },
@@ -330,6 +333,11 @@ async function atender(mensaje) {
 
     try {
       const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
+      // Los avisos se cortan en cuanto hay respuesta, no al terminar de
+      // entregarla: subir un Excel grande tarda, y en ese rato el de
+      // paciencia ("te aviso en cuanto este") saldria con el reporte ya a
+      // medio llegar. El finally lo repite por si preguntar() lanza.
+      cancelarAvisos();
       // null = 403 (dejo de estar autorizado entre una llamada y otra) o 409
       // (a esta pregunta la cancelo un mensaje posterior, que es el que va a
       // contestar). En ambos casos, silencio.

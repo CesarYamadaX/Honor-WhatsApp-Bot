@@ -51,7 +51,10 @@ class RegistroSesiones:
         dia: Callable[[float], date] = dia_local,
     ):
         self._fabrica = fabrica
-        self._ttl = ttl_segundos or None
+        # Solo un tope positivo es un tope. 0 o None lo apagan, y un negativo
+        # (SESSION_TTL_MINUTES=-5) haria vencer TODA sesion en cada mensaje:
+        # `ultimo_uso <= ahora + 300` es siempre cierto.
+        self._ttl = ttl_segundos if ttl_segundos and ttl_segundos > 0 else None
         self._reloj = reloj
         self._dia = dia
         self._sesiones: dict[str, Sesion] = {}

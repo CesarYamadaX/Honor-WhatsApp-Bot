@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 # iniciar.py vive en la raiz del repo, un nivel arriba de sql_agent, que es
 # lo que pytest pone en el path para el resto de las pruebas.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -192,12 +194,16 @@ class TestApagarNoDejaHuerfanos:
             time.sleep(0.3)
         assert not self._vivo(pid_nieto), "el nieto se quedo vivo (el bug)"
 
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="en POSIX el grupo de procesos sobrevive a su lider y el nieto si se alcanza",
+    )
     def test_si_el_padre_ya_murio_el_nieto_queda_fuera_de_alcance(self, tmp_path):
         # Lo que este apagado NO puede hacer, escrito para que nadie lo
         # asuma: `taskkill /T` recorre el arbol desde el PID del padre, y si
         # ese PID ya no existe sus nietos quedan re-parentados y son
-        # inalcanzables por PID. Para eso esta `apagar.py`, que los busca por
-        # la marca de su linea de comando y no por el parentesco.
+        # inalcanzables por PID. `apagar.py` tampoco los alcanza: solo mira
+        # los PIDs que quedaron anotados.
         proceso, pid_nieto = self._arbol(tmp_path)
         proceso.kill()
         proceso.wait(timeout=10)
