@@ -5,10 +5,9 @@ recibir la respuesta como texto o como archivo Excel.
 
 ## Estado
 
-**Nunca se ha ejecutado contra WhatsApp ni contra SQL Server reales.** Todo
-esta probado por partes con dobles de prueba: 153 pruebas del lado Python y
-54 del lado Node. La verificacion de punta a punta esta pendiente y sus pasos
-estan en `whatsapp/README.md`.
+En uso contra WhatsApp y el SQL Server de GTM Honor Mexico desde septiembre
+de 2026. Ademas tiene pruebas automaticas por partes, con dobles de prueba:
+651 del lado Python y 96 del lado Node (ver "Pruebas", al final).
 
 ## Como funciona
 
@@ -174,6 +173,95 @@ va **contra los terminos de servicio de WhatsApp** y el riesgo concreto es que
 bloqueen el numero. Usa un chip dedicado, nunca el personal ni el principal de
 la empresa.
 
+## Requisitos (antes de instalar)
+
+Esto tiene que existir ANTES de instalar nada. Lo que se instala con
+`pip`/`npm` esta en la seccion siguiente.
+
+**Maquina**
+
+- **Windows 10 u 11.** El bot usa `taskkill` para apagarse, abre el panel en
+  una ventana de Microsoft Edge y arma las tablas dinamicas con Excel por COM
+  (`pywin32`), asi que no corre tal cual en Linux ni en Mac.
+- **Python 3.13** (probado en 3.13.15), desde python.org. Al instalarlo,
+  marcar "Add python.exe to PATH".
+- **Node.js 20 o superior** (probado en 24.19), desde nodejs.org. Trae `npm`.
+- **ODBC Driver 18 for SQL Server**, de Microsoft. Es el que usa `DB_URI`;
+  sin el, `pyodbc` no se puede conectar. Para ver si ya esta, en PowerShell:
+  `Get-OdbcDriver | Where-Object Name -like '*SQL Server*'`.
+- **Microsoft Excel** (opcional). Solo para la hoja `PIVOT` con la tabla
+  dinamica de los reportes; sin Excel el reporte sale igual, sin esa hoja.
+- **Git**, para clonar el repositorio.
+
+**Accesos**
+
+- **Red hacia el SQL Server** (`DESKTOP-GOE584A`): la maquina tiene que estar
+  en la red de la oficina o en su VPN. Desde fuera el nombre ni siquiera
+  resuelve y el bot contesta que no se puede conectar a la base.
+- **Un login de SQL Server de SOLO lectura** (`db_datareader` y nada mas). El
+  bot nunca escribe, y ese permiso es la unica garantia real: las reglas del
+  prompt el modelo las puede desobedecer.
+- **Salida a internet** hacia `web.whatsapp.com` (WhatsApp) y
+  `openrouter.ai` (el modelo). Una VPN o un proxy que las bloquee se ve en el
+  log como `desconectado (connectionLost, codigo 408)` en bucle.
+- **Una API key de OpenRouter** con saldo (openrouter.ai, seccion Keys).
+- **Un telefono con WhatsApp y un chip dedicado** para vincular el bot. No el
+  numero personal ni el de la empresa: Baileys va contra los terminos de
+  WhatsApp y el riesgo es que baneen el numero (ver "Advertencia sobre
+  Baileys").
+
+## Instalacion
+
+En PowerShell, desde la carpeta donde se quiera dejar el bot:
+
+    git clone https://github.com/CesarYamadaX/Honor-WhatsApp-Bot.git
+    cd Honor-WhatsApp-Bot
+
+**1. Dependencias de Python** (servicio `sql_agent/`). Van en un entorno
+virtual `.venv` dentro de `sql_agent`, que es donde `iniciar.py` lo busca:
+
+    cd sql_agent
+    python -m venv .venv
+    .venv\Scripts\python.exe -m pip install -r requirements.txt
+    cd ..
+
+`requirements.txt` fija las versiones exactas. Lo principal: `langchain`,
+`langchain-community` y `langchain-openai` (el agente), `sqlalchemy` y
+`pyodbc` (la base), `fastapi` y `uvicorn` (el servicio HTTP), `pandas`,
+`openpyxl` y `matplotlib` (Excel y graficas), `pywin32` (la tabla dinamica)
+y `Pillow` (las fotos del panel).
+
+**2. Dependencias de Node** (sidecar `whatsapp/`):
+
+    cd whatsapp
+    npm install
+    cd ..
+
+Instala `@whiskeysockets/baileys` (la conexion con WhatsApp), `pino` (sus
+logs) y `qrcode-terminal` (el QR en la consola).
+
+**3. Configuracion.** Copiar la plantilla y llenarla:
+
+    copy sql_agent\.env.example sql_agent\.env
+
+| Variable | Obligatoria | Que es |
+|---|---|---|
+| `DB_URI` | si | Conexion al SQL Server con el login de solo lectura. Dejar `driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes` al final |
+| `OPENROUTER_API_KEY` | si | La key de OpenRouter |
+| `OPENROUTER_MODEL` | si | El modelo a usar, p. ej. `openai/gpt-4-turbo-preview` |
+| `WHATSAPP_ALLOWED_NUMBERS` | si | Numeros que pueden usar el bot, formato internacional sin signos, separados por coma. Sin esto el servicio no arranca |
+| `AGENT_TIMEOUT_SECONDS` | no | Cuanto puede tardar una pregunta (600; los reportes grandes tardan varios minutos) |
+| `SESSION_TTL_MINUTES` | no | 0: la memoria de cada conversacion dura el dia y se borra a medianoche |
+| `CANCEL_WAIT_SECONDS` | no | Espera para cancelar una consulta cuando llega otro mensaje (25) |
+| `API_HOST` / `API_PORT` | no | Donde escucha el servicio (127.0.0.1:8000). No exponerlo fuera de la maquina |
+
+El sidecar no necesita `.env` propio.
+
+**4. Comprobar.** `python iniciar.py` revisa que exista el entorno virtual,
+el `.env` y `node_modules` antes de lanzar nada, y si falta algo dice que y
+no arranca. La primera vez imprime un QR: en el telefono del bot, WhatsApp >
+Dispositivos vinculados > Vincular un dispositivo.
+
 ## Arranque
 
 Un solo comando levanta los dos procesos y abre el panel:
@@ -193,10 +281,8 @@ Para apagarlo: Ctrl+C en esa ventana, o desde cualquier otra terminal
 los PID que anota `iniciar.py` en `.bot-encendido.json`, y comprueba que cada
 proceso siga siendo el suyo antes de matarlo.
 
-Antes hay que copiar `sql_agent/.env.example` a `.env` y llenarlo
-(`DB_URI`, `OPENROUTER_API_KEY`, `WHATSAPP_ALLOWED_NUMBERS`), y correr
-`npm install` en `whatsapp/`. Si falta algo, `iniciar.py` lo dice y no
-arranca nada.
+La instalacion y la configuracion estan en "Instalacion", arriba. Si falta
+algo, `iniciar.py` lo dice y no arranca nada.
 
 Para levantarlos por separado, ver `whatsapp/README.md`.
 
@@ -204,5 +290,15 @@ Ningun `.env` con valores reales se versiona.
 
 ## Pruebas
 
-    cd sql_agent && venv/bin/python -m pytest tests/ -v
-    cd whatsapp && npm test
+Las del lado Python necesitan ademas `requirements-dev.txt` (pytest y lo
+que usa para probar el servicio HTTP):
+
+    cd sql_agent
+    .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+    .venv\Scripts\python.exe -m pytest tests -q
+    cd ..\whatsapp
+    npm test
+
+Ninguna necesita la base de datos ni WhatsApp: usan dobles de prueba. Las de
+la tabla dinamica abren Excel de verdad; si hay otro Excel ocupado pueden
+fallar por contencion y pasar al repetirlas solas.

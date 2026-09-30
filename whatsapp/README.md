@@ -11,8 +11,9 @@ terminos de servicio de WhatsApp. El riesgo concreto es que baneen el numero.
 
 ## Requisitos
 
-- Node 20 o superior (probado en 24.16).
-- El venv de `sql_agent` instalado (`sql_agent/venv`).
+- Node 20 o superior (probado en 24.19).
+- El venv de `sql_agent` instalado (`sql_agent/.venv`; ver "Instalacion" en el
+  README de la raiz).
 - Un login de SQL Server con permisos `db_datareader` y nada mas.
 
 ## Arquitectura del sidecar
