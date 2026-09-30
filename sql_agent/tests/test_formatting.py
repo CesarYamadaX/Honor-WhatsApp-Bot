@@ -1,6 +1,11 @@
 import pandas as pd
 
-from formatting import MAX_ROWS_AS_TEXT, formatear_resultado
+from formatting import (
+    MAX_CARACTERES_PARA_EL_MODELO,
+    MAX_FILAS_PARA_EL_MODELO,
+    MAX_ROWS_AS_TEXT,
+    formatear_resultado,
+)
 
 
 def _df(filas):
@@ -37,11 +42,34 @@ class TestFormatearResultado:
         assert str(MAX_ROWS_AS_TEXT + 1) in resultado.texto
         assert "excel" in resultado.texto.lower()
 
-    def test_el_resumen_no_filtra_los_datos(self):
-        # Cuando va a Excel, el texto anuncia el tamano pero no vuelca las filas.
-        df = _df([{"secreto": f"valor-{i}"} for i in range(MAX_ROWS_AS_TEXT + 1)])
+    def test_con_excel_el_modelo_igual_ve_los_datos(self):
+        # Antes esta prueba exigia lo contrario ("el texto anuncia el tamano
+        # pero no vuelca las filas"), pensando que este texto lo leia el
+        # usuario. Lo lee el MODELO, que escribe el mensaje: sin las filas
+        # inventaba. Visto el 30/09/2026: con 16 filas de julio 2026 en blanco,
+        # presento las de 2025 como 2026 e invento cifras redondas para 2025.
+        df = _df([{"cadena": f"cadena-{i}", "ventas": 1000 + i} for i in range(MAX_ROWS_AS_TEXT + 1)])
         resultado = formatear_resultado(df)
-        assert "valor-0" not in resultado.texto
+        assert resultado.necesita_excel is True
+        assert "cadena-0" in resultado.texto and "cadena-15" in resultado.texto
+        assert "TODOS" in resultado.texto
+        assert "NO ves" not in resultado.texto
+
+    def test_si_no_cabe_todo_se_dice_cuantas_no_vio(self):
+        df = _df([{"n": i} for i in range(MAX_FILAS_PARA_EL_MODELO + 25)])
+        resultado = formatear_resultado(df)
+        assert f"primeros {MAX_FILAS_PARA_EL_MODELO}" in resultado.texto
+        assert "Hay 25 registros mas que NO ves" in resultado.texto
+        assert f"{MAX_FILAS_PARA_EL_MODELO}. n:" in resultado.texto
+        assert f"{MAX_FILAS_PARA_EL_MODELO + 1}. n:" not in resultado.texto
+
+    def test_el_tope_de_caracteres_tambien_corta(self):
+        # Filas anchas (una descripcion larga por fila) no pueden llenarle el
+        # contexto al modelo aunque sean pocas.
+        df = _df([{"texto": "x" * 1000} for _ in range(MAX_ROWS_AS_TEXT + 5)])
+        resultado = formatear_resultado(df)
+        assert len(resultado.texto) < MAX_CARACTERES_PARA_EL_MODELO + 1500
+        assert "NO ves" in resultado.texto
 
     def test_nulo_none_se_muestra_vacio(self):
         # None en columna object (dtype por defecto)
