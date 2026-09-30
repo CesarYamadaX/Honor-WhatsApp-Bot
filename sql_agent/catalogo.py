@@ -130,6 +130,73 @@ _MEDIA_CADENA = (
 )
 
 
+# Las columnas que tienen TODAS las vistas vw_ETL_*. Medido el 30 de
+# septiembre de 2026: a seis les agregaron [Key prices] y a tres no, asi
+# que un SELECT * entre dos de ellas ya no es seguro. Estas diez si.
+_COLUMNAS_COMUNES = (
+    "Retail", "Store", "Brand", "Material_Description", "Carrier",
+    "Date", "Year", "Month", "WEEK", "QTY",
+)
+_VISTAS_PARTIDAS = (
+    ("vw_ETL_COPPEL", "vw_ETL_COPPEL_IOT"),
+    ("vw_ETL_Liverpool", "vw_ETL_Liverpool_IOT"),
+)
+# Lo que puede venir despues del nombre de una tabla y NO es su alias.
+_NO_SON_ALIAS = {
+    "WHERE", "GROUP", "ORDER", "HAVING", "JOIN", "INNER", "LEFT", "RIGHT",
+    "FULL", "CROSS", "OUTER", "ON", "UNION", "EXCEPT", "INTERSECT", "OPTION",
+    "WITH", "PIVOT", "UNPIVOT",
+}
+
+
+def completar_media_cadena(query: str) -> tuple[str, list[str]]:
+    """Reescribe `FROM vw_ETL_COPPEL` como la union de sus dos mitades.
+
+    Antes esto solo se bloqueaba con un aviso, y el aviso no alcanzo: tres
+    veces seguidas (30 de septiembre de 2026) el modelo lo leyo, contesto
+    "no se puede determinar el total de Coppel" y siguio con las demas
+    cadenas. Coppel es la cadena mas grande; quedarse sin ella no es un
+    detalle. Asi que la consulta se completa sola.
+
+    Solo las VISTAS: tienen la misma forma, y se unen por las columnas que
+    comparten. Las tablas crudas no -- Coppel_IOT ni siquiera tiene fecha ni
+    cantidad -- y siguen bloqueadas por `avisos_de_media_cadena`. Y solo lo
+    que va despues de FROM o JOIN: un `[vw_ETL_COPPEL].[QTY]` en el SELECT se
+    deja como esta, y sigue funcionando porque la union toma ese nombre como
+    alias cuando la consulta no traia otro.
+
+    Devuelve la consulta, y las vistas que se completaron para decirselo.
+    """
+    columnas = ", ".join(f"[{c}]" for c in _COLUMNAS_COMUNES)
+    completadas: list[str] = []
+    for vista, otra in _VISTAS_PARTIDAS:
+        if re.search(rf"(?<!\w){re.escape(otra)}(?!\w)", query, re.IGNORECASE):
+            continue
+        union = (
+            f"(SELECT {columnas} FROM [RAW_DATA_B2B].dbo.[{vista}] "
+            f"UNION ALL SELECT {columnas} FROM [RAW_DATA_B2B].dbo.[{otra}])"
+        )
+        patron = re.compile(
+            rf"(\b(?:FROM|JOIN)\s+)"
+            rf"(?:\[?RAW_DATA_B2B\]?\s*\.\s*\[?dbo\]?\s*\.\s*)?"
+            rf"\[?{re.escape(vista)}\]?(?![\w\]])"
+            rf"(\s+(?:AS\s+)?(\[?[A-Za-z_]\w*\]?))?",
+            re.IGNORECASE,
+        )
+
+        def reemplazo(m, union=union, vista=vista):
+            antes, resto, alias = m.group(1), m.group(2) or "", m.group(3)
+            if alias and alias.strip("[]").upper() not in _NO_SON_ALIAS:
+                return f"{antes}{union} AS {alias}"
+            return f"{antes}{union} AS [{vista}]{resto}"
+
+        nueva, cuantas = patron.subn(reemplazo, query)
+        if cuantas:
+            query = nueva
+            completadas.append(f"{vista} con {otra}")
+    return query, completadas
+
+
 def avisos_de_media_cadena(query: str) -> list[str]:
     """Avisos por consultar una vista que es solo un pedazo de su cadena."""
     # `(?<!\w)...(?!\w)` y no `\b...\b`: la tabla de Liverpool se llama

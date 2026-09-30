@@ -33,6 +33,7 @@ from catalogo import (
     buscar,
     cargar_catalogo,
     avisos_de_media_cadena,
+    completar_media_cadena,
     describir_objeto,
     filtros_que_no_casan,
     indice,
@@ -1285,6 +1286,14 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # y lo ignoro -- ya habia gastado dos minutos y tenia el Excel armado, y
     # contesto igual con el 83% de Coppel. Un aviso es opcional; un numero
     # mal por el 17% no puede depender de que al modelo le parezca bien.
+    # Las VISTAS de Coppel y Liverpool se completan solas con su otra mitad;
+    # lo que quede sin completar (las tablas crudas) se bloquea abajo.
+    query, completadas = completar_media_cadena(query)
+    if completadas:
+        bitacora.paso(
+            f"completo la cadena: {'; '.join(completadas)}", bitacora.NOTA
+        )
+
     media_cadena = avisos_de_media_cadena(query)
     if media_cadena:
         bitacora.paso("la consulta es solo parte de su cadena", bitacora.NOTA)
@@ -1468,6 +1477,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # bloqueadas, y al repartir los numeros por orden corrio todo un lugar:
     # a Coppel le puso el de Elektra, a Elektra el de AT&T... y lo contesto
     # como si nada. Con la etiqueta pegada al numero no hay orden que valga.
+    if completadas:
+        partes.append(
+            "Nota: la consulta se completo con la otra mitad de la cadena "
+            f"({'; '.join(completadas)}), asi que este numero ya es la cadena "
+            "ENTERA. No hace falta consultar la otra vista."
+        )
+
     objetos = _objetos_consultados(query)
     if objetos:
         partes[0] = f"Resultado de la consulta a {', '.join(objetos)}:\n{partes[0]}"

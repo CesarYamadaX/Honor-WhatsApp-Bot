@@ -369,3 +369,53 @@ class TestDescribirObjeto:
     def test_objeto_inexistente_no_inventa_nada(self):
         respuesta = self._describir("VentasDelAnioPasado")
         assert "No hay ninguna tabla o vista" in respuesta
+
+
+class TestLasVistasPartidasSeCompletanSolas:
+    """El aviso de media cadena no alcanzo: tres veces seguidas (30 de
+    septiembre de 2026) el modelo lo leyo, contesto "no se puede determinar
+    el total de Coppel" y siguio con las demas cadenas. Ahora la consulta a
+    la VISTA se completa sola con su otra mitad. Verificado contra la base:
+    Coppel 2026 da 5 067 544 y Liverpool agosto 172 648, lo mismo que la
+    consolidada.
+    """
+
+    def test_la_vista_de_coppel_sola_se_completa(self):
+        nueva, hechas = catalogo.completar_media_cadena(
+            "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE [Year]=2026"
+        )
+        assert hechas == ["vw_ETL_COPPEL con vw_ETL_COPPEL_IOT"]
+        assert "UNION ALL" in nueva and "[vw_ETL_COPPEL_IOT]" in nueva
+        # Y ya no la bloquea la guardia: la consulta nombra las dos mitades.
+        assert catalogo.avisos_de_media_cadena(nueva) == []
+
+    def test_se_une_por_columnas_y_no_con_select_asterisco(self):
+        # A seis vistas les agregaron [Key prices] y a tres no: un SELECT *
+        # entre dos de ellas ya no es seguro.
+        nueva, _ = catalogo.completar_media_cadena("SELECT SUM(QTY) FROM vw_ETL_Liverpool")
+        assert "SELECT *" not in nueva
+        assert "[QTY]" in nueva and "Key prices" not in nueva
+
+    def test_respeta_el_alias_que_traia(self):
+        nueva, _ = catalogo.completar_media_cadena(
+            "SELECT v.[Store], SUM(v.[QTY]) FROM vw_ETL_Liverpool v GROUP BY v.[Store]"
+        )
+        assert ") AS v GROUP BY" in nueva
+
+    def test_sin_alias_toma_el_nombre_de_la_vista(self):
+        # Para que un [vw_ETL_COPPEL].[Brand] en el SELECT siga funcionando.
+        nueva, _ = catalogo.completar_media_cadena(
+            "SELECT [vw_ETL_COPPEL].[Brand] FROM [vw_ETL_COPPEL] WHERE [Year]=2026"
+        )
+        assert "AS [vw_ETL_COPPEL] WHERE" in nueva
+        assert nueva.startswith("SELECT [vw_ETL_COPPEL].[Brand] FROM (")
+
+    def test_no_toca_lo_que_no_hace_falta(self):
+        for query in (
+            "SELECT SUM(QTY) FROM vw_ETL_COPPEL_IOT",
+            "SELECT * FROM vw_ETL_COPPEL UNION ALL SELECT * FROM vw_ETL_COPPEL_IOT",
+            "SELECT * FROM vw_ETL_Elektra",
+            # Las crudas no se completan: siguen bloqueadas por la guardia.
+            "SELECT * FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B]",
+        ):
+            assert catalogo.completar_media_cadena(query) == (query, [])
