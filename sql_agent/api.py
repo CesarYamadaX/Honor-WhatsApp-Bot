@@ -20,6 +20,7 @@ import base64
 import binascii
 
 import idioma as idiomas
+import registro_de_logs
 from agent import ConsultaCancelada
 from bitacora import Bitacora
 from fotos import AlmacenDeFotos, ErrorDeFoto
@@ -163,8 +164,12 @@ def crear_app(
     usuarios: RegistroUsuarios | None = None,
     bitacora: Bitacora | None = None,
     fotos: AlmacenDeFotos | None = None,
+    carpeta_logs: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sql_agent")
+    # Donde iniciar.py deja los logs de cada dia (ver registro_de_logs.py).
+    # Se recibe para que las pruebas lean de una carpeta propia.
+    logs = Path(carpeta_logs) if carpeta_logs else registro_de_logs.CARPETA_POR_DEFECTO
     registro = RegistroSesiones(
         fabrica=fabrica_agente,
         # La memoria dura el dia natural; SESSION_TTL_MINUTES es solo un tope
@@ -589,6 +594,45 @@ def crear_app(
             "hay_mas": hay_mas,
             "total": diario.cuantos(chat_id),
         }
+
+    _FUENTES_DE_LOG = {"whatsapp", "api", "iniciar"}
+
+    @app.get("/panel/logs/dias")
+    async def dias_de_log() -> dict:
+        """Los dias con log, con cuantos errores y avisos tuvo cada uno, y lo
+        ultimo que se sabe de la conexion con WhatsApp."""
+        _solo_local()
+        return {
+            "dias": await run_in_threadpool(registro_de_logs.dias, logs),
+            "whatsapp": await run_in_threadpool(registro_de_logs.estado_whatsapp, logs),
+        }
+
+    @app.get("/panel/logs")
+    async def leer_log(
+        dia: str,
+        fuente: str | None = None,
+        solo_problemas: bool = False,
+        limite: int = 500,
+    ) -> dict:
+        """Las ultimas lineas del log de un dia.
+
+        Los logs los escribe iniciar.py: si el bot se arranco de otra forma
+        (los dos procesos a mano), no hay archivo y la lista viene vacia.
+        """
+        _solo_local()
+        if fuente and fuente not in _FUENTES_DE_LOG:
+            raise HTTPException(status_code=400, detail=f"Fuente invalida: {fuente!r}")
+        try:
+            return await run_in_threadpool(
+                registro_de_logs.leer,
+                dia,
+                logs,
+                max(1, min(limite, 5000)),
+                fuente or None,
+                solo_problemas,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     return app
 

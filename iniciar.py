@@ -28,6 +28,44 @@ RAIZ = Path(__file__).resolve().parent
 SERVICIO = RAIZ / "sql_agent"
 SIDECAR = RAIZ / "whatsapp"
 
+# El escritor de logs vive en sql_agent para que el panel lea con las mismas
+# reglas con que se escribe. Es solo libreria estandar: este script corre con
+# el Python del sistema, no con el del venv.
+sys.path.insert(0, str(SERVICIO))
+from registro_de_logs import EscritorDeLogs  # noqa: E402
+
+
+class _ConsolaConLog:
+    """La consola de siempre, y ademas cada linea al log del dia.
+
+    Antes los logs solo vivian en esta ventana: cerrarla los perdia, y no
+    habia forma de saber despues por que se desconecto WhatsApp anoche.
+    Envolviendo stdout y stderr, todo lo que se imprime -- lo de los dos
+    procesos y los avisos propios de este script -- queda escrito una vez,
+    sin tener que acordarse de anotarlo en cada print.
+    """
+
+    def __init__(self, flujo, escritor: EscritorDeLogs):
+        self._flujo = flujo
+        self._escritor = escritor
+        self._pendiente = ""
+        self._candado = threading.Lock()
+
+    def write(self, texto: str) -> int:
+        escrito = self._flujo.write(texto)
+        with self._candado:
+            self._pendiente += texto
+            *completas, self._pendiente = self._pendiente.split("\n")
+        for linea in completas:
+            self._escritor.escribir(linea)
+        return escrito
+
+    def flush(self) -> None:
+        self._flujo.flush()
+
+    def __getattr__(self, nombre):
+        return getattr(self._flujo, nombre)
+
 # Quien esta encendido, para que `apagar.py` lo pueda bajar desde otra
 # terminal. Se borra al salir; si queda huerfano (un corte de luz, la ventana
 # cerrada a lo bruto), la comprobacion de `sigue_siendo_el_nuestro` evita que
@@ -337,6 +375,14 @@ def main(abrir_el_panel: bool = True) -> int:
     for flujo in (sys.stdout, sys.stderr):
         if hasattr(flujo, "reconfigure"):
             flujo.reconfigure(encoding="utf-8", errors="replace")
+
+    # Desde aqui, todo lo que se imprime queda tambien en el log del dia
+    # (sql_agent/datos/logs/), que es lo que muestra la pestaña Logs del
+    # panel. Va antes de lanzar nada: los hilos que vuelcan la salida de cada
+    # proceso toman sys.stdout al crearse.
+    escritor = EscritorDeLogs()
+    sys.stdout = _ConsolaConLog(sys.stdout, escritor)
+    sys.stderr = _ConsolaConLog(sys.stderr, escritor)
 
     problemas = revisar_requisitos()
     if problemas:

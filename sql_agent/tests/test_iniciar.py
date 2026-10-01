@@ -252,3 +252,53 @@ class TestElPanelSeAbreSolo:
 
     def test_un_argumento_cualquiera_no_apaga_el_panel(self):
         assert iniciar.opciones(["--otra-cosa"])["abrir_el_panel"] is True
+
+
+class TestLaConsolaQuedaEnElLog:
+    """Antes los logs solo vivian en la ventana de la terminal: cerrarla los
+    perdia. Ahora todo lo que se imprime pasa a la consola igual que antes y
+    ademas queda escrito, una vez, en el log del dia.
+    """
+
+    class _Escritor:
+        def __init__(self):
+            self.lineas = []
+
+        def escribir(self, linea):
+            self.lineas.append(linea)
+
+    def test_la_consola_ve_lo_mismo_y_el_log_recibe_cada_linea(self):
+        import io
+
+        destino, escritor = io.StringIO(), self._Escritor()
+        consola = iniciar._ConsolaConLog(destino, escritor)
+        print("[whatsapp] conectado", file=consola)
+        print("[iniciar] el sidecar de WhatsApp termino (codigo 1).", file=consola)
+
+        assert destino.getvalue() == (
+            "[whatsapp] conectado\n[iniciar] el sidecar de WhatsApp termino (codigo 1).\n"
+        )
+        assert escritor.lineas == [
+            "[whatsapp] conectado",
+            "[iniciar] el sidecar de WhatsApp termino (codigo 1).",
+        ]
+
+    def test_una_linea_que_llega_en_pedazos_se_anota_entera_y_una_sola_vez(self):
+        import io
+
+        escritor = self._Escritor()
+        consola = iniciar._ConsolaConLog(io.StringIO(), escritor)
+        consola.write("[api] INFO: ")
+        consola.write("Uvicorn running")
+        assert escritor.lineas == []
+        consola.write("\n")
+        assert escritor.lineas == ["[api] INFO: Uvicorn running"]
+
+    def test_lo_demas_del_flujo_sigue_disponible(self):
+        import io
+
+        consola = iniciar._ConsolaConLog(io.StringIO(), self._Escritor())
+        # flush y los atributos del flujo original (encoding, etc.) siguen
+        # ahi: hay codigo que los consulta.
+        consola.flush()
+        assert hasattr(consola, "getvalue")

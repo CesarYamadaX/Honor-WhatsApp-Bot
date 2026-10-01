@@ -46,6 +46,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/usuarios.py` | Quien puede usar el bot y en que estado esta |
 | `sql_agent/fotos.py` | Normaliza y guarda las fotos de los usuarios |
 | `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
+| `sql_agent/registro_de_logs.py` | Los logs tecnicos en disco (uno por dia) y como los lee el panel |
 | `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
 | `panel.py` | Abre el panel como aplicacion, en su propia ventana |
 
@@ -146,6 +147,30 @@ Los usuarios viven en `sql_agent/datos/usuarios.json` y las conversaciones en
 primera vez, el registro se siembra con `WHATSAPP_ALLOWED_NUMBERS` para que
 estrenar el panel no deje a nadie fuera; de ahi en adelante manda el archivo,
 y la semilla nunca revive a un bloqueado.
+
+### Logs
+
+La tercera pestaña del panel, **Logs**, muestra lo tecnico: la conexion con
+WhatsApp, los errores del servicio y los avisos de arranque. Antes eso solo
+se veia en la ventana de la terminal de `iniciar.py`, y cerrarla lo perdia.
+
+- `iniciar.py` escribe todo lo que imprime en `sql_agent/datos/logs/`, un
+  archivo por dia (`bot-AAAA-MM-DD.log`), y borra los de mas de 14 dias. No
+  se guarda el ruido: el sondeo del panel cada 2 segundos y los `/health`.
+- A la izquierda, los dias con cuantos errores y avisos tuvo cada uno; en la
+  pestaña, los errores de hoy. Arriba de las lineas, el estado de WhatsApp
+  ("conectado desde las 09:08").
+- Se filtra por origen (WhatsApp, Servicio, Arranque), por "solo errores y
+  avisos", y el buscador de la izquierda busca texto dentro del log.
+- El log de hoy se actualiza solo mientras esta abierto.
+
+Un **aviso** (ambar) es algo que el bot resuelve solo, como una desconexion
+de WhatsApp que se reintenta. Un **error** (rojo) es algo que fallo: un
+traceback, un 500, el sidecar que se cayo.
+
+Solo hay logs si el bot se arranca con `iniciar.py`: si los dos procesos se
+levantan a mano, no se escribe nada. Como el resto del panel, solo se ven
+desde la propia maquina (los logs traen consultas SQL y numeros).
 
 ## Seguridad
 

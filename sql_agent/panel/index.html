@@ -406,6 +406,46 @@
   }
   .reloj.largo { background: var(--aviso-suave); color: var(--aviso); }
 
+  /* --- logs --- */
+  .logs { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
+  .logs-barra {
+    display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; flex: none;
+    padding: 9px 16px; background: var(--barra); border-bottom: 1px solid var(--borde);
+  }
+  .logs-barra .filtros { display: flex; gap: 6px; flex-wrap: wrap; }
+  .logs-barra button.filtro {
+    border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
+    border-radius: 15px; padding: 4px 12px; font-size: 12.5px; cursor: pointer;
+  }
+  .logs-barra button.filtro[aria-pressed="true"] {
+    background: var(--ok-suave); color: var(--acento-fuerte); border-color: transparent; font-weight: 600;
+  }
+  .logs-barra button.filtro:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .logs-barra label.interruptor {
+    display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--tinta-2); cursor: pointer;
+  }
+  .logs-barra .contador { margin-left: auto; font-size: 12px; color: var(--tinta-2); font-variant-numeric: tabular-nums; }
+  .logs-lineas {
+    flex: 1; overflow: auto; padding: 8px 0 20px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--tinta);
+  }
+  .logs-lineas:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }
+  /* minmax(0, 1fr) y no 1fr: con 1fr la columna crece hasta la palabra mas
+     larga (una URL, una ruta de Windows) y en el telefono la linea se sale
+     de la pantalla en vez de partirse. */
+  .logs-lineas .linea {
+    display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; padding: 1px 16px;
+    white-space: pre-wrap;
+  }
+  .logs-lineas .linea .texto { min-width: 0; overflow-wrap: anywhere; }
+  .logs-lineas .linea .hora { color: var(--tinta-3); font-variant-numeric: tabular-nums; }
+  .logs-lineas .linea.aviso { background: var(--aviso-suave); color: var(--aviso); }
+  .logs-lineas .linea.error { background: var(--alto-suave); color: var(--alto); }
+  .logs-lineas .linea.aviso .hora, .logs-lineas .linea.error .hora { color: inherit; opacity: .75; }
+  .pastilla.errores { background: var(--alto-suave); color: var(--alto); }
+  .pastilla.avisos { background: var(--aviso-suave); color: var(--aviso); }
+  .pastilla.limpio { background: var(--ok-suave); color: var(--acento-fuerte); }
+
   .vacio { color: var(--tinta-2); text-align: center; padding: 46px 20px; font-size: 14px; }
   .bienvenida {
     flex: 1; display: grid; place-content: center; justify-items: center;
@@ -432,6 +472,9 @@
     .volver { display: block; }
     .doodle { padding-inline: 14px; }
     .burbuja { max-width: 88%; }
+    .logs-barra { padding-inline: 12px; }
+    .logs-lineas { font-size: 12px; }
+    .logs-lineas .linea { grid-template-columns: 58px minmax(0, 1fr); gap: 8px; padding-inline: 12px; }
   }
 </style>
 </head>
@@ -470,6 +513,9 @@
         <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista" data-t="tab_chats">Conversaciones</button>
         <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="lista">
           <span data-t="tab_usuarios">Usuarios</span> <span class="cuenta" id="cuenta-usuarios"></span>
+        </button>
+        <button role="tab" id="tab-logs" aria-selected="false" aria-controls="lista">
+          <span data-t="tab_logs">Logs</span> <span class="cuenta" id="cuenta-logs"></span>
         </button>
       </div>
     </div>
@@ -528,6 +574,18 @@
         <div id="personas"></div>
       </div>
     </div>
+
+    <div class="logs" id="vista-logs" hidden>
+      <div class="logs-barra">
+        <div class="filtros" id="filtros-log" role="group"></div>
+        <label class="interruptor">
+          <input type="checkbox" id="solo-problemas">
+          <span data-t="solo_problemas">Solo errores y avisos</span>
+        </label>
+        <span class="contador" id="contador-log"></span>
+      </div>
+      <div class="logs-lineas" id="lineas-log" tabindex="0"></div>
+    </div>
   </main>
 
 </div>
@@ -557,7 +615,8 @@ const TEXTOS = {
     bienvenida:
       "Elige una conversación para ver qué le preguntaron al bot, qué contestó " +
       "y qué hizo para contestarlo. En Usuarios se da de alta, se suspende o se " +
-      "elimina a quien puede escribirle.",
+      "elimina a quien puede escribirle. En Logs está lo técnico: la conexión con " +
+      "WhatsApp y los errores.",
     resumen: (chats, usuarios) =>
       `${chats} conversación${chats === 1 ? "" : "es"} registrada${chats === 1 ? "" : "s"} · ` +
       `${usuarios} usuario${usuarios === 1 ? "" : "s"} en la lista`,
@@ -614,6 +673,28 @@ const TEXTOS = {
     modo_claro: "Siempre claro. Toca para dejarlo siempre oscuro.",
     modo_oscuro: "Siempre oscuro. Toca para volver al automático.",
     cambiar_idioma: "Switch to English",
+    tab_logs: "Logs",
+    buscar_log: "Buscar en el log",
+    solo_problemas: "Solo errores y avisos",
+    fuente: { "": "Todo", whatsapp: "WhatsApp", api: "Servicio", iniciar: "Arranque" },
+    sin_logs:
+      "Todavía no hay logs. Se guardan cuando el bot se arranca con iniciar.py.",
+    sin_lineas: "Ese día no tiene líneas que mostrar.",
+    sin_lineas_filtro: "Ninguna línea coincide con el filtro.",
+    lineas_n: (n) => `${n.toLocaleString("es-MX")} línea${n === 1 ? "" : "s"}`,
+    contador: (vistas, total) =>
+      vistas === total
+        ? `${total.toLocaleString("es-MX")} línea${total === 1 ? "" : "s"}`
+        : `${vistas.toLocaleString("es-MX")} de ${total.toLocaleString("es-MX")} líneas`,
+    errores_n: (n) => `${n} error${n === 1 ? "" : "es"}`,
+    avisos_n: (n) => `${n} aviso${n === 1 ? "" : "s"}`,
+    sin_problemas: "sin problemas",
+    wa: {
+      conectado: (h) => `WhatsApp conectado desde las ${h}`,
+      desconectado: (h) => `WhatsApp desconectado desde las ${h}`,
+      qr: (h) => `WhatsApp pide escanear el QR desde las ${h}`,
+      desconocido: () => "Sin datos de la conexión con WhatsApp",
+    },
   },
   en: {
     marca: "Bot panel",
@@ -629,7 +710,8 @@ const TEXTOS = {
     bienvenida:
       "Pick a conversation to see what the bot was asked, what it answered and " +
       "what it did to answer it. Under Users you add, suspend or remove whoever " +
-      "can message it.",
+      "can message it. Logs has the technical side: the WhatsApp connection and " +
+      "the errors.",
     resumen: (chats, usuarios) =>
       `${chats} conversation${chats === 1 ? "" : "s"} recorded · ` +
       `${usuarios} user${usuarios === 1 ? "" : "s"} on the list`,
@@ -686,6 +768,28 @@ const TEXTOS = {
     modo_claro: "Always light. Tap to keep it always dark.",
     modo_oscuro: "Always dark. Tap to go back to automatic.",
     cambiar_idioma: "Cambiar a español",
+    tab_logs: "Logs",
+    buscar_log: "Search the log",
+    solo_problemas: "Errors and warnings only",
+    fuente: { "": "All", whatsapp: "WhatsApp", api: "Service", iniciar: "Startup" },
+    sin_logs:
+      "No logs yet. They are saved when the bot is started with iniciar.py.",
+    sin_lineas: "That day has no lines to show.",
+    sin_lineas_filtro: "No line matches the filter.",
+    lineas_n: (n) => `${n.toLocaleString("en-US")} line${n === 1 ? "" : "s"}`,
+    contador: (vistas, total) =>
+      vistas === total
+        ? `${total.toLocaleString("en-US")} line${total === 1 ? "" : "s"}`
+        : `${vistas.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} lines`,
+    errores_n: (n) => `${n} error${n === 1 ? "" : "s"}`,
+    avisos_n: (n) => `${n} warning${n === 1 ? "" : "s"}`,
+    sin_problemas: "no problems",
+    wa: {
+      conectado: (h) => `WhatsApp connected since ${h}`,
+      desconectado: (h) => `WhatsApp disconnected since ${h}`,
+      qr: (h) => `WhatsApp waiting for the QR scan since ${h}`,
+      desconocido: () => "No data about the WhatsApp connection",
+    },
   },
 };
 
@@ -761,6 +865,19 @@ let filtro = "";
 let cacheChats = [];
 let cacheUsuarios = [];
 let enCursoPorChat = new Map();
+
+// La pestaña de logs: los dias que hay, cual esta abierto y sus filtros.
+let cacheDias = [];
+let estadoWhatsapp = null;
+let diaElegido = null;
+let fuenteLog = "";
+let soloProblemas = false;
+let filtroLog = "";
+let lineasLog = [];
+let totalLog = 0;
+// Los logs se releen en cada latido solo si el dia abierto es hoy (los de
+// dias pasados ya no cambian); la lista de dias, cada tanto.
+let latidosDesdeDias = 0;
 
 /* ------------------------------------------------------------------ utiles */
 
@@ -870,6 +987,7 @@ function pintarLista() {
   const caja = $("lista");
   caja.replaceChildren();
   if (solapa === "usuarios") pintarListaUsuarios(caja);
+  else if (solapa === "logs") pintarListaDias(caja);
   else pintarListaChats(caja);
 }
 
@@ -973,6 +1091,7 @@ function mostrarVista(cual) {
   $("pie-chat").hidden = cual !== "chat";
   $("vista-actividad").hidden = cual !== "actividad";
   $("vista-usuarios").hidden = cual !== "usuarios";
+  $("vista-logs").hidden = cual !== "logs";
   $("app").classList.toggle("viendo-chat", cual !== "bienvenida");
 }
 
@@ -1439,6 +1558,136 @@ $("form-alta").addEventListener("submit", async (evento) => {
   }
 });
 
+/* --------------------------------------------------------------------- logs */
+
+// Los dias vienen como AAAA-MM-DD. A mediodia para que la zona horaria no lo
+// corra al dia anterior al convertirlo.
+const isoDeDia = (dia) => `${dia}T12:00:00`;
+
+// "Hoy", "Ayer" o "lunes 28 de septiembre". diaLargo da HOY/AYER en
+// mayusculas, que es como se ven las etiquetas de fecha del chat; en un
+// titulo o en la lista eso se lee como un grito.
+function nombreDeDia(dia) {
+  const momento = new Date(isoDeDia(dia));
+  const hoy = new Date();
+  const ayer = new Date(hoy);
+  ayer.setDate(hoy.getDate() - 1);
+  const capital = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1).toLowerCase();
+  if (momento.toDateString() === hoy.toDateString()) return capital(t("hoy"));
+  if (momento.toDateString() === ayer.toDateString()) return capital(t("ayer"));
+  return momento.toLocaleDateString(localeDeFecha(), { weekday: "long", day: "numeric", month: "long" });
+}
+
+function pintarListaDias(caja) {
+  if (!cacheDias.length) {
+    caja.append(elemento("div", "vacio", t("sin_logs")));
+    return;
+  }
+  for (const dia of cacheDias) {
+    const fila = elemento("button", "renglon");
+    fila.type = "button";
+    if (dia.dia === diaElegido && vista === "logs") fila.setAttribute("aria-current", "true");
+    const centro = elemento("div", "centro");
+    const arriba = elemento("div", "arriba");
+    arriba.append(
+      elemento("span", "titulo", nombreDeDia(dia.dia)),
+      elemento("span", "hora", dia.ultima ? dia.ultima.slice(0, 5) : ""),
+    );
+    const abajo = elemento("div", "abajo");
+    abajo.append(elemento("span", "vista-previa", t("lineas_n", dia.lineas)));
+    if (dia.errores) abajo.append(elemento("span", "pastilla errores", t("errores_n", dia.errores)));
+    if (dia.avisos) abajo.append(elemento("span", "pastilla avisos", t("avisos_n", dia.avisos)));
+    if (!dia.errores && !dia.avisos) abajo.append(elemento("span", "pastilla limpio", t("sin_problemas")));
+    centro.append(arriba, abajo);
+    fila.append(centro);
+    fila.addEventListener("click", () => abrirLog(dia.dia).catch((e) => mostrarError(e.message)));
+    caja.append(fila);
+  }
+}
+
+function subtituloLog() {
+  const estado = estadoWhatsapp?.estado || "desconocido";
+  const hora = estadoWhatsapp?.hora ? estadoWhatsapp.hora.slice(0, 5) : "";
+  const textos = t("wa");
+  return (textos[estado] || textos.desconocido)(hora);
+}
+
+function pintarFiltros() {
+  const caja = $("filtros-log");
+  caja.replaceChildren();
+  const nombres = t("fuente");
+  for (const fuente of ["", "whatsapp", "api", "iniciar"]) {
+    const boton = elemento("button", "filtro", nombres[fuente]);
+    boton.type = "button";
+    boton.setAttribute("aria-pressed", String(fuente === fuenteLog));
+    boton.addEventListener("click", () => {
+      fuenteLog = fuente;
+      pintarFiltros();
+      cargarLog(true).catch((e) => mostrarError(e.message));
+    });
+    caja.append(boton);
+  }
+  $("solo-problemas").checked = soloProblemas;
+}
+
+async function cargarDias() {
+  const datos = await pedir("/panel/logs/dias");
+  cacheDias = datos.dias;
+  estadoWhatsapp = datos.whatsapp;
+  // En la pestaña, los errores de HOY: lo que pide atencion ahora.
+  const hoy = cacheDias[0];
+  const errores = hoy && hoy.dia === new Date().toLocaleDateString("en-CA") ? hoy.errores : 0;
+  $("cuenta-logs").textContent = errores ? `· ${errores}` : "";
+  if (solapa === "logs") pintarLista();
+  if (vista === "logs") $("subtitulo-principal").textContent = subtituloLog();
+}
+
+async function abrirLog(dia) {
+  diaElegido = dia;
+  mostrarVista("logs");
+  location.hash = `logs=${dia}`;
+  encabezado(`${t("tab_logs")} · ${nombreDeDia(dia)}`, subtituloLog(), null);
+  pintarFiltros();
+  if (solapa === "logs") pintarLista();
+  await cargarLog(true);
+}
+
+// `alFinal`: al abrir un dia o cambiar un filtro se baja hasta lo mas nuevo.
+// En los refrescos solo si ya se estaba abajo, para no arrancarle la lectura
+// a quien subio a mirar algo.
+async function cargarLog(alFinal = false) {
+  if (!diaElegido) return;
+  const parametros = new URLSearchParams({ dia: diaElegido, limite: "2000" });
+  if (fuenteLog) parametros.set("fuente", fuenteLog);
+  if (soloProblemas) parametros.set("solo_problemas", "true");
+  const datos = await pedir(`/panel/logs?${parametros}`);
+  lineasLog = datos.lineas;
+  totalLog = datos.total;
+  pintarLog(alFinal);
+}
+
+function pintarLog(alFinal = false) {
+  const caja = $("lineas-log");
+  const estabaAbajo = caja.scrollHeight - caja.scrollTop - caja.clientHeight < 40;
+  const visibles = filtroLog
+    ? lineasLog.filter((linea) => linea.texto.toLowerCase().includes(filtroLog))
+    : lineasLog;
+
+  caja.replaceChildren();
+  if (!visibles.length) {
+    caja.append(
+      elemento("div", "vacio", lineasLog.length ? t("sin_lineas_filtro") : t("sin_lineas")),
+    );
+  }
+  for (const linea of visibles) {
+    const fila = elemento("div", `linea ${linea.nivel}`);
+    fila.append(elemento("span", "hora", linea.hora), elemento("span", "texto", linea.texto));
+    caja.append(fila);
+  }
+  $("contador-log").textContent = t("contador", visibles.length, totalLog);
+  if (alFinal || estabaAbajo) caja.scrollTop = caja.scrollHeight;
+}
+
 /* -------------------------------------------------------------------- datos */
 
 async function cargarUsuarios() {
@@ -1544,7 +1793,7 @@ function aplicarIdioma() {
   for (const nodo of document.querySelectorAll("[data-t-aria]")) {
     nodo.setAttribute("aria-label", t(nodo.dataset.tAria));
   }
-  $("buscar").placeholder = t(solapa === "usuarios" ? "buscar_usuario" : "buscar_numero");
+  $("buscar").placeholder = t(placeholderDeSolapa());
   $("alta-nombre").placeholder = idioma === "es" ? "Laura, ventas" : "Laura, sales";
 
   const boton = $("boton-idioma");
@@ -1559,6 +1808,7 @@ function aplicarIdioma() {
   pintarLista();
   pintarResumen();
   if (vista === "usuarios") abrirUsuarios();
+  else if (vista === "logs" && diaElegido) abrirLog(diaElegido).catch(() => {});
   else if (vista === "actividad") abrirActividad();
   else if (vista === "chat" && chatElegido) abrirChat(chatElegido).catch(() => {});
   else $("subtitulo-principal").textContent = t("elige");
@@ -1566,18 +1816,46 @@ function aplicarIdioma() {
 
 /* -------------------------------------------------------- solapas y latido */
 
+function placeholderDeSolapa() {
+  return solapa === "usuarios" ? "buscar_usuario" : solapa === "logs" ? "buscar_log" : "buscar_numero";
+}
+
 function elegirSolapa(cual) {
   solapa = cual;
   $("tab-chats").setAttribute("aria-selected", String(cual === "chats"));
   $("tab-usuarios").setAttribute("aria-selected", String(cual === "usuarios"));
-  $("buscar").placeholder = cual === "usuarios" ? t("buscar_usuario") : t("buscar_numero");
+  $("tab-logs").setAttribute("aria-selected", String(cual === "logs"));
+  // Cada solapa busca otra cosa (un numero, o un texto dentro del log): lo
+  // escrito en una no tiene sentido en la otra.
+  $("buscar").value = "";
+  filtro = "";
+  filtroLog = "";
+  $("buscar").placeholder = t(placeholderDeSolapa());
   pintarLista();
   if (cual === "usuarios") abrirUsuarios();
+  if (cual === "logs") {
+    cargarDias()
+      .then(() => {
+        const dia = diaElegido || cacheDias[0]?.dia;
+        return dia ? abrirLog(dia) : null;
+      })
+      .catch((e) => mostrarError(e.message));
+  }
 }
 
 $("tab-chats").addEventListener("click", () => elegirSolapa("chats"));
 $("tab-usuarios").addEventListener("click", () => elegirSolapa("usuarios"));
+$("tab-logs").addEventListener("click", () => elegirSolapa("logs"));
+$("solo-problemas").addEventListener("change", (evento) => {
+  soloProblemas = evento.target.checked;
+  cargarLog(true).catch((e) => mostrarError(e.message));
+});
 $("buscar").addEventListener("input", (evento) => {
+  if (solapa === "logs") {
+    filtroLog = evento.target.value.trim().toLowerCase();
+    if (vista === "logs") pintarLog();
+    return;
+  }
   filtro = evento.target.value.replace(/\D/g, "");
   pintarLista();
 });
@@ -1601,6 +1879,16 @@ async function latido() {
     const antes = enCursoPorChat.size;
     enCursoPorChat = new Map(datos.en_curso.map((turno) => [turno.chat_id, turno]));
     if (vista === "actividad") pintarActividad(datos.en_curso);
+    // El log de hoy se va escribiendo: se relee en cada latido mientras esta
+    // abierto. La lista de dias y el contador de errores, cada 30 segundos.
+    if (vista === "logs" && diaElegido && diaElegido === cacheDias[0]?.dia) {
+      await cargarLog();
+    }
+    latidosDesdeDias += 1;
+    if (latidosDesdeDias >= 15) {
+      latidosDesdeDias = 0;
+      await cargarDias();
+    }
     if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
       $("subtitulo-principal").textContent = t("consultando");
     }
@@ -1647,8 +1935,16 @@ async function arranque() {
     mostrarError(error.message);
   }
 
+  // El contador de errores de la pestaña Logs se ve desde el principio. Que
+  // falle no puede tumbar el resto del panel.
+  await cargarDias().catch(() => {});
+
   const destino = location.hash.slice(1);
   if (destino === "usuarios") elegirSolapa("usuarios");
+  else if (destino === "logs" || destino.startsWith("logs=")) {
+    diaElegido = destino.slice(5) || null;
+    elegirSolapa("logs");
+  }
   else if (destino === "actividad") abrirActividad();
   else if (destino.startsWith("chat=")) {
     const numero = destino.slice(5);
