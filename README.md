@@ -248,7 +248,7 @@ logs) y `qrcode-terminal` (el QR en la consola).
 |---|---|---|
 | `DB_URI` | si | Conexion al SQL Server con el login de solo lectura. Dejar `driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes` al final |
 | `OPENROUTER_API_KEY` | si | La key de OpenRouter |
-| `OPENROUTER_MODEL` | si | El modelo a usar, p. ej. `openai/gpt-4-turbo-preview` |
+| `OPENROUTER_MODEL` | si | El modelo a usar, p. ej. `openai/gpt-6-luna` |
 | `WHATSAPP_ALLOWED_NUMBERS` | si | Numeros que pueden usar el bot, formato internacional sin signos, separados por coma. Sin esto el servicio no arranca |
 | `AGENT_TIMEOUT_SECONDS` | no | Cuanto puede tardar una pregunta (600; los reportes grandes tardan varios minutos) |
 | `SESSION_TTL_MINUTES` | no | 0: la memoria de cada conversacion dura el dia y se borra a medianoche |

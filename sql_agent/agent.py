@@ -1737,7 +1737,7 @@ class SQLAgent:
         if not openrouter_api_key:
             raise ValueError("La variable de entorno OPENROUTER_API_KEY no esta configurada.")
 
-        model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-4-turbo-preview")
+        model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-6-luna")
         return ChatOpenAI(
             temperature=0,
             model=model_name,
