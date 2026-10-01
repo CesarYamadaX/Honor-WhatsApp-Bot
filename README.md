@@ -47,6 +47,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/fotos.py` | Normaliza y guarda las fotos de los usuarios |
 | `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
 | `sql_agent/registro_de_logs.py` | Los logs tecnicos en disco (uno por dia) y como los lee el panel |
+| `sql_agent/actualizar_catalogo.py` | Relee el esquema de las bases y actualiza `catalogo.json` y `valores.json`; sin `--escribir` solo dice que cambio |
 | `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
 | `panel.py` | Abre el panel como aplicacion, en su propia ventana |
 

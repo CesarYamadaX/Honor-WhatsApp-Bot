@@ -2005,6 +2005,92 @@ class TestReintentoConLaConsolidadaDeRepuesto:
         assert len(consultas) == 1
 
 
+class TestLaConsolidadaQueRespondeConBasura:
+    """Visto el 1 de octubre de 2026: la consolidada respondia, pero su [QTY]
+    traia el texto de [Key prices] en todas las filas. Sin error no habia
+    reintento, y el bot contesto "no pude calcular" tras dos minutos.
+    """
+
+    def test_si_la_muestra_trae_basura_se_reconstruye_antes_de_correr(self, engine, monkeypatch):
+        consultas = []
+        original = modulo_agente._ejecutar_interrumpible
+
+        def falso(conexion, query, cancelacion):
+            consultas.append(query)
+            return original(conexion, "SELECT * FROM ventas WHERE monto < 30", cancelacion)
+
+        monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
+        monkeypatch.setattr(modulo_agente, "_consolidada_trae_basura", lambda engine: True)
+        with contexto_peticion(engine):
+            salida = consultar_sql.invoke(
+                {"query": "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+
+        assert len(consultas) == 1
+        assert "vw_ETL_TELCEL_B2B" in consultas[0]
+        assert "rota en el servidor" in salida
+        assert salida.startswith("Resultado de la consulta a ETL_Consolidado_B2B:")
+
+    def test_si_esta_sana_se_usa_la_real(self, engine, monkeypatch):
+        consultas = []
+        original = modulo_agente._ejecutar_interrumpible
+
+        def falso(conexion, query, cancelacion):
+            consultas.append(query)
+            return original(conexion, "SELECT * FROM ventas WHERE monto < 30", cancelacion)
+
+        monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
+        monkeypatch.setattr(modulo_agente, "_consolidada_trae_basura", lambda engine: False)
+        with contexto_peticion(engine):
+            consultar_sql.invoke(
+                {"query": "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
+            )
+        assert "vw_ETL_TELCEL_B2B" not in consultas[0]
+
+
+class TestLaSondaDeLaConsolidada:
+    class _Motor:
+        def __init__(self, respuesta):
+            self.respuesta, self.veces = respuesta, 0
+
+        def connect(self):
+            motor = self
+
+            class _Conexion:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def exec_driver_sql(self, sql):
+                    motor.veces += 1
+                    if isinstance(motor.respuesta, Exception):
+                        raise motor.respuesta
+
+                    class _R:
+                        def scalar(self):
+                            return motor.respuesta
+
+                    return _R()
+
+            return _Conexion()
+
+    def test_basura_si_hay_cantidades_que_no_son_numero(self):
+        assert modulo_agente._consolidada_trae_basura(self._Motor(200)) is True
+        assert modulo_agente._consolidada_trae_basura(self._Motor(0)) is False
+
+    def test_se_recuerda_un_rato_para_no_mirar_en_cada_consulta(self):
+        motor = self._Motor(200)
+        modulo_agente._consolidada_trae_basura(motor)
+        modulo_agente._consolidada_trae_basura(motor)
+        assert motor.veces == 1
+
+    def test_si_la_sonda_falla_no_desvia_nada(self):
+        # Ese caso lo cubre el reintento por error de la vista.
+        assert modulo_agente._consolidada_trae_basura(self._Motor(RuntimeError("red"))) is False
+
+
 class TestUnBotonDeDescargaInventadoNoQuedaSuelto:
     """Visto el 30/09/2026 en dos reportes seguidos: el modelo escribio
     "[Descargar el reporte de ventas](sandbox:/...)" en su propia linea.

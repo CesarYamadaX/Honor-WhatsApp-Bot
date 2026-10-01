@@ -5,100 +5,9 @@
    "descripcion": "Base de datos núcleo del BI de Honor México: reporte general de ventas B2B (sell-out) por tienda/carrier/modelo de todos los retailers, catálogo maestro de tiendas, precios, head-count de promotores y ~20 vistas de análisis de competencia y homologación.",
    "objetos": [
     {
-     "nombre": "TBL_DB_FOR_DOS",
-     "tipo": "tabla",
-     "filas": 37847356,
-     "columnas": [
-      {
-       "nombre": "Familia",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "Marca",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "Store Name",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "Material description",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "QTY",
-       "tipo": "int"
-      },
-      {
-       "nombre": "Fecha",
-       "tipo": "date"
-      },
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "Region",
-       "tipo": "nvarchar(5)"
-      },
-      {
-       "nombre": "State",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "ID",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "FKEY_HR",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "AsigdenPromts",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "key price",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "Homologacion modelo",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "DataType",
-       "tipo": "nvarchar(5)"
-      },
-      {
-       "nombre": "OrdenAux",
-       "tipo": "nvarchar(10)"
-      },
-      {
-       "nombre": "WEEK",
-       "tipo": "int"
-      },
-      {
-       "nombre": "MONTH",
-       "tipo": "int"
-      },
-      {
-       "nombre": "YEAR",
-       "tipo": "int"
-      },
-      {
-       "nombre": "DAY",
-       "tipo": "int"
-      }
-     ]
-    },
-    {
      "nombre": "B2BHonorGeneralReport",
      "tipo": "tabla",
-     "filas": 33161719,
+     "filas": 34052077,
      "columnas": [
       {
        "nombre": "Family",
@@ -183,255 +92,9 @@
      ]
     },
     {
-     "nombre": "Coppel_Monthly_Excel",
-     "tipo": "tabla",
-     "filas": 3389588,
-     "columnas": [
-      {
-       "nombre": "MesNum",
-       "tipo": "int"
-      },
-      {
-       "nombre": "StoreNum",
-       "tipo": "int"
-      },
-      {
-       "nombre": "StoreName",
-       "tipo": "nvarchar(400)"
-      },
-      {
-       "nombre": "Region",
-       "tipo": "nvarchar(200)"
-      },
-      {
-       "nombre": "ID",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "nvarchar(200)"
-      },
-      {
-       "nombre": "Model",
-       "tipo": "nvarchar(400)"
-      },
-      {
-       "nombre": "Ventas",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Inventario",
-       "tipo": "float"
-      },
-      {
-       "nombre": "PromoterStatus",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "Precio",
-       "tipo": "float"
-      },
-      {
-       "nombre": "PriceSegment",
-       "tipo": "varchar(30)"
-      }
-     ]
-    },
-    {
-     "nombre": "Prices",
-     "tipo": "tabla",
-     "filas": 2367492,
-     "columnas": [
-      {
-       "nombre": "Día/Periodo",
-       "tipo": "datetime"
-      },
-      {
-       "nombre": "Material Description",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Precio Venta",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "varchar(100)"
-      },
-      {
-       "nombre": "KEY PRICES",
-       "tipo": "nvarchar(640)"
-      },
-      {
-       "nombre": "key2",
-       "tipo": "nvarchar(4000)"
-      }
-     ]
-    },
-    {
-     "nombre": "HCReport",
-     "tipo": "tabla",
-     "filas": 746096,
-     "columnas": [
-      {
-       "nombre": "ID",
-       "tipo": "varchar(255)"
-      },
-      {
-       "nombre": "NAME",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "FIXED PROMOTER",
-       "tipo": "float"
-      },
-      {
-       "nombre": "DOUBLE PROMOTER",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Supervisor's visit",
-       "tipo": "float"
-      },
-      {
-       "nombre": "City Manager visit",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Merchandiser",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Trainer",
-       "tipo": "float"
-      },
-      {
-       "nombre": "FIELD REP",
-       "tipo": "float"
-      },
-      {
-       "nombre": "SUPERVISOR MIX",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Week",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "YEAR",
-       "tipo": "float"
-      }
-     ]
-    },
-    {
-     "nombre": "UNICOS$",
-     "tipo": "tabla",
-     "filas": 184546,
-     "columnas": [
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "DESCRIPCION",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "HOMOLOGACION MODELO",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "BRAND",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "MATERIAL DESCRIPTION FINAL",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "CLASSIFICATION",
-       "tipo": "varchar(50)"
-      },
-      {
-       "nombre": "Package",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "CONTENT",
-       "tipo": "varchar(255)"
-      }
-     ]
-    },
-    {
-     "nombre": "STATES_AND_REGIONS",
-     "tipo": "tabla",
-     "filas": 8667,
-     "columnas": [
-      {
-       "nombre": "Customer",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "RG",
-       "tipo": "nvarchar(50)"
-      },
-      {
-       "nombre": "STATE",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "ID",
-       "tipo": "varchar(100)"
-      },
-      {
-       "nombre": "NAME",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "REGION",
-       "tipo": "nvarchar(50)"
-      }
-     ]
-    },
-    {
-     "nombre": "CustomerStores",
-     "tipo": "tabla",
-     "filas": 7143,
-     "columnas": [
-      {
-       "nombre": "ID",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "HONOR NAME",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Coppel Name",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Region",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "StoreLevel",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "RetailName",
-       "tipo": "nvarchar(255)"
-      }
-     ]
-    },
-    {
      "nombre": "Benchmark$",
      "tipo": "tabla",
-     "filas": 2534,
+     "filas": 2665,
      "columnas": [
       {
        "nombre": "Benchmark",
@@ -448,99 +111,6 @@
       {
        "nombre": "DESC",
        "tipo": "nvarchar(255)"
-      }
-     ]
-    },
-    {
-     "nombre": "HonorCarriers",
-     "tipo": "tabla",
-     "filas": 55,
-     "columnas": [
-      {
-       "nombre": "Familia",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(255)"
-      }
-     ]
-    },
-    {
-     "nombre": "sysdiagrams",
-     "tipo": "tabla",
-     "filas": 0,
-     "columnas": [
-      {
-       "nombre": "name",
-       "tipo": "nvarchar(128)"
-      },
-      {
-       "nombre": "principal_id",
-       "tipo": "int"
-      },
-      {
-       "nombre": "diagram_id",
-       "tipo": "int"
-      },
-      {
-       "nombre": "version",
-       "tipo": "int"
-      },
-      {
-       "nombre": "definition",
-       "tipo": "varbinary(max)"
-      }
-     ]
-    },
-    {
-     "nombre": "CompetitorsAnalysis2024_VW",
-     "tipo": "vista",
-     "filas": null,
-     "columnas": [
-      {
-       "nombre": "Family",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Brand",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Store",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Model",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Qty",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Date",
-       "tipo": "datetime"
-      },
-      {
-       "nombre": "week",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "ID",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "YEAR1",
-       "tipo": "float"
       }
      ]
     },
@@ -593,6 +163,84 @@
     },
     {
      "nombre": "CompetitorsAnalysis_VW",
+     "tipo": "vista",
+     "filas": null,
+     "columnas": [
+      {
+       "nombre": "Family",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Brand",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Store",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Model",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Qty",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Date",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "week",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "ID",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "YEAR1",
+       "tipo": "float"
+      }
+     ]
+    },
+    {
+     "nombre": "CompetitorsAnalysis_VW_TELCEL",
+     "tipo": "vista",
+     "filas": null,
+     "columnas": [
+      {
+       "nombre": "Brand",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Store",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Model",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "RETAIL",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Qty",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Date",
+       "tipo": "datetime"
+      }
+     ]
+    },
+    {
+     "nombre": "CompetitorsAnalysis2024_VW",
      "tipo": "vista",
      "filas": null,
      "columnas": [
@@ -693,6 +341,61 @@
      ]
     },
     {
+     "nombre": "Coppel_Monthly_Excel",
+     "tipo": "tabla",
+     "filas": 3389588,
+     "columnas": [
+      {
+       "nombre": "MesNum",
+       "tipo": "int"
+      },
+      {
+       "nombre": "StoreNum",
+       "tipo": "int"
+      },
+      {
+       "nombre": "StoreName",
+       "tipo": "nvarchar(400)"
+      },
+      {
+       "nombre": "Region",
+       "tipo": "nvarchar(200)"
+      },
+      {
+       "nombre": "ID",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "nvarchar(200)"
+      },
+      {
+       "nombre": "Model",
+       "tipo": "nvarchar(400)"
+      },
+      {
+       "nombre": "Ventas",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Inventario",
+       "tipo": "float"
+      },
+      {
+       "nombre": "PromoterStatus",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "Precio",
+       "tipo": "float"
+      },
+      {
+       "nombre": "PriceSegment",
+       "tipo": "varchar(30)"
+      }
+     ]
+    },
+    {
      "nombre": "Coppel_test",
      "tipo": "vista",
      "filas": null,
@@ -776,6 +479,37 @@
      ]
     },
     {
+     "nombre": "CustomerStores",
+     "tipo": "tabla",
+     "filas": 7165,
+     "columnas": [
+      {
+       "nombre": "ID",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "HONOR NAME",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Coppel Name",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Region",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "StoreLevel",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "RetailName",
+       "tipo": "nvarchar(255)"
+      }
+     ]
+    },
+    {
      "nombre": "CustomerStores_VW",
      "tipo": "vista",
      "filas": null,
@@ -807,6 +541,61 @@
      ]
     },
     {
+     "nombre": "HCReport",
+     "tipo": "tabla",
+     "filas": 762756,
+     "columnas": [
+      {
+       "nombre": "ID",
+       "tipo": "varchar(255)"
+      },
+      {
+       "nombre": "NAME",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "FIXED PROMOTER",
+       "tipo": "float"
+      },
+      {
+       "nombre": "DOUBLE PROMOTER",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Supervisor's visit",
+       "tipo": "float"
+      },
+      {
+       "nombre": "City Manager visit",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Merchandiser",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Trainer",
+       "tipo": "float"
+      },
+      {
+       "nombre": "FIELD REP",
+       "tipo": "float"
+      },
+      {
+       "nombre": "SUPERVISOR MIX",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Week",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "YEAR",
+       "tipo": "float"
+      }
+     ]
+    },
+    {
      "nombre": "HCReport_VW",
      "tipo": "vista",
      "filas": null,
@@ -822,6 +611,25 @@
       {
        "nombre": "AsigdenPromts",
        "tipo": "varchar(13)"
+      }
+     ]
+    },
+    {
+     "nombre": "HonorCarriers",
+     "tipo": "tabla",
+     "filas": 55,
+     "columnas": [
+      {
+       "nombre": "Familia",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
       }
      ]
     },
@@ -849,6 +657,84 @@
       {
        "nombre": "Carrier 2",
        "tipo": "nvarchar(255)"
+      }
+     ]
+    },
+    {
+     "nombre": "Prices",
+     "tipo": "tabla",
+     "filas": 2455458,
+     "columnas": [
+      {
+       "nombre": "Día/Periodo",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "Material Description",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Precio Venta",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "varchar(100)"
+      },
+      {
+       "nombre": "KEY PRICES",
+       "tipo": "nvarchar(640)"
+      },
+      {
+       "nombre": "key2",
+       "tipo": "nvarchar(4000)"
+      }
+     ]
+    },
+    {
+     "nombre": "Prices_Weekly_VW",
+     "tipo": "vista",
+     "filas": null,
+     "columnas": [
+      {
+       "nombre": "Fecha",
+       "tipo": "date"
+      },
+      {
+       "nombre": "Year",
+       "tipo": "int"
+      },
+      {
+       "nombre": "Month",
+       "tipo": "int"
+      },
+      {
+       "nombre": "Week",
+       "tipo": "int"
+      },
+      {
+       "nombre": "Material Description",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Precio Venta",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "varchar(100)"
+      },
+      {
+       "nombre": "Key",
+       "tipo": "nvarchar(266)"
       }
      ]
     },
@@ -939,6 +825,155 @@
      ]
     },
     {
+     "nombre": "STATES_AND_REGIONS",
+     "tipo": "tabla",
+     "filas": 8667,
+     "columnas": [
+      {
+       "nombre": "Customer",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "RG",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "STATE",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "ID",
+       "tipo": "varchar(100)"
+      },
+      {
+       "nombre": "NAME",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "REGION",
+       "tipo": "nvarchar(50)"
+      }
+     ]
+    },
+    {
+     "nombre": "sysdiagrams",
+     "tipo": "tabla",
+     "filas": 0,
+     "columnas": [
+      {
+       "nombre": "name",
+       "tipo": "nvarchar(128)"
+      },
+      {
+       "nombre": "principal_id",
+       "tipo": "int"
+      },
+      {
+       "nombre": "diagram_id",
+       "tipo": "int"
+      },
+      {
+       "nombre": "version",
+       "tipo": "int"
+      },
+      {
+       "nombre": "definition",
+       "tipo": "varbinary(max)"
+      }
+     ]
+    },
+    {
+     "nombre": "TBL_DB_FOR_DOS",
+     "tipo": "tabla",
+     "filas": 37847356,
+     "columnas": [
+      {
+       "nombre": "Familia",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "Marca",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "Store Name",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "Material description",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "QTY",
+       "tipo": "int"
+      },
+      {
+       "nombre": "Fecha",
+       "tipo": "date"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "Region",
+       "tipo": "nvarchar(5)"
+      },
+      {
+       "nombre": "State",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "ID",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "FKEY_HR",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "AsigdenPromts",
+       "tipo": "nvarchar(50)"
+      },
+      {
+       "nombre": "key price",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "Homologacion modelo",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "DataType",
+       "tipo": "nvarchar(5)"
+      },
+      {
+       "nombre": "OrdenAux",
+       "tipo": "nvarchar(10)"
+      },
+      {
+       "nombre": "WEEK",
+       "tipo": "int"
+      },
+      {
+       "nombre": "MONTH",
+       "tipo": "int"
+      },
+      {
+       "nombre": "YEAR",
+       "tipo": "int"
+      },
+      {
+       "nombre": "DAY",
+       "tipo": "int"
+      }
+     ]
+    },
+    {
      "nombre": "TELCEL_CompetitorsAnalysis_VW_LGC",
      "tipo": "vista",
      "filas": null,
@@ -1021,6 +1056,45 @@
       {
        "nombre": "QTY",
        "tipo": "float"
+      }
+     ]
+    },
+    {
+     "nombre": "UNICOS$",
+     "tipo": "tabla",
+     "filas": 31890,
+     "columnas": [
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "DESCRIPCION",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "HOMOLOGACION MODELO",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "BRAND",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "MATERIAL DESCRIPTION FINAL",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "CLASSIFICATION",
+       "tipo": "varchar(50)"
+      },
+      {
+       "nombre": "Package",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "CONTENT",
+       "tipo": "varchar(255)"
       }
      ]
     },
@@ -1183,7 +1257,8 @@
        "nombre": "PriceSegment",
        "tipo": "varchar(11)"
       }
-     ]
+     ],
+     "rota": "('42S02', \"[42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.Retail_StoreMap'. (208) (SQLExecDirectW); [42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Could not use view or function 'GTM BI Database.dbo.vw_Coppel_Monthly_Excel' because of binding er"
     },
     {
      "nombre": "VW_edicion",
@@ -1293,7 +1368,8 @@
        "nombre": "PriceSegment",
        "tipo": "varchar(11)"
       }
-     ]
+     ],
+     "rota": "('42S02', \"[42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.Retail_StoreMap'. (208) (SQLExecDirectW); [42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Could not use view or function 'GTM BI Database.dbo.vw_Elektra_Monthly_Excel' because of binding e"
     },
     {
      "nombre": "vw_Liverpool_Monthly_Base",
@@ -1340,7 +1416,8 @@
        "nombre": "Inventario",
        "tipo": "float"
       }
-     ]
+     ],
+     "rota": "('42S02', \"[42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.Liverpool_StoreMap'. (208) (SQLExecDirectW); [42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Could not use view or function 'GTM BI Database.dbo.vw_Liverpool_Monthly_Base' because of bindi"
     },
     {
      "nombre": "vw_Liverpool_Monthly_Excel",
@@ -1411,7 +1488,8 @@
        "nombre": "PriceSegment",
        "tipo": "varchar(11)"
       }
-     ]
+     ],
+     "rota": "('42S02', \"[42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Invalid object name 'dbo.Retail_StoreMap'. (208) (SQLExecDirectW); [42S02] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Could not use view or function 'GTM BI Database.dbo.vw_Liverpool_Monthly_Excel' because of binding"
     },
     {
      "nombre": "VW_Precios",
@@ -1632,81 +1710,6 @@
      ]
     },
     {
-     "nombre": "TAB_DB_FOR_DOS",
-     "tipo": "tabla",
-     "filas": 8658069,
-     "columnas": [
-      {
-       "nombre": "Familia",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Marca",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Store Name",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Material description",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "QTY",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Fecha",
-       "tipo": "datetime"
-      },
-      {
-       "nombre": "Retail",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Region",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "State",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "ID",
-       "tipo": "varchar(100)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "FKEY_HR",
-       "tipo": "varchar(115)"
-      },
-      {
-       "nombre": "AsigdenPromts",
-       "tipo": "varchar(13)"
-      },
-      {
-       "nombre": "key price",
-       "tipo": "nvarchar(550)"
-      },
-      {
-       "nombre": "Homologacion modelo",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "DataType",
-       "tipo": "varchar(3)"
-      },
-      {
-       "nombre": "OrdenAux",
-       "tipo": "float"
-      }
-     ]
-    },
-    {
      "nombre": "INV_Telcel_B2B",
      "tipo": "tabla",
      "filas": 4856890,
@@ -1752,7 +1755,7 @@
     {
      "nombre": "Sheet1$",
      "tipo": "tabla",
-     "filas": 206295,
+     "filas": 401654,
      "columnas": [
       {
        "nombre": "Familia",
@@ -1856,6 +1859,81 @@
       {
        "nombre": "definition",
        "tipo": "varbinary(max)"
+      }
+     ]
+    },
+    {
+     "nombre": "TAB_DB_FOR_DOS",
+     "tipo": "tabla",
+     "filas": 8658069,
+     "columnas": [
+      {
+       "nombre": "Familia",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Marca",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Store Name",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Material description",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "QTY",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Fecha",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "Retail",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Region",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "State",
+       "tipo": "nvarchar(100)"
+      },
+      {
+       "nombre": "ID",
+       "tipo": "varchar(100)"
+      },
+      {
+       "nombre": "Carrier",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "FKEY_HR",
+       "tipo": "varchar(115)"
+      },
+      {
+       "nombre": "AsigdenPromts",
+       "tipo": "varchar(13)"
+      },
+      {
+       "nombre": "key price",
+       "tipo": "nvarchar(550)"
+      },
+      {
+       "nombre": "Homologacion modelo",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "DataType",
+       "tipo": "varchar(3)"
+      },
+      {
+       "nombre": "OrdenAux",
+       "tipo": "float"
       }
      ]
     },
@@ -2116,6 +2194,10 @@
       {
        "nombre": "Homologacion modelo",
        "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "CLASSIFICATION",
+       "tipo": "varchar(50)"
       },
       {
        "nombre": "Year",
@@ -2587,95 +2669,9 @@
    "descripcion": "Capas de datos crudos (RAW) de venta B2B por retailer, tal como llegan de cada fuente (AT&T, Coppel, Elektra, Liverpool, Movistar, Sears, Telcel), con ~10 vistas vw_ETL_* que normalizan cada fuente a columnas comunes (Retail/Store/Brand/Material_Description/Carrier/Date/QTY).",
    "objetos": [
     {
-     "nombre": "TELCEL_B2B",
-     "tipo": "tabla",
-     "filas": 14781442,
-     "columnas": [
-      {
-       "nombre": "Región",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Canal",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Sector",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Venta",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Nombre Venta",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Material",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Descripción",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Marca",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Fecha",
-       "tipo": "datetime"
-      },
-      {
-       "nombre": "Cantidad",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Importe",
-       "tipo": "float"
-      }
-     ]
-    },
-    {
-     "nombre": "COPPEL_B2B",
-     "tipo": "tabla",
-     "filas": 12151070,
-     "columnas": [
-      {
-       "nombre": "Tienda",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Clase",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Familia",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Marca",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Modelo",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Día",
-       "tipo": "datetime"
-      },
-      {
-       "nombre": "Unidades",
-       "tipo": "float"
-      }
-     ]
-    },
-    {
      "nombre": "ATT_B2B",
      "tipo": "tabla",
-     "filas": 4692735,
+     "filas": 5052103,
      "columnas": [
       {
        "nombre": "Codigo de Organización",
@@ -2776,60 +2772,24 @@
      ]
     },
     {
-     "nombre": "LIVERPOOL_B2B$",
+     "nombre": "COPPEL_B2B",
      "tipo": "tabla",
-     "filas": 3420822,
+     "filas": 12151070,
      "columnas": [
       {
-       "nombre": "Centro",
-       "tipo": "float"
-      },
-      {
-       "nombre": "STORE",
+       "nombre": "Tienda",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Proveedor",
+       "nombre": "Clase",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Proveedor 2",
+       "nombre": "Familia",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Submarca",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Brand",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Canal de Venta",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Type",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Grupo de Artículos",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Carrier",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Artículo",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Material Description",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "EAN/UPC",
+       "nombre": "Marca",
        "tipo": "nvarchar(255)"
       },
       {
@@ -2837,27 +2797,42 @@
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Estado",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Temporada",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Precio Venta",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Día/Periodo",
+       "nombre": "Día",
        "tipo": "datetime"
       },
       {
-       "nombre": "Vtas# U Per 1",
+       "nombre": "Unidades",
        "tipo": "float"
+      }
+     ]
+    },
+    {
+     "nombre": "Coppel_IOT",
+     "tipo": "tabla",
+     "filas": 941461,
+     "columnas": [
+      {
+       "nombre": "Tienda",
+       "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Vtas# $ Per 1",
+       "nombre": "Familia",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Marca",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Modelo",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Attribute",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "Value",
        "tipo": "float"
       }
      ]
@@ -2865,7 +2840,7 @@
     {
      "nombre": "EKT_B2B",
      "tipo": "tabla",
-     "filas": 1684333,
+     "filas": 1784125,
      "columnas": [
       {
        "nombre": "Linea",
@@ -2958,63 +2933,75 @@
      ]
     },
     {
-     "nombre": "Coppel_IOT",
-     "tipo": "tabla",
-     "filas": 941461,
+     "nombre": "ETL_Consolidado_B2B",
+     "tipo": "vista",
+     "filas": null,
      "columnas": [
       {
-       "nombre": "Tienda",
+       "nombre": "Retail",
+       "tipo": "varchar(20)"
+      },
+      {
+       "nombre": "Store",
+       "tipo": "nvarchar(511)"
+      },
+      {
+       "nombre": "Brand",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Familia",
-       "tipo": "nvarchar(255)"
+       "nombre": "Material_Description",
+       "tipo": "nvarchar(532)"
       },
       {
-       "nombre": "Marca",
-       "tipo": "nvarchar(255)"
+       "nombre": "Carrier",
+       "tipo": "varchar(13)"
       },
       {
-       "nombre": "Modelo",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Attribute",
+       "nombre": "Date",
        "tipo": "datetime"
       },
       {
-       "nombre": "Value",
+       "nombre": "Year",
+       "tipo": "int"
+      },
+      {
+       "nombre": "Month",
+       "tipo": "int"
+      },
+      {
+       "nombre": "WEEK",
+       "tipo": "int"
+      },
+      {
+       "nombre": "QTY",
        "tipo": "float"
       }
      ]
     },
     {
-     "nombre": "MVS_B2B",
+     "nombre": "LIVERPOOL_B2B$",
      "tipo": "tabla",
-     "filas": 677984,
+     "filas": 3420822,
      "columnas": [
       {
-       "nombre": "Month",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Year",
+       "nombre": "Centro",
        "tipo": "float"
       },
       {
-       "nombre": "Channel",
+       "nombre": "STORE",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Sub Channel",
+       "nombre": "Proveedor",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Sub Channel 2",
+       "nombre": "Proveedor 2",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "SKU",
+       "nombre": "Submarca",
        "tipo": "nvarchar(255)"
       },
       {
@@ -3022,36 +3009,60 @@
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "D_M",
+       "nombre": "Canal de Venta",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Model",
+       "nombre": "Type",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "D_Mod",
+       "nombre": "Grupo de Artículos",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Price",
+       "nombre": "Carrier",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Artículo",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Material Description",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "EAN/UPC",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Modelo",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Estado",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Temporada",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Precio Venta",
        "tipo": "float"
       },
       {
-       "nombre": "Qty",
+       "nombre": "Día/Periodo",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "Vtas# U Per 1",
        "tipo": "float"
       },
       {
-       "nombre": "AMT",
+       "nombre": "Vtas# $ Per 1",
        "tipo": "float"
-      },
-      {
-       "nombre": "Price Range",
-       "tipo": "nvarchar(255)"
-      },
-      {
-       "nombre": "Fecha",
-       "tipo": "date"
       }
      ]
     },
@@ -3143,6 +3154,73 @@
      ]
     },
     {
+     "nombre": "MVS_B2B",
+     "tipo": "tabla",
+     "filas": 742356,
+     "columnas": [
+      {
+       "nombre": "Month",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Year",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Channel",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Sub Channel",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Sub Channel 2",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "SKU",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Brand",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "D_M",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Model",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "D_Mod",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Price",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Qty",
+       "tipo": "float"
+      },
+      {
+       "nombre": "AMT",
+       "tipo": "float"
+      },
+      {
+       "nombre": "Price Range",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Fecha",
+       "tipo": "date"
+      }
+     ]
+    },
+    {
      "nombre": "SEARS_B2B",
      "tipo": "tabla",
      "filas": 90327,
@@ -3206,48 +3284,52 @@
      ]
     },
     {
-     "nombre": "ETL_Consolidado_B2B",
-     "tipo": "vista",
-     "filas": null,
+     "nombre": "TELCEL_B2B",
+     "tipo": "tabla",
+     "filas": 14781442,
      "columnas": [
       {
-       "nombre": "Retail",
-       "tipo": "varchar(20)"
-      },
-      {
-       "nombre": "Store",
-       "tipo": "float"
-      },
-      {
-       "nombre": "Brand",
+       "nombre": "Región",
        "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Material_Description",
-       "tipo": "nvarchar(532)"
+       "nombre": "Canal",
+       "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Carrier",
-       "tipo": "varchar(13)"
+       "nombre": "Sector",
+       "tipo": "nvarchar(255)"
       },
       {
-       "nombre": "Date",
+       "nombre": "Venta",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Nombre Venta",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Material",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Descripción",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Marca",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "Fecha",
        "tipo": "datetime"
       },
       {
-       "nombre": "Year",
-       "tipo": "int"
+       "nombre": "Cantidad",
+       "tipo": "float"
       },
       {
-       "nombre": "Month",
-       "tipo": "int"
-      },
-      {
-       "nombre": "Day",
-       "tipo": "int"
-      },
-      {
-       "nombre": "QTY",
+       "nombre": "Importe",
        "tipo": "float"
       }
      ]
@@ -3290,8 +3372,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(563)"
       },
       {
        "nombre": "QTY",
@@ -3337,8 +3423,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(570)"
       },
       {
        "nombre": "QTY",
@@ -3357,7 +3447,7 @@
       },
       {
        "nombre": "Store",
-       "tipo": "float"
+       "tipo": "nvarchar(255)"
       },
       {
        "nombre": "Brand",
@@ -3384,8 +3474,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "varchar(57)"
       },
       {
        "nombre": "QTY",
@@ -3412,7 +3506,7 @@
       },
       {
        "nombre": "Material_Description",
-       "tipo": "nvarchar(279)"
+       "tipo": "nvarchar(511)"
       },
       {
        "nombre": "Carrier",
@@ -3431,8 +3525,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(814)"
       },
       {
        "nombre": "QTY",
@@ -3459,7 +3557,7 @@
       },
       {
        "nombre": "Material_Description",
-       "tipo": "nvarchar(279)"
+       "tipo": "nvarchar(511)"
       },
       {
        "nombre": "Carrier",
@@ -3478,8 +3576,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(806)"
       },
       {
        "nombre": "QTY",
@@ -3506,7 +3608,7 @@
       },
       {
        "nombre": "Material_Description",
-       "tipo": "nvarchar(279)"
+       "tipo": "nvarchar(511)"
       },
       {
        "nombre": "Carrier",
@@ -3525,8 +3627,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(562)"
       },
       {
        "nombre": "QTY",
@@ -3572,8 +3678,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(324)"
       },
       {
        "nombre": "QTY",
@@ -3619,8 +3729,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(556)"
       },
       {
        "nombre": "QTY",
@@ -3647,7 +3761,7 @@
       },
       {
        "nombre": "Material_Description",
-       "tipo": "nvarchar(279)"
+       "tipo": "nvarchar(511)"
       },
       {
        "nombre": "Carrier",
@@ -3666,8 +3780,12 @@
        "tipo": "int"
       },
       {
-       "nombre": "Day",
+       "nombre": "WEEK",
        "tipo": "int"
+      },
+      {
+       "nombre": "Key prices",
+       "tipo": "nvarchar(813)"
       },
       {
        "nombre": "QTY",
@@ -3862,6 +3980,49 @@
        "tipo": "date"
       }
      ]
+    },
+    {
+     "nombre": "TELCEL_INV_B2B",
+     "tipo": "tabla",
+     "filas": 8213557,
+     "columnas": [
+      {
+       "nombre": "SKU",
+       "tipo": "float"
+      },
+      {
+       "nombre": "MODEL",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "MODE",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "BRAND",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "AREA",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "STORE",
+       "tipo": "nvarchar(255)"
+      },
+      {
+       "nombre": "STOCK",
+       "tipo": "float"
+      },
+      {
+       "nombre": "date",
+       "tipo": "datetime"
+      },
+      {
+       "nombre": "retail",
+       "tipo": "varchar(50)"
+      }
+     ]
     }
    ]
   },
@@ -3872,7 +4033,7 @@
     {
      "nombre": "Complete_Scrap",
      "tipo": "tabla",
-     "filas": 2262316,
+     "filas": 2332703,
      "columnas": [
       {
        "nombre": "store",
@@ -3932,173 +4093,7 @@
       },
       {
        "nombre": "price",
-       "tipo": "decimal"
-      },
-      {
-       "nombre": "inventory",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "approved_name",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "approved_name_without_capacity",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "retail",
-       "tipo": "varchar(50)"
-      }
-     ]
-    },
-    {
-     "nombre": "Complete_Scrap_COPPEL",
-     "tipo": "vista",
-     "filas": null,
-     "columnas": [
-      {
-       "nombre": "store",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "carrier",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "brand",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "model",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "description",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "color",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "capacity",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "sku",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "url",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "consultation_date",
-       "tipo": "date"
-      },
-      {
-       "nombre": "lauch_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "original_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "discount_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "discount_percentage",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "price",
-       "tipo": "decimal"
-      },
-      {
-       "nombre": "inventory",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "approved_name",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "approved_name_without_capacity",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "retail",
-       "tipo": "varchar(50)"
-      }
-     ]
-    },
-    {
-     "nombre": "Complete_Scrap_LIVERPOOL",
-     "tipo": "vista",
-     "filas": null,
-     "columnas": [
-      {
-       "nombre": "store",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "carrier",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "brand",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "model",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "description",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "color",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "capacity",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "sku",
-       "tipo": "nvarchar(100)"
-      },
-      {
-       "nombre": "url",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "consultation_date",
-       "tipo": "date"
-      },
-      {
-       "nombre": "lauch_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "original_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "discount_price",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "discount_percentage",
-       "tipo": "varchar(max)"
-      },
-      {
-       "nombre": "price",
-       "tipo": "decimal"
+       "tipo": "decimal(18,2)"
       },
       {
        "nombre": "inventory",

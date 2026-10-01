@@ -386,9 +386,18 @@ NOTAS_GENERALES = [
     "NUNCA pongas '0 unidades' para esas cuatro: di 'sin datos (la carga "
     "empieza en octubre de 2025)' y no calcules crecimientos contra un "
     "periodo sin datos.",
+    # Medido el 1 de octubre de 2026, con agosto de 2026.
+    "[Key prices] (en las nueve vistas vw_ETL_*, NO en la consolidada) es "
+    "una llave de texto: ano, mes, semana, la descripcion del retailer, la "
+    "cadena y el carrier ('2026 8 32 SAMSUNG A07 Coppel Out of Scope'). NO la "
+    "uses para cruzar con [Prices_Weekly_VW].[Key]: casan el 0% en las siete "
+    "cadenas, son formatos distintos. Para precio por modelo ve a "
+    "Prices_Weekly_VW por su propia ruta (ver su ficha).",
     "La vista [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] es la fuente OFICIAL de "
     "venta B2B, la que usa el negocio: unifica a todos los retailers con "
-    "columnas [Retail], [Carrier], [Year], [Month], [Day] y [QTY]. Usala por "
+    "columnas [Retail], [Store], [Brand], [Material_Description], [Carrier], "
+    "[Date], [Year], [Month], [WEEK] y [QTY] (NO tiene [Day] ni [Key prices]). "
+    "Usala por "
     "defecto, y escribe su nombre COMPLETO tal cual: vive en RAW_DATA_B2B y "
     "NO en [GTM BI Database] -- escribirla ahi es el error mas comun y falla "
     "con 'Invalid object name'. Las tablas crudas son su insumo y no cuadran con ella (filtran "
@@ -474,15 +483,21 @@ NOTAS_GENERALES = [
     "nombre del modelo.",
     "LA COLUMNA DE FECHA SE LLAMA DISTINTO EN CADA TABLA. En las vistas "
     "vw_ETL_* y en ETL_Consolidado_B2B siempre es [Date] (datetime) mas "
-    "[Year], [Month] y [Day] como ENTEROS: ahi se filtra con "
-    "`[Year]=2026 AND [Month]=3`. En las tablas crudas cambia por retailer: "
+    "[Year], [Month] y [WEEK] como ENTEROS: ahi se filtra con "
+    "`[Year]=2026 AND [Month]=3`. Desde el 30 de septiembre de 2026 esas "
+    "vistas YA NO TIENEN [Day]: para un dia, filtra [Date]. [WEEK] es la "
+    "semana del ano de SQL Server con semanas de domingo a sabado "
+    "(DATEPART(week, [Date]); NO es la semana ISO): la semana 1 es la que "
+    "contiene el 1 de enero, asi que en el cambio de ano hay semanas partidas "
+    "(28-31 de diciembre de 2025 es la 53; 1-3 de enero de 2026 ya es la 1). "
+    "Para 'la semana 35' filtra `[Year]=2026 AND [WEEK]=35`. "
+    "En las tablas crudas cambia por retailer: "
     "COPPEL_B2B y Coppel_IOT [Día], LIVERPOOL_B2B$ y Liverpool_IOT "
     "[Día/Periodo], EKT_B2B [Day], TELCEL_B2B, MVS_B2B y SEARS_B2B [Fecha], "
     "ATT_B2B [Fecha de Transacción]; todas datetime, se filtran por rango "
     "(`>= '2026-01-01' AND < '2026-02-01'`).\n"
-    "TRAMPA: [Day] no significa lo mismo en los dos lados. En EKT_B2B es la "
-    "fecha completa (datetime); en las vistas vw_ETL_* es el dia del mes "
-    "(entero 1-31). Y [Month] es entero en las vistas pero texto en EKT_B2B "
+    "TRAMPA: [Day] solo existe ya en la tabla cruda EKT_B2B, y ahi es la "
+    "fecha completa (datetime), no el dia del mes. Y [Month] es entero en las vistas pero texto en EKT_B2B "
     "('Mar', 'Nov'), MVS_B2B y SEARS_B2B. Comprueba con `describir_objeto` "
     "antes de filtrar por fecha en una tabla que no hayas usado.",
     "PRECIOS: hay DOS fuentes y no son lo mismo. "
@@ -684,7 +699,8 @@ NOTAS_POR_OBJETO = {
         "como reemplazo. "
         "LA fuente oficial de venta B2B: es la que usa el negocio, asi que sus "
         "numeros son los buenos. Union de las nueve vistas vw_ETL_*, una por "
-        "retailer, ya normalizadas. [Year], [Month] y [Day] son enteros. "
+        "retailer, ya normalizadas. [Year], [Month] y [WEEK] son enteros (no "
+        "hay [Day]: para un dia se filtra [Date]); [Store] es texto. "
         "Dos cosas que la separan de las tablas crudas: "
         "(1) cada vw_ETL_* filtra la cantidad con `>= 1`, asi que quedan fuera "
         "las devoluciones y ajustes (QTY negativo) y las filas en cero; "
@@ -819,8 +835,55 @@ NOTAS_POR_OBJETO = {
         "precio de hoy' toma el MAX([consultation_date]) y agrega; contar "
         "filas no cuenta productos.\n"
         "[store] no siempre es una tienda fisica: en los CACs es el nombre "
-        "del retailer. Hay una vista por retailer (Complete_Scrap_COPPEL, "
-        "Complete_Scrap_LIVERPOOL) con las mismas columnas."
+        "del retailer. Es la UNICA tabla de la base Scrap: las vistas por "
+        "retailer (Complete_Scrap_COPPEL, Complete_Scrap_LIVERPOOL) se "
+        "quitaron del servidor; para un retailer filtra [retail] aqui."
+    ),
+    "Prices_Weekly_VW": (
+        "El PRECIO DE VENTA SEMANAL por producto y cadena: [Fecha], [Year], "
+        "[Month], [Week], [Material Description], [Precio Venta], [Retail], "
+        "[Carrier], [Key]. Medido el 1 de octubre de 2026: Telcel CAC, "
+        "Liverpool y Coppel desde enero de 2024; Elektra, AT&T, Sears y "
+        "Movistar desde octubre-noviembre de 2025.\n"
+        "[Material Description] es el TEXTO DE CADA CADENA, no el modelo "
+        "homologado ('Oppo reno 13 f amoled 6.6 pulgadas', 'AT&T Dealers Oppo "
+        "Reno 13', 'SEARS Apple Iphone 17 Pro Max 512GB'). Para agrupar por "
+        "modelo une con UNICOS$ por [MATERIAL DESCRIPTION FINAL], que casa el "
+        "99-100% en todas las cadenas (por [DESCRIPCION] casa entre 0% y 47% "
+        "salvo Telcel y Elektra). Colapsa UNICOS$ antes de unir para no "
+        "duplicar: `JOIN (SELECT [MATERIAL DESCRIPTION FINAL] AS d, "
+        "MIN([HOMOLOGACION MODELO]) AS modelo FROM [GTM BI Database].dbo.[UNICOS$] "
+        "GROUP BY [MATERIAL DESCRIPTION FINAL]) u ON u.d = "
+        "LTRIM(RTRIM(p.[Material Description]))`.\n"
+        "DOS TRAMPAS: (1) 42 723 filas traen [Precio Venta] en cero o negativo "
+        "y 7 269 por debajo de $500: filtra `[Precio Venta] > 0` siempre, y "
+        "sospecha de un precio de celular por debajo de $500. (2) [Key] NO es "
+        "unica: el mismo producto y semana sale una vez por cadena y carrier "
+        "(Liverpool Online y Offline, por ejemplo), con precios distintos. "
+        "Agrupa siempre por [Retail] y di que precio das (minimo, maximo o "
+        "promedio). [Key] tampoco casa con el [Key prices] de las ventas."
+    ),
+    "TELCEL_INV_B2B": (
+        "INVENTARIO de Telcel por tienda y SKU, en [RAW_INV_B2B]: [SKU], "
+        "[MODEL] (el texto de Telcel), [MODE] ('Inventario Universal', 'Equipo "
+        "prepago', 'Equipo post-pago'), [BRAND], [AREA] (la region de Telcel, "
+        "'RG03'), [STORE], [STOCK], [date] y [retail]. Solo el canal TELCEL "
+        "CAC.\n"
+        "Son FOTOS SEMANALES (39 fechas de enero a septiembre de 2026, casi "
+        "todas en domingo). NUNCA sumes [STOCK] de varias fechas: eso cuenta "
+        "el mismo telefono una vez por semana. 'El inventario' es el de UNA "
+        "fecha, la mas reciente si no dicen otra: "
+        "`WHERE [date] = (SELECT MAX([date]) FROM [RAW_INV_B2B].dbo.[TELCEL_INV_B2B])`. "
+        "Medido: HONOR tenia 151 987 unidades en la foto del 27 de septiembre "
+        "de 2026. OJO: el 30 y el 31 de agosto de 2026 son la MISMA foto "
+        "repetida (mismo total, 2 578 805); para fin de agosto usa una sola."
+    ),
+    "CompetitorsAnalysis_VW_TELCEL": (
+        "La MISMA venta de Telcel que vw_ETL_TELCEL_B2B, con otra forma: "
+        "[Brand], [Store], [Model], [RETAIL], [Qty], [Date]. Medido: agosto "
+        "de 2026 da 1 074 478 unidades en las dos. NO la sumes con "
+        "vw_ETL_TELCEL_B2B ni con la consolidada: contarias Telcel dos veces. "
+        "Para venta de Telcel usa la consolidada o vw_ETL_TELCEL_B2B."
     ),
     "TBL_DB_FOR_DOS": (
         "Su columna [Retail] solo contiene 'Coppel', 'Liverpool Offline' y "
@@ -859,6 +922,11 @@ def _filas_humanas(filas: int | None) -> str:
 
 def _resumen(obj: dict) -> str:
     partes = [p for p in (_filas_humanas(obj["filas"]), f"{len(obj['columnas'])} col") if p]
+    # Una vista que el servidor no puede resolver se marca aqui, en el indice
+    # que el modelo lee siempre: si solo se enterara al consultarla, gastaria
+    # un paso en descubrirlo (ver actualizar_catalogo.py).
+    if obj.get("rota"):
+        partes.append("ROTA, no usar")
     return f"{obj['nombre']} ({', '.join(partes)})"
 
 
@@ -916,6 +984,12 @@ def _ficha(base: str, obj: dict) -> str:
         f"  {_corchetes(c['nombre'])} {c['tipo']}" for c in obj["columnas"]
     )
     ficha = f"{cabecera}\n{columnas}"
+    if obj.get("rota"):
+        ficha += (
+            "\nOJO: ESTA VISTA NO FUNCIONA EN EL SERVIDOR (se comprobo al "
+            "actualizar el catalogo). Cualquier consulta a ella falla con: "
+            f"{obj['rota']} -- No la uses; busca el dato en otra tabla o vista."
+        )
     nota = NOTAS_POR_OBJETO.get(obj["nombre"])
     if nota:
         # Despues de las columnas, no antes: es la ultima linea que el modelo

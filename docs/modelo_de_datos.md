@@ -1,12 +1,40 @@
 # Cómo se consultan las tablas
 
-Fecha: 2026-09-21, ampliado 2026-09-23 (Raw_Data y PIVOT), 2026-09-24 (segundo intento de region)
+Fecha: 2026-09-21, ampliado 2026-09-23 (Raw_Data y PIVOT), 2026-09-24 (segundo intento de region), 2026-10-01 (revision del esquema)
 Estado: revisado contra la base, cada número de aquí está medido
 
 Este documento es el mapa que el bot ya lleva dentro (`sql_agent/catalogo.py`),
 escrito para leerse de un vistazo. Salvo donde se diga lo contrario, cada cifra
 sale de correr esa consulta contra `DESKTOP-GOE584A` el día de la fecha, sobre
 **agosto de 2026**; ninguna es una estimación.
+
+## Revisión del esquema del 1 de octubre de 2026
+
+El catálogo del bot ya no se arma a mano: `sql_agent/actualizar_catalogo.py`
+lo relee de `INFORMATION_SCHEMA` con el usuario de solo lectura, conserva las
+descripciones escritas a mano y dice qué cambió. Sin `--escribir` solo compara.
+
+Lo que cambió desde el catálogo anterior (14 de septiembre):
+
+| Qué | Detalle |
+|---|---|
+| **Vistas de venta sin `[Day]`** | La consolidada y las nueve `vw_ETL_*` perdieron `[Day]` y ganaron `[WEEK]`. Para un día se filtra `[Date]`. |
+| **`[WEEK]`** | Es `DATEPART(week, [Date])` con semanas de domingo a sábado (DATEFIRST 7), **no** la semana ISO: casa el 100% de las fechas contra 84% de la ISO. En el cambio de año hay semanas partidas (28-31/12/2025 es la 53; 1-3/01/2026 es la 1). |
+| **`[Key prices]`** | Columna nueva en las nueve `vw_ETL_*` (no en la consolidada): año, mes, semana, descripción, cadena y carrier. **No cruza con `Prices_Weekly_VW.[Key]`: 0% en las siete cadenas.** |
+| **`[Store]`** | En la consolidada pasó de `float` a `nvarchar(511)`. |
+| **`Prices_Weekly_VW`** (nueva) | Precio de venta semanal por producto y cadena. Su `[Material Description]` es el texto de cada cadena; homologa por `UNICOS$.[MATERIAL DESCRIPTION FINAL]` al 99-100% (por `[DESCRIPCION]`, 0-47% salvo Telcel y Elektra). 42 723 precios en cero o negativos. `[Key]` no es única: una fila por cadena y carrier. |
+| **`TELCEL_INV_B2B`** (nueva, RAW_INV_B2B) | Inventario de Telcel CAC por tienda y SKU, en fotos semanales (39 fechas, ene-sep 2026). No se suman fechas. HONOR al 27/09/2026: 151 987 unidades. El 30 y el 31 de agosto son la misma foto. |
+| **`CompetitorsAnalysis_VW_TELCEL`** (nueva) | La misma venta de Telcel que `vw_ETL_TELCEL_B2B` (agosto: 1 074 478 en las dos). Sumarlas cuenta doble. |
+| **Cuatro vistas rotas** | `vw_Coppel_Monthly_Excel`, `vw_Elektra_Monthly_Excel`, `vw_Liverpool_Monthly_Base` y `vw_Liverpool_Monthly_Excel` dependen de `Retail_StoreMap` / `Liverpool_StoreMap`, que ya no existen. El bot las ve marcadas como ROTA. |
+| **Scrap** | Se quitaron `Complete_Scrap_COPPEL` y `Complete_Scrap_LIVERPOOL`; queda `Complete_Scrap`. `[price]` pasó a `decimal(18,2)`. |
+| **Respaldo** | `bkp_LIVERPOOL_B2B_20260930` (copia de `LIVERPOOL_B2B$`) se deja fuera del catálogo. |
+| **Inventario Elektra** | `VW_ELEKTRA_MONTLY_SOandINV_LC` tiene columna nueva `[CLASSIFICATION]`. |
+| **La consolidada** | Responde sin error, pero **su `[QTY]` trae el texto de `[Key prices]`** (`'2026 8 36 N.HO600N AT&T Cacs HONOR 600 512GB 5G'`) en el 100% de las filas, aunque `INFORMATION_SCHEMA` diga `float`. El resto de sus filas coincide una por una con las nueve vistas (conteo por cadena, agosto de 2026). El bot mira una muestra de 200 filas cada 10 minutos y, mientras venga así, reconstruye la consolidada desde sus nueve vistas: 160 909 unidades de Honor en agosto, igual que antes. Arreglarla es del lado del servidor: falta `[Key prices]` en su lista de columnas o refrescarla (`sp_refreshview`). |
+
+**Bases a las que el bot no tiene acceso.** En el servidor hay cuatro bases que
+el usuario del bot no puede abrir: `GTM_BI_HOTA`, `HONOR_GTM_DEV`,
+`PSI Report Data` y `SMR`. No están en el catálogo; para usarlas hay que darle
+permiso de lectura a ese usuario.
 
 ## El mapa
 

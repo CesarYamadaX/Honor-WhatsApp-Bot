@@ -225,7 +225,9 @@ class TestConceptosDelNegocio:
         assert aviso.count(",") <= catalogo.MAX_VALORES_SUGERIDOS
         assert "mas)" in aviso
         listados = aviso.split("son: ")[1]
-        assert listados.startswith("Honor") or listados.startswith("HUAWEI")
+        # Sin importar mayusculas: la base escribio 'Honor' y desde el
+        # 1/10/2026 escribe 'HONOR'.
+        assert listados.upper().startswith(("HONOR", "HUAWEI"))
 
     def test_la_ficha_mensual_dice_que_el_promotor_es_un_numero(self):
         # Paso en produccion: la nota decia "[status_of_promoter] es promotor
