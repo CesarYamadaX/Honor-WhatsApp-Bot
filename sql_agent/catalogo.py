@@ -247,40 +247,104 @@ _CADENAS_EN_PREGUNTA = (
     ("LIVERPOOL", r"liverpool"),
     ("AT&T", r"at\s*&\s*t|\batt\b"),
     ("SEARS", r"sears"),
+    ("MOVISTAR", r"movistar"),
+)
+
+# La cadena de una tienda de HCReport: la del catalogo por [ID] y, si no
+# esta ahi, la primera palabra de su nombre. Movistar solo sale por la
+# segunda: ninguna de sus tiendas esta en CustomerStores.
+CADENA_DE_PROMOTORIA = (
+    "UPPER(COALESCE(cs.[RetailName], "
+    "LEFT(h.[NAME], CHARINDEX(' ', h.[NAME] + ' ') - 1)))"
+)
+_UNION_DE_PROMOTORIA = (
+    "LEFT JOIN (SELECT DISTINCT [ID], [RetailName], [Region] FROM "
+    "[GTM BI Database].dbo.[CustomerStores]) cs ON cs.[ID] = h.[ID]"
 )
 
 
-def avisos_de_promotoria(query: str, pregunta: str = "") -> list[str]:
-    """Consultas a V_HCReport_Informes que van a contar de mas.
+def _filtra_o_agrupa(query: str, columna: str) -> bool:
+    filtra = re.search(
+        rf"\[?{columna}\]?\s*(=|IN\b|LIKE\b|BETWEEN\b|[<>])", query, re.IGNORECASE
+    )
+    agrupa = re.search(rf"GROUP\s+BY[\s\S]*\b{columna}\b", query, re.IGNORECASE)
+    return bool(filtra or agrupa)
 
-    Dos errores medidos el 30 de septiembre de 2026, con "cuantas tiendas
-    de Coppel tienen promotor": el modelo conto sin filtrar periodo (junta
-    todos los meses) y sin filtrar cadena (la vista no tiene columna de
-    cadena), y contesto 1 721 cuando eran 676. La nota del catalogo ya lo
-    explica; esto no deja que se ejecute igual.
+
+def avisos_de_promotoria(query: str, pregunta: str = "") -> list[str]:
+    """Consultas de promotoria que van a contar de mas o de menos.
+
+    La regla, dada por el negocio el 2 de octubre de 2026: la promotoria se
+    saca de HCReport, y una tienda tiene promotoria si [FIXED PROMOTER] o
+    [DOUBLE PROMOTER] vale 1. Antes el bot iba a V_HCReport_Informes, que
+    es un INNER JOIN con CustomerStores: en agosto de 2026 contaba 1 289
+    tiendas con promotor contra 1 323 de HCReport, y Movistar no salia.
+
+    Tambien quedan los errores medidos el 30 de septiembre de 2026 con
+    "cuantas tiendas de Coppel tienen promotor": sin periodo (junta todas
+    las semanas) y sin cadena (contaba todas), contesto 1 721 y eran 676.
     """
-    if not re.search(r"(?<!\w)V_HCReport_Informes(?!\w)", query, re.IGNORECASE):
+    if re.search(r"(?<!\w)(V_HCReport_Informes|HCReport_VW)(?!\w)", query, re.IGNORECASE):
+        return [
+            "Para promotoria usa [GTM BI Database].dbo.[HCReport], no esa "
+            "vista: V_HCReport_Informes deja fuera las tiendas que no estan "
+            "en CustomerStores (Movistar entero; en agosto de 2026 daba 1 289 "
+            "tiendas con promotor y son 1 323) y HCReport_VW no tiene cadena "
+            "ni semana. Una tienda tiene promotoria si `h.[FIXED PROMOTER] = 1 "
+            "OR h.[DOUBLE PROMOTER] = 1`; un mes es su ultima semana completa "
+            "(agosto de 2026 = W35)."
+        ]
+    if not re.search(r"(?<!\w)HCReport(?!\w)", query, re.IGNORECASE):
         return []
+
     avisos = []
-    if not re.search(r"\[?Period\]?\s*(=|IN\b|LIKE\b)", query, re.IGNORECASE):
+    if not (_filtra_o_agrupa(query, "Week") and _filtra_o_agrupa(query, "YEAR")):
         avisos.append(
-            "Falta filtrar [Period]: cada mes trae todas las tiendas otra vez, "
-            "asi que sin periodo el conteo junta todos los meses. Filtra un mes "
-            "(`[Period] = '2026-August'`); si no te dijeron cual, usa el mas "
+            "Falta filtrar la semana: cada semana trae todas las tiendas otra "
+            "vez, asi que sin [YEAR] y [Week] el conteo las junta. Filtra "
+            "una (`h.[YEAR] = 2026 AND h.[Week] = 'W35'`); un mes es su "
+            "ultima semana completa, y si no te dijeron periodo usa la mas "
             "reciente y dilo."
         )
+
+    fijo = re.search(r"FIXED\s+PROMOTER", query, re.IGNORECASE)
+    doble = re.search(r"DOUBLE\s+PROMOTER", query, re.IGNORECASE)
+    pidio_uno = re.search(r"fij|fixed|dobl|double", pregunta or "", re.IGNORECASE)
+    if bool(fijo) != bool(doble) and not pidio_uno:
+        avisos.append(
+            "La promotoria se cuenta con las DOS columnas: una tienda tiene "
+            "promotoria si `h.[FIXED PROMOTER] = 1 OR h.[DOUBLE PROMOTER] = 1`. "
+            "Con una sola te saltas tiendas."
+        )
+
+    usa_catalogo = re.search(r"CustomerStores|RetailName", query, re.IGNORECASE)
+    if usa_catalogo and not re.search(r"\bLEFT\s+(OUTER\s+)?JOIN\b", query, re.IGNORECASE):
+        avisos.append(
+            "El cruce con CustomerStores tiene que ser LEFT JOIN: 3 801 de las "
+            "8 330 tiendas de HCReport no estan en el catalogo, y un JOIN "
+            f"normal las tira (Movistar entero). Usa `{_UNION_DE_PROMOTORIA}`."
+        )
+    elif usa_catalogo and not re.search(r"\[NAME\]|\.NAME\b", query, re.IGNORECASE):
+        avisos.append(
+            "La cadena no puede salir solo de cs.[RetailName]: las tiendas que "
+            "no estan en el catalogo quedan sin cadena (Movistar entero). Usa "
+            f"`{CADENA_DE_PROMOTORIA}`."
+        )
+
     nombradas = [
         cadena for cadena, patron in _CADENAS_EN_PREGUNTA
         if re.search(patron, pregunta or "", re.IGNORECASE)
     ]
-    if nombradas and not re.search(r"RetailName", query, re.IGNORECASE):
+    sin_filtrar = [
+        cadena for cadena in nombradas
+        if not re.search(rf"'{re.escape(cadena)}'", query, re.IGNORECASE)
+    ]
+    if sin_filtrar:
         avisos.append(
-            f"La pregunta es de {', '.join(nombradas)}, pero la vista no tiene "
-            "columna de cadena y la consulta no filtra ninguna: contaria las "
-            "tiendas de todas. Cruza con CustomerStores y filtra [RetailName]: "
-            "`JOIN (SELECT DISTINCT [Coppel Name], [RetailName] FROM "
-            "[GTM BI Database].dbo.[CustomerStores]) cs ON cs.[Coppel Name] = "
-            f"h.[Coppel Name] WHERE cs.[RetailName] = '{nombradas[0]}'`."
+            f"La pregunta es de {', '.join(sin_filtrar)}, pero HCReport no "
+            "tiene columna de cadena y la consulta no filtra esa: contaria "
+            f"las tiendas de todas. Agrega `{_UNION_DE_PROMOTORIA}` y filtra "
+            f"`{CADENA_DE_PROMOTORIA} = '{sin_filtrar[0]}'`."
         )
     return avisos
 
@@ -592,21 +656,45 @@ NOTAS_GENERALES = [
     "NUNCA pongas `[Brand]='HONOR'` en el WHERE si vas a calcular share: te "
     "quedas sin denominador y todo da 100%. Medido en Elektra, agosto 2026: "
     "la tienda mas grande vendio 1 012 unidades, 56 de HONOR, share 5.5%.",
-    "PROMOTORIA es cuanta gente de Honor hay en la tienda (promotor fijo, "
-    "promotor doble, supervisor, merchandiser, trainer). NO esta en las "
-    "tablas de venta: vive en [GTM BI Database].dbo.[HCReport], una fila por "
-    "tienda y SEMANA. Para un reporte MENSUAL usa la vista "
-    "[GTM BI Database].dbo.[V_HCReport_Informes], que ya toma la ULTIMA "
-    "SEMANA COMPLETA de cada mes y ya trae el nombre y la region de la "
-    "tienda; su [Period] es texto en ingles ('2026-August') y "
-    "[status_of_promoter] es un NUMERO -- cuantos promotores hubo, fijo mas "
-    "doble (0, 1, 2) --, NO una etiqueta de texto: para contar las tiendas "
-    "que tuvieron promotor va `[status_of_promoter] >= 1`. Para la semana "
-    "suelta, [HCReport] o [HCReport_VW]. Pide `describir_objeto` de la que "
-    "vayas a usar: cada una tiene su trampa y estan anotadas ahi. "
+    "PROMOTORIA: NO esta en las tablas de venta. Se saca SOLO de "
+    "[GTM BI Database].dbo.[HCReport] (una fila por tienda y SEMANA), y la "
+    "regla del negocio es: una tienda TIENE PROMOTORIA si [FIXED PROMOTER] = 1 "
+    "O [DOUBLE PROMOTER] = 1 (las dos, nunca solo una). Tiendas con "
+    "promotoria = `COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 OR "
+    "h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END)`; total de promotores = "
+    "`SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])`. Supervisor, "
+    "merchandiser, trainer y demas son visitas, NO promotoria. NO uses "
+    "V_HCReport_Informes ni HCReport_VW para esto: la primera deja fuera "
+    "las tiendas que no estan en CustomerStores (Movistar entero) y la "
+    "segunda no tiene cadena ni semana. "
+    "SIEMPRE filtra UNA semana ([YEAR] y [Week]): cada semana trae todas "
+    "las tiendas otra vez. Un MES se reporta con su ULTIMA SEMANA COMPLETA "
+    "(2026: W05 enero, W09 febrero, W13 marzo, W17 abril, W22 mayo, W26 "
+    "junio, W30 julio, W35 agosto, W39 septiembre, W44 octubre, W48 "
+    "noviembre, W52 diciembre; 2025 cambia en W04 enero, W08 febrero y W43 "
+    "octubre, el resto igual); si esa semana aun no esta cargada, o no "
+    "dicen periodo, usa la semana mas reciente que haya y dilo. "
+    "HCReport NO tiene columna de cadena: sale de CustomerStores por [ID] y, "
+    "para las tiendas que no estan ahi (Movistar, algunas de AT&T y "
+    "Telcel), de la primera palabra de [NAME]. Por cadena, asi:\n"
+    "  SELECT UPPER(COALESCE(cs.[RetailName], LEFT(h.[NAME], CHARINDEX(' ', "
+    "h.[NAME] + ' ') - 1))) AS [Cadena],\n"
+    "    COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 OR h.[DOUBLE "
+    "PROMOTER] = 1 THEN h.[ID] END) AS [Tiendas con promotoria]\n"
+    "  FROM [GTM BI Database].dbo.[HCReport] h\n"
+    "  LEFT JOIN (SELECT DISTINCT [ID], [RetailName], [Region] FROM "
+    "[GTM BI Database].dbo.[CustomerStores]) cs ON cs.[ID] = h.[ID]\n"
+    "  WHERE h.[YEAR] = 2026 AND h.[Week] = 'W35'\n"
+    "  GROUP BY UPPER(COALESCE(cs.[RetailName], LEFT(h.[NAME], CHARINDEX(' ', "
+    "h.[NAME] + ' ') - 1)))\n"
+    "Para una sola cadena, esa misma expresion de [Cadena] va en el WHERE "
+    "(`= 'COPPEL'`, 'TELCEL', 'LIVERPOOL', 'AT&T', 'ELEKTRA', 'SEARS', "
+    "'MOVISTAR'). La region sale de cs.[Region]. Medido en W35 de 2026: "
+    "1 323 tiendas con promotoria -- COPPEL 676, TELCEL 297, LIVERPOOL 107, "
+    "AT&T 83, ELEKTRA 68, SEARS 60, MOVISTAR 32. "
     "Para cruzar promotoria con VENTA ('las tiendas con promotor venden mas "
-    "Honor?'), une el [Coppel Name] de la vista mensual con el [Store] de la "
-    "vista de venta del retailer. Eso casa en AT&T (1732 de 1732 tiendas de "
+    "Honor?'), lleva el [ID] de HCReport a CustomerStores.[Coppel Name] y "
+    "une ese nombre con el [Store] de la vista de venta del retailer. Eso casa en AT&T (1732 de 1732 tiendas de "
     "2026), Coppel (1792/1800) y Liverpool (193/204); en Elektra casa la "
     "mitad (1253/2307) y en Telcel y Sears NO casa nada (0 de 675 y 0 de "
     "91), asi que ahi no hay cruce por nombre y no hay que forzarlo.",
@@ -716,73 +804,47 @@ NOTAS_POR_OBJETO = {
         "vista; en unidades, 144 190 crudas + 250 de las negativas = 144 440."
     ),
     "HCReport": (
-        "La PROMOTORIA semanal: una fila por tienda y semana, con cuanta "
-        "gente de Honor hubo. [FIXED PROMOTER] y [DOUBLE PROMOTER] son los "
-        "promotores (el 'status of promoter' del negocio es la SUMA de esos "
-        "dos); [Supervisor's visit], [City Manager visit], [Merchandiser], "
-        "[Trainer], [FIELD REP] y [SUPERVISOR MIX] son visitas y apoyos, no "
-        "promotores.\n"
+        "LA fuente de PROMOTORIA: una fila por tienda y semana. Una tienda "
+        "TIENE PROMOTORIA si [FIXED PROMOTER] = 1 O [DOUBLE PROMOTER] = 1 -- "
+        "regla del negocio, siempre las dos columnas juntas. Valen 0 o 1 "
+        "(nunca NULL); el doble va casi siempre con el fijo, pero hay tiendas "
+        "con solo el doble (47 filas en 2026), asi que filtrar solo "
+        "[FIXED PROMOTER] = 1 se las salta. Promotores (personas) = "
+        "[FIXED PROMOTER] + [DOUBLE PROMOTER]. [Supervisor's visit], "
+        "[City Manager visit], [Merchandiser], [Trainer], [FIELD REP] y "
+        "[SUPERVISOR MIX] son visitas y apoyos, NO promotoria.\n"
         "Las fechas NO son fechas: [Week] es texto 'W01'..'W52' (con el cero, "
         "asi que `[Week] = 'W5'` no encuentra nada) y [YEAR] es un numero "
-        "decimal (2026.0). Para ordenar semanas usa [YEAR] y [Week], que "
-        "siendo 'Wnn' ordena bien como texto.\n"
+        "decimal (2026.0). Filtra SIEMPRE [YEAR] y [Week]: cada semana trae "
+        "las ~8 330 tiendas otra vez, y sin semana un conteo junta todas. "
+        "Para ordenar semanas usa [YEAR] y [Week], que siendo 'Wnn' ordena "
+        "bien como texto.\n"
         "[ID] es la tienda (APSMX222602) y casa con [ID] de CustomerStores, "
-        "que es de donde salen el nombre y la region. Se une por ID, NUNCA "
-        "por nombre: [NAME] aqui es el nombre del operador ('TELCEL C.A.C. "
-        "BCS LA PAZ III') y no coincide con el del catalogo.\n"
-        "Trae ~8 330 tiendas por semana, mas de las que hay en CustomerStores."
+        "que es de donde salen la cadena ([RetailName]), el nombre y la "
+        "region. Se une por ID, NUNCA por nombre. 3 801 de las 8 330 tiendas "
+        "no estan en CustomerStores (Bodega, Walmart, Movistar, Suburbia...): "
+        "para ellas la cadena es la primera palabra de [NAME] ('MOVISTAR "
+        "PLAZA ARAGON'). Por eso la cadena es `UPPER(COALESCE(cs.[RetailName], "
+        "LEFT(h.[NAME], CHARINDEX(' ', h.[NAME] + ' ') - 1)))` con un LEFT "
+        "JOIN; con INNER JOIN se pierde Movistar entero (32 tiendas con "
+        "promotoria en W35 de 2026)."
     ),
     "HCReport_VW": (
-        "La misma promotoria semanal que [HCReport], resumida: [PromtsQTY] es "
-        "promotor fijo + promotor doble, y [AsigdenPromts] lo dice en texto "
-        "('No Promotors', 'One Promotor', 'Two Promotors').\n"
-        "NO tiene columnas de tienda ni de fecha sueltas: [FKEY_HR] es una "
-        "llave compuesta, CONCAT(ano, semana, id) -- '2026W10APSMX222602'. "
-        "Para cruzarla con otra cosa, arma la misma llave del otro lado "
-        "(CONCAT([YEAR],[Week],[ID])), o mejor usa [HCReport] directamente, "
-        "que trae los tres campos separados y es la misma informacion."
+        "NO la uses para promotoria: usa [HCReport], que tiene la misma "
+        "informacion con la cadena, la semana y la tienda separadas. Esta "
+        "vista solo trae [FKEY_HR] (CONCAT(ano, semana, id) -- "
+        "'2026W10APSMX222602'), [PromtsQTY] (fijo + doble) y [AsigdenPromts] "
+        "('No Promotors', 'One Promotor', 'Two Promotors')."
     ),
     "V_HCReport_Informes": (
-        "La PROMOTORIA MENSUAL, que es la forma en que el negocio la reporta: "
-        "de cada mes se toma la ULTIMA SEMANA COMPLETA y esa semana "
-        "representa el mes entero (2026: W05 enero, W09 febrero, W13 marzo, "
-        "W17 abril, W22 mayo, W26 junio, W30 julio, W35 agosto, W39 "
-        "septiembre, W44 octubre, W48 noviembre, W52 diciembre).\n"
-        "[Period] es texto con el mes en INGLES, '2026-August': no es fecha y "
-        "no se puede comparar con YEAR()/MONTH(). Para 'agosto de 2026' el "
-        "filtro es `[Period] = '2026-August'`.\n"
-        "[status_of_promoter] es un NUMERO (float): cuantos promotores tuvo "
-        "esa tienda esa semana, el fijo mas el doble. Los valores que hay "
-        "son 0 y 1. NO es una etiqueta: comparalo con numeros, nunca con "
-        "texto -- `[status_of_promoter] IN ('promotor fijo','promotor "
-        "doble')` revienta con \"Error converting data type varchar to "
-        "float\", y eso ya paso. Las tiendas CON promotor son "
-        "`[status_of_promoter] >= 1`; el total de promotores es "
-        "SUM([status_of_promoter]).\n"
-        "La tienda es [Coppel Name] (viene de CustomerStores) y no hay "
-        "columna de ID. OJO: [Coppel Name] es el nombre de tienda de TODAS "
-        "las cadenas, no solo de Coppel.\n"
-        "NO HAY COLUMNA DE CADENA. Para una cadena hay que cruzar con "
-        "CustomerStores y filtrar ahi: `JOIN (SELECT DISTINCT [Coppel Name], "
-        "[RetailName] FROM [GTM BI Database].dbo.[CustomerStores]) cs ON "
-        "cs.[Coppel Name] = h.[Coppel Name] WHERE cs.[RetailName] = 'COPPEL'` "
-        "(valores: COPPEL, TELCEL, LIVERPOOL, AT&T, ELEKTRA, SEARS).\n"
-        "FILTRA SIEMPRE UN [Period]. Cada mes trae todas las tiendas otra "
-        "vez, asi que sin periodo un COUNT(DISTINCT) junta todos los meses: "
-        "\"cuantas tiendas de Coppel tienen promotor\" salio 1 721 -- las "
-        "tiendas con promotor de TODAS las cadenas en TODOS los meses -- "
-        "cuando en agosto de 2026 eran 676 de Coppel (medido el 30/09/2026). "
-        "Si no dicen mes, usa el mas reciente y dilo.\n"
-        "DOS AVISOS, los dos medidos:\n"
-        "  1. La vista es un INNER JOIN con CustomerStores, y se queda con la "
-        "mitad: en W35 de 2026, de las 8 326 tiendas de HCReport solo 4 529 "
-        "estan en el catalogo. Sirve para cortes por tienda o por region; "
-        "para un TOTAL de promotores del pais va [HCReport], o avisa que el "
-        "numero es solo de las tiendas catalogadas.\n"
-        "  2. El mapa de semana->mes esta escrito A MANO dentro de la vista y "
-        "SOLO cubre 2025 y 2026. De 2027 en adelante [Period] sale NULL: si "
-        "te piden un mes de 2027, no lo inventes calculando la semana tu "
-        "mismo -- dile al usuario que hay que actualizar la vista."
+        "NO la uses para promotoria: usa [HCReport]. Esta vista es un INNER "
+        "JOIN con CustomerStores y deja fuera las tiendas que no estan ahi: "
+        "en agosto de 2026 contaba 1 289 tiendas con promotor cuando HCReport "
+        "tiene 1 323, y Movistar no aparece en absoluto. Ademas su mapa de "
+        "semana->mes esta escrito a mano y solo cubre 2025 y 2026.\n"
+        "Por si alguien la nombra: [Period] es texto en ingles "
+        "('2026-August'), [status_of_promoter] es un numero (0, 1 o 2: fijo "
+        "mas doble) y la tienda es [Coppel Name]; no tiene cadena ni ID."
     ),
     "CustomerStores": (
         "El catalogo de tiendas: [ID] (APSMX222602), [Coppel Name] (el nombre "

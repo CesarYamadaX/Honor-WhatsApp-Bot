@@ -103,16 +103,21 @@ class TestConceptosDelNegocio:
         assert "HCReport" in texto and "V_HCReport_Informes" in texto
         assert "SEMANA COMPLETA" in texto
 
-    def test_la_ficha_mensual_trae_el_mapa_de_semanas_y_sus_dos_avisos(self):
+    def test_la_promotoria_sale_de_hcreport_con_fijo_o_doble(self):
+        # Regla del negocio (2 de octubre de 2026): HCReport, y hay
+        # promotoria si [FIXED PROMOTER] o [DOUBLE PROMOTER] vale 1.
+        texto = catalogo.indice()
+        assert "[FIXED PROMOTER] = 1 O [DOUBLE PROMOTER] = 1" in texto
+        # El mes es su ultima semana completa.
+        assert "W35 agosto" in texto
+        # La cadena por COALESCE, para no perder Movistar.
+        assert catalogo.CADENA_DE_PROMOTORIA in texto
+        assert "MOVISTAR 32" in texto
+
+    def test_la_ficha_mensual_dice_que_no_se_use(self):
         ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
-        # El mes se escribe en ingles: sin esto el agente prueba '2026-08',
-        # no encuentra nada y reporta que no hay promotoria.
-        assert "2026-August" in ficha
-        # La semana que representa cada mes.
-        assert "W35 agosto" in ficha
-        # Los dos limites medidos de la vista.
-        assert "4 529" in ficha and "8 326" in ficha
-        assert "2027" in ficha
+        assert "NO la uses para promotoria" in ficha
+        assert "1 289" in ficha and "1 323" in ficha
 
     def test_liverpool_vive_partido_en_dos_vistas(self):
         # Medido el 25 de septiembre de 2026: vw_ETL_Liverpool son 99 040
@@ -229,17 +234,11 @@ class TestConceptosDelNegocio:
         # 1/10/2026 escribe 'HONOR'.
         assert listados.upper().startswith(("HONOR", "HUAWEI"))
 
-    def test_la_ficha_mensual_dice_que_el_promotor_es_un_numero(self):
-        # Paso en produccion: la nota decia "[status_of_promoter] es promotor
-        # fijo + promotor doble" y el modelo lo leyo como una lista de
-        # valores de texto. Escribio `IN ('promotor fijo','promotor doble')`
-        # contra una columna float, reviento con "Error converting data type
-        # varchar to float", lo reintento igual y se rindio: la pregunta se
-        # quedo sin contestar.
-        ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
-        assert "NUMERO" in ficha
-        assert ">= 1" in ficha
-        assert "varchar to float" in ficha
+    def test_la_ficha_semanal_tiene_la_regla(self):
+        ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})
+        assert "[FIXED PROMOTER] = 1 O [DOUBLE PROMOTER] = 1" in ficha
+        # Solo el doble existe: filtrar solo el fijo se las salta.
+        assert "47 filas" in ficha
 
     def test_la_ficha_semanal_avisa_del_cero_en_la_semana(self):
         ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})
@@ -451,47 +450,92 @@ class TestConsolidadaDeRepuesto:
 
 
 class TestPromotoriaNoCuentaDeMas:
-    """"Cuantas tiendas de Coppel tienen promotor" salio 1 721: el modelo
-    conto sin filtrar periodo (junta todos los meses) y sin filtrar cadena
-    (la vista no tiene columna de cadena). En agosto de 2026 eran 676 de
-    Coppel (medido el 30/09/2026).
+    """La promotoria se saca de HCReport: una tienda la tiene si [FIXED
+    PROMOTER] o [DOUBLE PROMOTER] vale 1. "Cuantas tiendas de Coppel tienen
+    promotor" salio 1 721 sin semana ni cadena; en W35 de 2026 eran 676.
     """
 
     PREGUNTA = "cuantas tiendas de Coppel tienen promotor de Honor"
-
-    def test_la_consulta_que_hizo_el_bot_no_pasa(self):
-        avisos = catalogo.avisos_de_promotoria(
-            "SELECT COUNT(DISTINCT [Coppel Name]) FROM [GTM BI Database].dbo."
-            "[V_HCReport_Informes] WHERE [status_of_promoter] >= 1",
-            self.PREGUNTA,
-        )
-        assert len(avisos) == 2
-        assert "[Period]" in avisos[0]
-        assert "RetailName" in avisos[1] and "'COPPEL'" in avisos[1]
+    BIEN = (
+        "SELECT COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 OR "
+        "h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END) "
+        "FROM [GTM BI Database].dbo.[HCReport] h "
+        f"{catalogo._UNION_DE_PROMOTORIA} "
+        "WHERE h.[YEAR] = 2026 AND h.[Week] = 'W35' "
+        f"AND {catalogo.CADENA_DE_PROMOTORIA} = 'COPPEL'"
+    )
 
     def test_bien_hecha_pasa(self):
-        assert catalogo.avisos_de_promotoria(
-            "SELECT COUNT(DISTINCT h.[Coppel Name]) FROM V_HCReport_Informes h "
-            "JOIN (SELECT DISTINCT [Coppel Name], [RetailName] FROM CustomerStores) cs "
-            "ON cs.[Coppel Name] = h.[Coppel Name] WHERE cs.[RetailName] = 'COPPEL' "
-            "AND h.[Period] = '2026-August' AND h.[status_of_promoter] >= 1",
+        assert catalogo.avisos_de_promotoria(self.BIEN, self.PREGUNTA) == []
+
+    def test_las_vistas_viejas_se_mandan_a_hcreport(self):
+        for vista in ("V_HCReport_Informes", "HCReport_VW"):
+            avisos = catalogo.avisos_de_promotoria(
+                f"SELECT * FROM [GTM BI Database].dbo.[{vista}] WHERE [Period] = '2026-August'",
+                self.PREGUNTA,
+            )
+            assert len(avisos) == 1 and "[HCReport]" in avisos[0]
+            assert "1 323" in avisos[0]
+
+    def test_sin_semana_no_pasa(self):
+        avisos = catalogo.avisos_de_promotoria(
+            self.BIEN.replace("h.[YEAR] = 2026 AND h.[Week] = 'W35' AND ", ""),
             self.PREGUNTA,
-        ) == []
+        )
+        assert any("semana" in a for a in avisos)
 
-    def test_sin_cadena_en_la_pregunta_solo_exige_el_periodo(self):
+    def test_una_tendencia_por_semana_si_pasa(self):
         assert catalogo.avisos_de_promotoria(
-            "SELECT [Region], COUNT(*) FROM V_HCReport_Informes "
-            "WHERE [Period] = '2026-August' GROUP BY [Region]",
-            "promotores por region",
+            "SELECT h.[YEAR], h.[Week], COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 "
+            "OR h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END) FROM HCReport h "
+            "GROUP BY h.[YEAR], h.[Week]",
+            "promotoria por semana",
         ) == []
 
-    def test_otras_vistas_no_se_tocan(self):
-        assert catalogo.avisos_de_promotoria("SELECT * FROM HCReport", self.PREGUNTA) == []
+    def test_solo_el_fijo_no_pasa(self):
+        avisos = catalogo.avisos_de_promotoria(
+            "SELECT COUNT(*) FROM HCReport h WHERE h.[YEAR] = 2026 AND "
+            "h.[Week] = 'W35' AND h.[FIXED PROMOTER] = 1",
+            "cuantas tiendas tienen promotoria",
+        )
+        assert len(avisos) == 1 and "DOS columnas" in avisos[0]
 
-    def test_la_nota_lo_explica(self):
-        ficha = catalogo.describir_objeto.invoke({"nombre": "V_HCReport_Informes"})
-        assert "NO HAY COLUMNA DE CADENA" in ficha
-        assert "FILTRA SIEMPRE UN [Period]" in ficha
+    def test_si_preguntan_por_el_fijo_si_pasa(self):
+        assert catalogo.avisos_de_promotoria(
+            "SELECT COUNT(*) FROM HCReport h WHERE h.[YEAR] = 2026 AND "
+            "h.[Week] = 'W35' AND h.[FIXED PROMOTER] = 1",
+            "cuantas tiendas tienen promotor fijo",
+        ) == []
+
+    def test_sin_cadena_no_pasa(self):
+        avisos = catalogo.avisos_de_promotoria(
+            "SELECT COUNT(*) FROM HCReport h WHERE h.[YEAR] = 2026 AND h.[Week] = 'W35' "
+            "AND (h.[FIXED PROMOTER] = 1 OR h.[DOUBLE PROMOTER] = 1)",
+            self.PREGUNTA,
+        )
+        assert len(avisos) == 1 and "'COPPEL'" in avisos[0]
+
+    def test_un_join_normal_pierde_movistar(self):
+        avisos = catalogo.avisos_de_promotoria(
+            self.BIEN.replace("LEFT JOIN", "JOIN"), self.PREGUNTA
+        )
+        assert len(avisos) == 1 and "LEFT JOIN" in avisos[0]
+
+    def test_la_cadena_solo_del_catalogo_pierde_movistar(self):
+        avisos = catalogo.avisos_de_promotoria(
+            self.BIEN.replace(catalogo.CADENA_DE_PROMOTORIA, "cs.[RetailName]"),
+            self.PREGUNTA,
+        )
+        assert len(avisos) == 1 and "Movistar" in avisos[0]
+
+    def test_movistar_se_reconoce_en_la_pregunta(self):
+        avisos = catalogo.avisos_de_promotoria(
+            self.BIEN, "cuantas tiendas de Movistar tienen promotor"
+        )
+        assert len(avisos) == 1 and "'MOVISTAR'" in avisos[0]
+
+    def test_otras_tablas_no_se_tocan(self):
+        assert catalogo.avisos_de_promotoria("SELECT * FROM CustomerStores", self.PREGUNTA) == []
 
 
 class TestCoberturaDeDatos:

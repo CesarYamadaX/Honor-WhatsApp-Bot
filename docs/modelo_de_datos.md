@@ -303,12 +303,32 @@ distinto de verdad, no un problema de espacios.
 
 ## Promotoría
 
+**Regla del negocio (2 de octubre de 2026):** la promotoría se saca de
+`HCReport`, y una tienda **tiene promotoría si `[FIXED PROMOTER] = 1` o
+`[DOUBLE PROMOTER] = 1`**. Las dos columnas valen 0 o 1, nunca `NULL`. En 2026
+hay 47 filas con solo el doble, así que filtrar solo el fijo se las salta.
+El bot ya no usa `V_HCReport_Informes` ni `HCReport_VW` para contar, y una
+regla en `catalogo.avisos_de_promotoria` no deja correr la consulta si
+falta la semana, una de las dos columnas o la cadena que se preguntó.
+
 `HCReport` es semanal y se une a `CustomerStores` **por `[ID]`**, nunca por
 nombre: su `[NAME]` es el nombre del operador y no coincide con el del catálogo.
+No tiene columna de cadena, y 3 801 de sus 8 330 tiendas no están en
+`CustomerStores` (Bodega, Walmart, Movistar, Suburbia...). Para esas, la cadena
+es la primera palabra de `[NAME]`:
 
-`V_HCReport_Informes` es la vista mensual, y su definición dice cómo lo hace el
-negocio: toma **una sola semana por mes**, la última completa, con el mapa
-escrito a mano dentro de la vista.
+```sql
+UPPER(COALESCE(cs.[RetailName], LEFT(h.[NAME], CHARINDEX(' ', h.[NAME] + ' ') - 1)))
+-- con LEFT JOIN a CustomerStores: un JOIN normal pierde Movistar entero
+```
+
+Tiendas con promotoría en W35 de 2026 (agosto), medido: **1 323**. COPPEL
+676, TELCEL 297, LIVERPOOL 107, AT&T 83, ELEKTRA 68, SEARS 60, MOVISTAR 32. La
+vista mensual daba 1 289, sin Movistar.
+
+Un mes se reporta con **una sola semana**, la última completa. Así lo hace
+`V_HCReport_Informes`, con el mapa escrito a mano dentro de la vista, y el bot
+usa el mismo mapa sobre `HCReport`.
 
 | Mes | 2025 | 2026 |
 |---|---|---|
