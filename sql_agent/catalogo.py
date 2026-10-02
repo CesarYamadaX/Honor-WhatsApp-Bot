@@ -317,6 +317,25 @@ def avisos_de_promotoria(query: str, pregunta: str = "") -> list[str]:
             "Con una sola te saltas tiendas."
         )
 
+    # Una tienda con fijo y doble en 1 tiene DOS promotores: si preguntan
+    # por personas, contar tiendas da de menos (W35 de 2026: 1 323 tiendas,
+    # 1 439 promotores).
+    pide_personas = re.search(
+        r"cu[aá]nt[oa]s\s+promotor|n[uú]mero\s+de\s+promotor|total\s+de\s+promotor"
+        r"|how\s+many\s+promoters|number\s+of\s+promoters",
+        pregunta or "", re.IGNORECASE,
+    )
+    suma_las_dos = re.search(
+        r"(FIXED|DOUBLE)\s+PROMOTER\]?\s*\)?\s*\+\s*(SUM\s*\(\s*)?[\w.\[]*(DOUBLE|FIXED)\s+PROMOTER",
+        query, re.IGNORECASE,
+    )
+    if pide_personas and not suma_las_dos:
+        avisos.append(
+            "Preguntan cuantos PROMOTORES (personas), no cuantas tiendas: si "
+            "las dos columnas valen 1, esa tienda tiene DOS promotores. Cuenta "
+            "con `SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])`."
+        )
+
     usa_catalogo = re.search(r"CustomerStores|RetailName", query, re.IGNORECASE)
     if usa_catalogo and not re.search(r"\bLEFT\s+(OUTER\s+)?JOIN\b", query, re.IGNORECASE):
         avisos.append(
@@ -661,8 +680,11 @@ NOTAS_GENERALES = [
     "regla del negocio es: una tienda TIENE PROMOTORIA si [FIXED PROMOTER] = 1 "
     "O [DOUBLE PROMOTER] = 1 (las dos, nunca solo una). Tiendas con "
     "promotoria = `COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 OR "
-    "h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END)`; total de promotores = "
-    "`SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])`. Supervisor, "
+    "h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END)`. Si las DOS valen 1, esa "
+    "tienda tiene DOS promotores: 'cuantos promotores' son personas, no "
+    "tiendas, y van con `SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])` "
+    "(W35 de 2026: 1 323 tiendas con promotoria, 1 439 promotores; "
+    "COPPEL 676 tiendas, 757 promotores). Supervisor, "
     "merchandiser, trainer y demas son visitas, NO promotoria. NO uses "
     "V_HCReport_Informes ni HCReport_VW para esto: la primera deja fuera "
     "las tiendas que no estan en CustomerStores (Movistar entero) y la "
@@ -809,8 +831,9 @@ NOTAS_POR_OBJETO = {
         "regla del negocio, siempre las dos columnas juntas. Valen 0 o 1 "
         "(nunca NULL); el doble va casi siempre con el fijo, pero hay tiendas "
         "con solo el doble (47 filas en 2026), asi que filtrar solo "
-        "[FIXED PROMOTER] = 1 se las salta. Promotores (personas) = "
-        "[FIXED PROMOTER] + [DOUBLE PROMOTER]. [Supervisor's visit], "
+        "[FIXED PROMOTER] = 1 se las salta. Si las dos valen 1 son DOS "
+        "promotores en esa tienda: promotores (personas) = "
+        "SUM([FIXED PROMOTER] + [DOUBLE PROMOTER]). [Supervisor's visit], "
         "[City Manager visit], [Merchandiser], [Trainer], [FIELD REP] y "
         "[SUPERVISOR MIX] son visitas y apoyos, NO promotoria.\n"
         "Las fechas NO son fechas: [Week] es texto 'W01'..'W52' (con el cero, "

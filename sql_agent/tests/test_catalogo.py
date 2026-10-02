@@ -537,6 +537,29 @@ class TestPromotoriaNoCuentaDeMas:
     def test_otras_tablas_no_se_tocan(self):
         assert catalogo.avisos_de_promotoria("SELECT * FROM CustomerStores", self.PREGUNTA) == []
 
+    def test_cuantos_promotores_cuenta_personas(self):
+        # Fijo y doble en 1 son DOS promotores: contar tiendas da de menos.
+        pregunta = "cuantos promotores de Honor hay en Coppel"
+        avisos = catalogo.avisos_de_promotoria(self.BIEN, pregunta)
+        assert len(avisos) == 1 and "DOS promotores" in avisos[0]
+
+        personas = self.BIEN.replace(
+            "COUNT(DISTINCT CASE WHEN h.[FIXED PROMOTER] = 1 OR "
+            "h.[DOUBLE PROMOTER] = 1 THEN h.[ID] END)",
+            "SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])",
+        )
+        assert catalogo.avisos_de_promotoria(personas, pregunta) == []
+        separadas = personas.replace(
+            "SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])",
+            "SUM(h.[FIXED PROMOTER]) + SUM(h.[DOUBLE PROMOTER])",
+        )
+        assert catalogo.avisos_de_promotoria(separadas, pregunta) == []
+
+    def test_la_nota_dice_que_uno_y_uno_son_dos(self):
+        assert "tiene DOS promotores" in catalogo.indice()
+        ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})
+        assert "son DOS promotores" in ficha
+
 
 class TestCoberturaDeDatos:
     def test_se_avisa_desde_cuando_hay_datos_de_cada_cadena(self):

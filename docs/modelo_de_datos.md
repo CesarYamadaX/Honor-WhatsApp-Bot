@@ -305,7 +305,10 @@ distinto de verdad, no un problema de espacios.
 
 **Regla del negocio (2 de octubre de 2026):** la promotoría se saca de
 `HCReport`, y una tienda **tiene promotoría si `[FIXED PROMOTER] = 1` o
-`[DOUBLE PROMOTER] = 1`**. Las dos columnas valen 0 o 1, nunca `NULL`. En 2026
+`[DOUBLE PROMOTER] = 1`**. Si las dos valen 1, esa tienda tiene **dos promotores**:
+"cuántos promotores" se cuenta con `SUM([FIXED PROMOTER] + [DOUBLE PROMOTER])`
+(W35 de 2026: 1 439 promotores en 1 323 tiendas). Las dos columnas valen 0 o 1,
+nunca `NULL`. En 2026
 hay 47 filas con solo el doble, así que filtrar solo el fijo se las salta.
 El bot ya no usa `V_HCReport_Informes` ni `HCReport_VW` para contar, y una
 regla en `catalogo.avisos_de_promotoria` no deja correr la consulta si
