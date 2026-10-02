@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
 import agent as modulo_agente
+import catalogo
 import grafica
 import idioma as idiomas
 
@@ -2020,7 +2021,7 @@ class TestLaConsolidadaQueRespondeConBasura:
             return original(conexion, "SELECT * FROM ventas WHERE monto < 30", cancelacion)
 
         monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
-        monkeypatch.setattr(modulo_agente, "_consolidada_trae_basura", lambda engine: True)
+        monkeypatch.setattr(modulo_agente, "consolidada_trae_basura", lambda engine: True)
         with contexto_peticion(engine):
             salida = consultar_sql.invoke(
                 {"query": "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
@@ -2040,7 +2041,7 @@ class TestLaConsolidadaQueRespondeConBasura:
             return original(conexion, "SELECT * FROM ventas WHERE monto < 30", cancelacion)
 
         monkeypatch.setattr(modulo_agente, "_ejecutar_interrumpible", falso)
-        monkeypatch.setattr(modulo_agente, "_consolidada_trae_basura", lambda engine: False)
+        monkeypatch.setattr(modulo_agente, "consolidada_trae_basura", lambda engine: False)
         with contexto_peticion(engine):
             consultar_sql.invoke(
                 {"query": "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"}
@@ -2077,18 +2078,18 @@ class TestLaSondaDeLaConsolidada:
             return _Conexion()
 
     def test_basura_si_hay_cantidades_que_no_son_numero(self):
-        assert modulo_agente._consolidada_trae_basura(self._Motor(200)) is True
-        assert modulo_agente._consolidada_trae_basura(self._Motor(0)) is False
+        assert catalogo.consolidada_trae_basura(self._Motor(200)) is True
+        assert catalogo.consolidada_trae_basura(self._Motor(0)) is False
 
     def test_se_recuerda_un_rato_para_no_mirar_en_cada_consulta(self):
         motor = self._Motor(200)
-        modulo_agente._consolidada_trae_basura(motor)
-        modulo_agente._consolidada_trae_basura(motor)
+        catalogo.consolidada_trae_basura(motor)
+        catalogo.consolidada_trae_basura(motor)
         assert motor.veces == 1
 
     def test_si_la_sonda_falla_no_desvia_nada(self):
         # Ese caso lo cubre el reintento por error de la vista.
-        assert modulo_agente._consolidada_trae_basura(self._Motor(RuntimeError("red"))) is False
+        assert catalogo.consolidada_trae_basura(self._Motor(RuntimeError("red"))) is False
 
 
 class TestUnBotonDeDescargaInventadoNoQuedaSuelto:

@@ -555,6 +555,14 @@ class TestPromotoriaNoCuentaDeMas:
         )
         assert catalogo.avisos_de_promotoria(separadas, pregunta) == []
 
+    def test_la_nota_dice_como_contestar(self):
+        # 1/10/2026: "59 promotores distribuidos en 92 tiendas" -- 92 eran
+        # todas las de Sears; con promotor, 59. Y "el ano pasado" se contesto
+        # con el rango de 2025 en vez de la misma semana.
+        texto = catalogo.indice()
+        assert "nunca '59 promotores distribuidos en 92 tiendas'" in texto
+        assert "MISMA semana del ano anterior" in texto
+
     def test_la_nota_dice_que_uno_y_uno_son_dos(self):
         assert "tiene DOS promotores" in catalogo.indice()
         ficha = catalogo.describir_objeto.invoke({"nombre": "HCReport"})

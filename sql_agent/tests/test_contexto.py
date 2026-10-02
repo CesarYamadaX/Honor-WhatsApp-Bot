@@ -12,6 +12,13 @@ import contexto
 from contexto import contexto_del_resultado
 
 
+@pytest.fixture(autouse=True)
+def _consolidada_sana(monkeypatch):
+    # La sonda de la consolidada iria al motor de mentira; aqui se da por
+    # sana salvo en las pruebas que digan lo contrario.
+    monkeypatch.setattr(contexto, "consolidada_trae_basura", lambda engine: False)
+
+
 class _Cursor:
     def __init__(self, columnas, filas):
         self._columnas = columnas
@@ -270,6 +277,48 @@ class TestExcelConContexto:
             _resultado(), filename="solo_datos.xlsx", contexto=contexto_vacio
         )
         assert openpyxl.load_workbook(ruta).sheetnames == [HOJA_DATOS]
+
+
+class TestPromotoriaYConsolidadaRota:
+    """Visto el 1 de octubre de 2026, en la compu donde corre el bot: los
+    promotores de Sears por semana salieron con las ventas de Sears de 2025
+    pegadas, y la hoja por tienda fallo con "nvarchar is invalid for sum
+    operator" porque la consolidada trae basura en [QTY].
+    """
+
+    _POR_SEMANA = pd.DataFrame(
+        {"Año": [2025, 2025], "Semana": ["W02", "W03"], "Promotores": [49, 49]}
+    )
+
+    def test_un_reporte_de_promotoria_no_lleva_ventas(self):
+        motor = _MotorDeCatalogos()
+        hojas = contexto_del_resultado(
+            pd.DataFrame({"Año": [2025], "Mes": [1], "Promotores": [49]}),
+            motor,
+            "SELECT ... FROM [GTM BI Database].dbo.[HCReport] h WHERE h.[YEAR] = 2025",
+        )
+        assert hojas == {}
+        assert not any("Consolidado" in sql or "vw_ETL" in sql for sql, _ in motor.consultas)
+
+    def test_con_la_consolidada_rota_la_hoja_sale_de_sus_vistas(self, monkeypatch):
+        monkeypatch.setattr(contexto, "consolidada_trae_basura", lambda engine: True)
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [160909]}),
+            motor,
+            "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] WHERE [Brand] = 'HONOR'",
+        )
+        sql = next(s for s, _ in motor.consultas if "GROUP BY v.[Retail], v.[Store]" in s)
+        assert "vw_ETL_TELCEL_B2B" in sql and "ETL_Consolidado_B2B" not in sql
+
+    def test_sana_se_usa_la_consolidada(self, monkeypatch):
+        monkeypatch.setattr(contexto, "consolidada_trae_basura", lambda engine: False)
+        motor = _MotorDeCatalogos()
+        contexto_del_resultado(
+            pd.DataFrame({"Año": [2026], "Mes": [8], "Total": [160909]}), motor, ""
+        )
+        sql = next(s for s, _ in motor.consultas if "GROUP BY v.[Retail], v.[Store]" in s)
+        assert "ETL_Consolidado_B2B" in sql
 
 
 class TestLaHojaNoContradiceAlMensaje:

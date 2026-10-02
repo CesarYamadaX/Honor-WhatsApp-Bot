@@ -13,11 +13,17 @@ archivo. Se regenera desde INFORMATION_SCHEMA y sys.partitions.
 """
 
 import json
+import logging
 import re
+import threading
+import time
+import weakref
 from functools import lru_cache
 from pathlib import Path
 
 from langchain.tools import tool
+
+logger = logging.getLogger("sql_agent.catalogo")
 
 RUTA_CATALOGO = Path(__file__).with_name("catalogo.json")
 RUTA_VALORES = Path(__file__).with_name("valores.json")
@@ -236,6 +242,51 @@ def consolidada_de_repuesto(query: str) -> str | None:
         query, "ETL_Consolidado_B2B", _union_de(_VISTAS_DE_LA_CONSOLIDADA)
     )
     return nueva if cuantas else None
+
+
+# La otra forma de estar rota, peor porque no da error: el 1 de octubre de
+# 2026 la consolidada volvio a responder, pero su [QTY] trae el texto de
+# [Key prices] ('2026 8 36 N.HO600N AT&T Cacs HONOR 600 ...') en el 100% de
+# las filas, aunque INFORMATION_SCHEMA siga diciendo float. SUM falla por
+# nvarchar, el modelo prueba TRY_CONVERT, sale NULL y contesta "no pude
+# calcular" tras dos minutos. Sus filas si coinciden una por una con las
+# nueve vistas (por cadena, agosto de 2026), asi que el repuesto sirve igual.
+# Se mira una muestra antes de usarla y se recuerda un rato: cuando la
+# arreglen, se vuelve sola a la real.
+_SONDA_DE_LA_CONSOLIDADA = (
+    "SELECT COUNT(*) FROM (SELECT TOP 200 [QTY] AS q FROM "
+    "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]) AS muestra "
+    "WHERE muestra.q IS NOT NULL AND TRY_CONVERT(float, muestra.q) IS NULL"
+)
+_CADA_CUANTO_SE_MIRA_LA_CONSOLIDADA = 600  # segundos
+_consolidada_mirada: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_candado_consolidada = threading.Lock()
+
+
+def consolidada_trae_basura(engine) -> bool:
+    """True si el [QTY] de la consolidada no son numeros.
+
+    Si la sonda misma falla, False: ese caso ya lo cubre el reintento por
+    error, y una sonda que no corre (otro motor, red caida) no debe desviar
+    consultas que quiza funcionan.
+    """
+    ahora = time.monotonic()
+    with _candado_consolidada:
+        visto = _consolidada_mirada.get(engine)
+        if visto and ahora - visto[0] < _CADA_CUANTO_SE_MIRA_LA_CONSOLIDADA:
+            return visto[1]
+    try:
+        with engine.connect() as conexion:
+            basura = bool(conexion.exec_driver_sql(_SONDA_DE_LA_CONSOLIDADA).scalar())
+    except Exception:  # noqa: BLE001 - ver docstring
+        logger.warning("No se pudo mirar la vista consolidada", exc_info=True)
+        basura = False
+    if basura:
+        logger.warning("ETL_Consolidado_B2B trae [QTY] que no son numeros; se reconstruye")
+    with _candado_consolidada:
+        _consolidada_mirada[engine] = (ahora, basura)
+    return basura
+
 
 
 # Cadenas que se pueden nombrar en una pregunta, y como se escriben en
@@ -684,7 +735,15 @@ NOTAS_GENERALES = [
     "tienda tiene DOS promotores: 'cuantos promotores' son personas, no "
     "tiendas, y van con `SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])` "
     "(W35 de 2026: 1 323 tiendas con promotoria, 1 439 promotores; "
-    "COPPEL 676 tiendas, 757 promotores). Supervisor, "
+    "COPPEL 676 tiendas, 757 promotores). AL CONTESTAR: los promotores "
+    "estan en las tiendas CON promotoria, no en todas. COUNT(DISTINCT "
+    "h.[ID]) sin el CASE son TODAS las tiendas de la cadena: si lo das, di "
+    "'59 promotores en 59 tiendas, de las 92 tiendas de Sears', nunca "
+    "'59 promotores distribuidos en 92 tiendas' (paso el 1/10/2026). "
+    "'Como estaba el ano pasado' es la MISMA semana del ano anterior: "
+    "Sears W38 de 2026 tiene 59 promotores y W38 de 2025 tenia 53, asi que "
+    "la respuesta empieza con '59 contra 53, +6'; la serie del ano entero "
+    "va despues, si sirve. Supervisor, "
     "merchandiser, trainer y demas son visitas, NO promotoria. NO uses "
     "V_HCReport_Informes ni HCReport_VW para esto: la primera deja fuera "
     "las tiendas que no estan en CustomerStores (Movistar entero) y la "

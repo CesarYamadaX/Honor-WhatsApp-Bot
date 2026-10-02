@@ -3,7 +3,6 @@ import os
 import re
 import threading
 import time
-import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -37,6 +36,7 @@ from catalogo import (
     avisos_de_promotoria,
     completar_media_cadena,
     consolidada_de_repuesto,
+    consolidada_trae_basura,
     describir_objeto,
     filtros_que_no_casan,
     indice,
@@ -675,50 +675,6 @@ def _vista_rota_en_el_servidor(error: Exception, query: str) -> str:
         "consolidada esta fallando en el servidor y que el numero sale de "
         "sumar las cadenas una por una."
     )
-
-
-# La otra forma de estar rota, peor porque no da error: el 1 de octubre de
-# 2026 la consolidada volvio a responder, pero su [QTY] trae el texto de
-# [Key prices] ('2026 8 36 N.HO600N AT&T Cacs HONOR 600 ...') en el 100% de
-# las filas, aunque INFORMATION_SCHEMA siga diciendo float. SUM falla por
-# nvarchar, el modelo prueba TRY_CONVERT, sale NULL y contesta "no pude
-# calcular" tras dos minutos. Sus filas si coinciden una por una con las
-# nueve vistas (por cadena, agosto de 2026), asi que el repuesto sirve igual.
-# Se mira una muestra antes de usarla y se recuerda un rato: cuando la
-# arreglen, se vuelve sola a la real.
-_SONDA_DE_LA_CONSOLIDADA = (
-    "SELECT COUNT(*) FROM (SELECT TOP 200 [QTY] AS q FROM "
-    "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]) AS muestra "
-    "WHERE muestra.q IS NOT NULL AND TRY_CONVERT(float, muestra.q) IS NULL"
-)
-_CADA_CUANTO_SE_MIRA_LA_CONSOLIDADA = 600  # segundos
-_consolidada_mirada: "weakref.WeakKeyDictionary[Engine, tuple[float, bool]]" = weakref.WeakKeyDictionary()
-_candado_consolidada = threading.Lock()
-
-
-def _consolidada_trae_basura(engine: Engine) -> bool:
-    """True si el [QTY] de la consolidada no son numeros.
-
-    Si la sonda misma falla, False: ese caso ya lo cubre el reintento por
-    error, y una sonda que no corre (otro motor, red caida) no debe desviar
-    consultas que quiza funcionan.
-    """
-    ahora = time.monotonic()
-    with _candado_consolidada:
-        visto = _consolidada_mirada.get(engine)
-        if visto and ahora - visto[0] < _CADA_CUANTO_SE_MIRA_LA_CONSOLIDADA:
-            return visto[1]
-    try:
-        with engine.connect() as conexion:
-            basura = bool(conexion.exec_driver_sql(_SONDA_DE_LA_CONSOLIDADA).scalar())
-    except Exception:  # noqa: BLE001 - ver docstring
-        logger.warning("No se pudo mirar la vista consolidada", exc_info=True)
-        basura = False
-    if basura:
-        logger.warning("ETL_Consolidado_B2B trae [QTY] que no son numeros; se reconstruye")
-    with _candado_consolidada:
-        _consolidada_mirada[engine] = (ahora, basura)
-    return basura
 
 
 def _donde_vive_de_verdad(error: Exception) -> str:
@@ -1377,7 +1333,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     con_repuesto = False
     if "ETL_Consolidado_B2B".casefold() in query.casefold():
         repuesto = consolidada_de_repuesto(query)
-        if repuesto is not None and _consolidada_trae_basura(ctx.engine):
+        if repuesto is not None and consolidada_trae_basura(ctx.engine):
             bitacora.paso(
                 "la vista consolidada trae cantidades que no son numeros; "
                 "la reconstruyo desde sus vistas",

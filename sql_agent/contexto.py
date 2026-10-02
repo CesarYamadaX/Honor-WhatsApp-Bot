@@ -45,12 +45,18 @@ from dataclasses import dataclass
 import pandas as pd
 
 import tiempo
-from catalogo import valores_conocidos
+from catalogo import (
+    _VISTAS_DE_LA_CONSOLIDADA,
+    _union_de,
+    consolidada_trae_basura,
+    valores_conocidos,
+)
 
 logger = logging.getLogger("sql_agent.contexto")
 
 GTM = "[GTM BI Database].dbo"
 VENTAS = "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"
+_DE_PROMOTORIA = re.compile(r"(?<!\w)(V_)?HCReport", re.IGNORECASE)
 UNICOS = f"{GTM}.[UNICOS$]"
 
 # Cada entrada: hoja, tabla, y las columnas por las que se intenta casar los
@@ -730,13 +736,18 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
 
 
 def _ventas_por_tienda(conexion, desde: str, hasta: str,
-                       acotado: dict[str, list[str]] | None = None):
+                       acotado: dict[str, list[str]] | None = None,
+                       fuente: str = VENTAS):
     """Cuanto vendio cada tienda en ese periodo, la que mas primero.
 
     No se acota por MODELO: desde la consolidada eso obliga a una union que
     pierde el 92% del volumen (ver el encabezado del modulo). Por marca y por
     cadena SI, y hay que hacerlo -- son columnas de la propia vista, y sin
     ese filtro la hoja contradice al mensaje que la acompaña.
+
+    `fuente` es la consolidada, o sus nueve vistas unidas cuando la del
+    servidor trae basura en [QTY] (desde el 1 de octubre de 2026: el SUM
+    fallaba con "nvarchar is invalid for sum operator" y la hoja no salia).
     """
     condiciones, parametros = ["v.[Date] >= ?", "v.[Date] < ?"], [desde, hasta]
     for columna, valores in (acotado or {}).items():
@@ -746,7 +757,7 @@ def _ventas_por_tienda(conexion, desde: str, hasta: str,
     sql = f"""
         SELECT
                v.[Retail], v.[Store], SUM(v.[QTY]) AS [Unidades]
-        FROM {VENTAS} v
+        FROM {fuente} v
         WHERE {' AND '.join(condiciones)}
         GROUP BY v.[Retail], v.[Store]
         ORDER BY SUM(v.[QTY]) DESC
@@ -797,6 +808,13 @@ def contexto_del_resultado(
     # la hoja de datos, que es de donde salen.
     hojas: dict[str, pd.DataFrame] = hojas_por_cadena(df)
 
+    # Un reporte de promotoria no lleva ventas pegadas. Visto el 1 de octubre
+    # de 2026: "como se veia el ano pasado" (promotores de Sears por semana)
+    # salio con el detalle de ventas de Sears de todo 2025, que nadie pidio,
+    # y tardo 11 segundos mas en armar el pivot.
+    if _DE_PROMOTORIA.search(query or ""):
+        return hojas
+
     # El desglose por tienda va despues: es lo que se pidio ver, y lo unico
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
     rango = periodo(df)
@@ -813,8 +831,11 @@ def contexto_del_resultado(
                         conexion, cruda, modelos, *rango
                     )
                 else:
+                    fuente = VENTAS
+                    if consolidada_trae_basura(engine):
+                        fuente = _union_de(_VISTAS_DE_LA_CONSOLIDADA)
                     ventas = _ventas_por_tienda(
-                        conexion, *rango, acotado_del_resultado(df, query)
+                        conexion, *rango, acotado_del_resultado(df, query), fuente
                     )
             if not ventas.empty:
                 hojas["Ventas por tienda"] = ventas
