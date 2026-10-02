@@ -16,6 +16,7 @@ import { calcularEsperaReconexion } from "./backoff.js";
 import { repararCredenciales, respaldarCredenciales } from "./credenciales.js";
 import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
+import { atenderPorChat } from "./repartir.js";
 import { aFormatoWhatsApp } from "./markdown.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
@@ -495,7 +496,8 @@ async function arrancar() {
       descartado(`upsert ${type}`, messages?.[0]?.key?.remoteJid, ` (${messages?.length ?? 0} mensajes)`);
       return;
     }
-    for (const mensaje of messages) await atender(mensaje);
+    // Cada chat en paralelo; dentro de un chat, en orden (ver repartir.js).
+    await atenderPorChat(messages, atender);
   });
 }
 

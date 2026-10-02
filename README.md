@@ -34,6 +34,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `whatsapp/agentClient.js` | Cliente HTTP del servicio Python; traduce los codigos de estado a mensajes |
 | `whatsapp/chunk.js` | Trocea respuestas largas respetando parrafos, lineas y emojis |
 | `whatsapp/dedupe.js` | Evita atender dos veces el mismo mensaje tras una reconexion |
+| `whatsapp/repartir.js` | Atiende en paralelo los mensajes de chats distintos que llegan juntos; los de un mismo chat, en orden |
 | `whatsapp/backoff.js` | Espera exponencial entre reintentos de conexion |
 | `sql_agent/api.py` | Servicio HTTP: allowlist, una consulta por conversacion, timeout |
 | `sql_agent/session.py` | Una sesion con memoria propia por conversacion, con expiracion |

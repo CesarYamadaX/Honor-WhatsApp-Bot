@@ -26,6 +26,8 @@ que `index.js` usa directamente:
 - `chunk.js` — trocea una respuesta larga en varios mensajes de WhatsApp.
 - `dedupe.js` — evita procesar el mismo mensaje dos veces si WhatsApp lo
   reentrega (por ejemplo, tras una reconexion a media respuesta).
+- `repartir.js` — reparte un lote de mensajes: chats distintos en paralelo, los
+  de un mismo chat en orden (al reconectar llegan varios juntos).
 - `backoff.js` — calcula la espera entre reintentos de reconexion, con backoff
   exponencial y techo, para no martillar los servidores de WhatsApp.
 
