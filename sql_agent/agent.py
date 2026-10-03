@@ -47,6 +47,7 @@ import excel_pivot
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
+import resumen_local
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from sugerencias import sugerir
@@ -1300,6 +1301,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # mal por el 17% no puede depender de que al modelo le parezca bien.
     # Las VISTAS de Coppel y Liverpool se completan solas con su otra mitad;
     # lo que quede sin completar (las tablas crudas) se bloquea abajo.
+    # La consulta tal como la escribio el modelo: el resumen local completa
+    # Coppel y Liverpool a su manera (ver resumen_local.traducir).
+    pedida = query
     query, completadas = completar_media_cadena(query)
     if completadas:
         bitacora.paso(
@@ -1331,88 +1335,99 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # solo confundiria.
     consulta_para_etiqueta = query
     con_repuesto = False
-    if "ETL_Consolidado_B2B".casefold() in query.casefold():
-        repuesto = consolidada_de_repuesto(query)
-        if repuesto is not None and consolidada_trae_basura(ctx.engine):
-            bitacora.paso(
-                "la vista consolidada trae cantidades que no son numeros; "
-                "la reconstruyo desde sus vistas",
-                bitacora.NOTA,
-            )
-            query, con_repuesto = repuesto, True
-
+    # Primero el resumen local: si la consulta solo necesita unidades por
+    # cadena, marca, modelo, carrier y periodo, se contesta en un segundo en
+    # vez de minutos. Si no aplica o falla, None, y va al servidor como
+    # siempre. Ver resumen_local.py.
     comenzo = time.monotonic()
-    bitacora.paso(f"SQL: {' '.join(query.split())}", bitacora.SQL)
-    try:
-        with ctx.engine.connect() as conexion:
-            with _presupuesto_de_tiempo(conexion, presupuesto):
-                try:
-                    df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
-                except ConsultaCancelada:
-                    raise
-                except Exception as primera:
-                    # La consolidada rota en el servidor: se reintenta UNA vez
-                    # con ella reconstruida desde sus vistas. Solo ante ese
-                    # error -- en cuanto la arreglen, se vuelve a usar la real.
-                    repuesto = (
-                        consolidada_de_repuesto(query)
-                        if _vista_rota_en_el_servidor(primera, query)
-                        else None
-                    )
-                    if repuesto is None:
+    desde_el_resumen = resumen_local.consultar(pedida)
+    if desde_el_resumen is not None:
+        df, sql_local = desde_el_resumen
+        bitacora.paso(f"SQL (resumen local): {' '.join(sql_local.split())}", bitacora.SQL)
+    else:
+        if "ETL_Consolidado_B2B".casefold() in query.casefold():
+            repuesto = consolidada_de_repuesto(query)
+            if repuesto is not None and consolidada_trae_basura(ctx.engine):
+                bitacora.paso(
+                    "la vista consolidada trae cantidades que no son numeros; "
+                    "la reconstruyo desde sus vistas",
+                    bitacora.NOTA,
+                )
+                query, con_repuesto = repuesto, True
+
+        comenzo = time.monotonic()
+        bitacora.paso(f"SQL: {' '.join(query.split())}", bitacora.SQL)
+        try:
+            with ctx.engine.connect() as conexion:
+                with _presupuesto_de_tiempo(conexion, presupuesto):
+                    try:
+                        df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+                    except ConsultaCancelada:
                         raise
-                    bitacora.paso(
-                        "la vista consolidada esta rota en el servidor; "
-                        "reintento reconstruyendola desde sus vistas",
-                        bitacora.NOTA,
-                    )
-                    query, con_repuesto = repuesto, True
-                    df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
-    except ConsultaCancelada:
-        raise
-    except Exception as error:  # noqa: BLE001 - el mensaje (resumido) vuelve al modelo
-        # El error completo -con nombres de tabla/columna y detalle del
-        # driver ODBC- se registra aqui, en el log del servidor, que es
-        # donde debe quedar (Importante de la revision final). Al modelo
-        # solo le llega el texto de abajo, y el system_prefix de
-        # _create_agent le prohibe citarlo tal cual al usuario.
-        tardo = time.monotonic() - comenzo
-        logger.exception(
-            "Error al ejecutar SQL tras %.0fs (presupuesto %ss): %s",
-            tardo,
-            presupuesto,
-            " ".join(query.split())[:400],
-        )
-        bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}", bitacora.ERROR)
-        ctx.consultas_fallidas[huella] = str(error)[:300]
-        if _es_por_tiempo(error) or tardo >= presupuesto:
-            # Se agoto el presupuesto, no es un error de sintaxis: decirselo
-            # tal cual para que acote en vez de reintentar lo mismo.
-            return (
-                f"La consulta tardo mas de {presupuesto}s y la cancele para no "
-                "dejar al usuario sin respuesta. Acotarla por fecha NO va a "
-                "ayudar (medido: un SUM de un solo mes tarda lo mismo). Si "
-                "filtraste ETL_Consolidado_B2B por [Retail], ESE es el "
-                "problema: repite la consulta sobre la vista de ese retailer "
-                "(vw_ETL_Elektra, vw_ETL_TELCEL_B2B, vw_ETL_Sears...), que "
-                "trae las mismas columnas y no recorre las otras ocho. OJO con "
-                "Coppel y Liverpool: cada uno vive en DOS vistas y una sola da "
-                "de menos, asi que ahi va UNION ALL de las dos "
-                "(vw_ETL_COPPEL con vw_ETL_COPPEL_IOT, vw_ETL_Liverpool con "
-                "vw_ETL_Liverpool_IOT)."
+                    except Exception as primera:
+                        # La consolidada rota en el servidor: se reintenta UNA vez
+                        # con ella reconstruida desde sus vistas. Solo ante ese
+                        # error -- en cuanto la arreglen, se vuelve a usar la real.
+                        repuesto = (
+                            consolidada_de_repuesto(query)
+                            if _vista_rota_en_el_servidor(primera, query)
+                            else None
+                        )
+                        if repuesto is None:
+                            raise
+                        bitacora.paso(
+                            "la vista consolidada esta rota en el servidor; "
+                            "reintento reconstruyendola desde sus vistas",
+                            bitacora.NOTA,
+                        )
+                        query, con_repuesto = repuesto, True
+                        df = _ejecutar_interrumpible(conexion, query, ctx.cancelacion)
+        except ConsultaCancelada:
+            raise
+        except Exception as error:  # noqa: BLE001 - el mensaje (resumido) vuelve al modelo
+            # El error completo -con nombres de tabla/columna y detalle del
+            # driver ODBC- se registra aqui, en el log del servidor, que es
+            # donde debe quedar (Importante de la revision final). Al modelo
+            # solo le llega el texto de abajo, y el system_prefix de
+            # _create_agent le prohibe citarlo tal cual al usuario.
+            tardo = time.monotonic() - comenzo
+            logger.exception(
+                "Error al ejecutar SQL tras %.0fs (presupuesto %ss): %s",
+                tardo,
+                presupuesto,
+                " ".join(query.split())[:400],
             )
-        return (
-            f"Error al ejecutar la consulta: {error}"
-            f"{_vista_rota_en_el_servidor(error, query)}"
-            f"{_donde_vive_de_verdad(error)}"
-            f"{_columnas_que_si_existen(error, query)}"
-        )
+            bitacora.paso(f"SQL fallo tras {tardo:.0f}s: {str(error)[:200]}", bitacora.ERROR)
+            ctx.consultas_fallidas[huella] = str(error)[:300]
+            if _es_por_tiempo(error) or tardo >= presupuesto:
+                # Se agoto el presupuesto, no es un error de sintaxis: decirselo
+                # tal cual para que acote en vez de reintentar lo mismo.
+                return (
+                    f"La consulta tardo mas de {presupuesto}s y la cancele para no "
+                    "dejar al usuario sin respuesta. Acotarla por fecha NO va a "
+                    "ayudar (medido: un SUM de un solo mes tarda lo mismo). Si "
+                    "filtraste ETL_Consolidado_B2B por [Retail], ESE es el "
+                    "problema: repite la consulta sobre la vista de ese retailer "
+                    "(vw_ETL_Elektra, vw_ETL_TELCEL_B2B, vw_ETL_Sears...), que "
+                    "trae las mismas columnas y no recorre las otras ocho. OJO con "
+                    "Coppel y Liverpool: cada uno vive en DOS vistas y una sola da "
+                    "de menos, asi que ahi va UNION ALL de las dos "
+                    "(vw_ETL_COPPEL con vw_ETL_COPPEL_IOT, vw_ETL_Liverpool con "
+                    "vw_ETL_Liverpool_IOT)."
+                )
+            return (
+                f"Error al ejecutar la consulta: {error}"
+                f"{_vista_rota_en_el_servidor(error, query)}"
+                f"{_donde_vive_de_verdad(error)}"
+                f"{_columnas_que_si_existen(error, query)}"
+            )
 
     tardo = time.monotonic() - comenzo
     logger.info(
-        "SQL ok en %.0fs, %d filas: %s",
+        "SQL ok en %.0fs, %d filas%s: %s",
         tardo,
         len(df),
+        " (resumen local)" if desde_el_resumen is not None else "",
         " ".join(query.split())[:400],
     )
     bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s", bitacora.RESULTADO)

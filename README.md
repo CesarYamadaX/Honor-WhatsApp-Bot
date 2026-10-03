@@ -49,6 +49,8 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `sql_agent/bitacora.py` | Que se pregunto, que contesto el bot y que hizo para contestarlo |
 | `sql_agent/registro_de_logs.py` | Los logs tecnicos en disco (uno por dia) y como los lee el panel |
 | `sql_agent/actualizar_catalogo.py` | Relee el esquema de las bases y actualiza `catalogo.json` y `valores.json`; sin `--escribir` solo dice que cambio |
+| `sql_agent/resumen_local.py` | Resumen de ventas en un SQLite local (unidades por cadena, marca, modelo, carrier, año, mes y semana), refrescado cada 3 horas; contesta en un segundo lo que en el servidor tarda minutos, y lo demas sigue yendo al servidor |
+| `sql_agent/limpieza.py` | Borra los reportes de `exports/` con mas de 7 dias |
 | `sql_agent/panel/` | Panel de administracion, servido por el mismo servicio |
 | `panel.py` | Abre el panel como aplicacion, en su propia ventana |
 

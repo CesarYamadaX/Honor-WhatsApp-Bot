@@ -21,6 +21,7 @@ import binascii
 
 import idioma as idiomas
 import registro_de_logs
+import resumen_local
 from agent import ConsultaCancelada
 from bitacora import Bitacora
 from fotos import AlmacenDeFotos, ErrorDeFoto
@@ -379,7 +380,11 @@ def crear_app(
 
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "sesiones": len(registro)}
+        return {
+            "status": "ok",
+            "sesiones": len(registro),
+            "resumen_local": resumen_local.estado().get("construido"),
+        }
 
     # ------------------------------------------------------------------
     # Panel de administracion. Vive dentro del mismo servicio para que se
@@ -658,6 +663,14 @@ def main() -> None:
     album = AlmacenDeFotos(datos / "fotos")
 
     app = crear_app(config, lambda: SQLAgent(engine=motor), usuarios, diario, album)
+
+    # En hilos de fondo, para que el bot conteste desde el primer segundo:
+    # el resumen local tarda ~7 minutos en construirse y mientras tanto todo
+    # va al servidor como siempre. Ver resumen_local.py y limpieza.py.
+    import limpieza
+
+    resumen_local.mantener_al_dia(lambda: motor)
+    limpieza.mantener_limpia()
 
     if config.api_host in ("127.0.0.1", "localhost", "::1"):
         logger.info(

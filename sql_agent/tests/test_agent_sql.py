@@ -2087,6 +2087,37 @@ class TestLaSondaDeLaConsolidada:
         catalogo.consolidada_trae_basura(motor)
         assert motor.veces == 1
 
+    def test_la_sonda_tiene_plazo_y_lo_devuelve(self):
+        vistos = []
+
+        class _Bruta:
+            timeout = 0
+
+        class _Conexion:
+            connection = type("C", (), {"dbapi_connection": _Bruta()})()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def exec_driver_sql(self, sql):
+                vistos.append(self.connection.dbapi_connection.timeout)
+                return type("R", (), {"scalar": lambda self: 0})()
+
+        conexion = _Conexion()
+        motor = type("M", (), {"connect": lambda self: conexion})()
+        catalogo.consolidada_trae_basura(motor)
+        assert vistos == [catalogo.SEGUNDOS_PARA_LA_SONDA]
+        assert conexion.connection.dbapi_connection.timeout == 0
+
+    def test_una_sonda_que_falla_no_se_recuerda(self):
+        motor = self._Motor(RuntimeError("tiempo agotado"))
+        catalogo.consolidada_trae_basura(motor)
+        catalogo.consolidada_trae_basura(motor)
+        assert motor.veces == 2
+
     def test_si_la_sonda_falla_no_desvia_nada(self):
         # Ese caso lo cubre el reintento por error de la vista.
         assert catalogo.consolidada_trae_basura(self._Motor(RuntimeError("red"))) is False

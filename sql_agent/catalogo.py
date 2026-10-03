@@ -259,6 +259,7 @@ _SONDA_DE_LA_CONSOLIDADA = (
     "WHERE muestra.q IS NOT NULL AND TRY_CONVERT(float, muestra.q) IS NULL"
 )
 _CADA_CUANTO_SE_MIRA_LA_CONSOLIDADA = 600  # segundos
+SEGUNDOS_PARA_LA_SONDA = 30
 _consolidada_mirada: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _candado_consolidada = threading.Lock()
 
@@ -277,10 +278,23 @@ def consolidada_trae_basura(engine) -> bool:
             return visto[1]
     try:
         with engine.connect() as conexion:
-            basura = bool(conexion.exec_driver_sql(_SONDA_DE_LA_CONSOLIDADA).scalar())
+            # Con plazo: es la unica consulta al servidor de ese camino sin
+            # el suyo, y el 2 de octubre de 2026 una respuesta se quedo
+            # colgada despues de su consulta hasta el timeout de 10 minutos.
+            bruta = getattr(getattr(conexion, "connection", None), "dbapi_connection", None)
+            anterior = getattr(bruta, "timeout", 0)
+            if bruta is not None:
+                bruta.timeout = SEGUNDOS_PARA_LA_SONDA
+            try:
+                basura = bool(conexion.exec_driver_sql(_SONDA_DE_LA_CONSOLIDADA).scalar())
+            finally:
+                if bruta is not None:
+                    bruta.timeout = anterior
     except Exception:  # noqa: BLE001 - ver docstring
+        # Sin recordarlo: que la proxima consulta vuelva a mirar en vez de
+        # confiar diez minutos en una sonda que no contesto.
         logger.warning("No se pudo mirar la vista consolidada", exc_info=True)
-        basura = False
+        return False
     if basura:
         logger.warning("ETL_Consolidado_B2B trae [QTY] que no son numeros; se reconstruye")
     with _candado_consolidada:
