@@ -1232,6 +1232,22 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     return _texto_del_pronostico(resultado)
 
 
+# Un desglose pedido con todas sus letras. Solo entonces el resultado de la
+# consulta va como hoja aparte en un reporte de cadena: lo demas ya lo cubren
+# el PIVOT, Datos y Raw_Data.
+_PIDE_DESGLOSE = re.compile(
+    r"\bpor\s+(tienda|sucursal|punto de venta|modelo|sku|regi[oó]n|zona|semana|mes|"
+    r"d[ií]a|marca|cadena|carrier|canal|estado|ciudad|categor[ií]a)"
+    r"|desglos|agrupad|\bby\s+(store|model|sku|region|week|month|day|brand|carrier)\b"
+    r"|breakdown|按",
+    re.IGNORECASE,
+)
+
+
+def pidio_desglose(pregunta: str) -> bool:
+    return bool(_PIDE_DESGLOSE.search(pregunta or ""))
+
+
 @tool
 def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     """Para cuantas semanas le alcanza el inventario a Telcel.
@@ -1521,14 +1537,20 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             contexto = {}
 
         try:
-            # La hoja "Datos" sobra cuando el resultado ya llego entero en el
-            # mensaje (cabe como texto) y el Excel trae el detalle en otras
-            # hojas: "las ventas de Elektra de enero" daba una hoja con un
-            # solo renglon, 181 628, que es lo que ya decia el WhatsApp.
+            # Reporte de una cadena (contexto trae su propia hoja "Datos", lo
+            # agrupado, y "Raw_Data", lo completo): el resultado de la consulta
+            # no va como hoja, salvo que el usuario haya pedido un desglose
+            # ("por tienda", "por modelo"...), y entonces va al final como
+            # "Consulta". En cualquier otro reporte, la hoja "Datos" sobra
+            # cuando el resultado ya llego entero en el mensaje.
+            reporte_de_cadena = "Datos" in contexto
+            if reporte_de_cadena and len(df) > 1 and pidio_desglose(ctx.pregunta):
+                contexto["Consulta"] = df
             excel = ExcelExporter.export_to_excel(
                 df,
                 contexto=contexto,
-                con_datos=not (contexto and len(df) <= MAX_ROWS_AS_TEXT),
+                con_datos=not reporte_de_cadena
+                and not (contexto and len(df) <= MAX_ROWS_AS_TEXT),
             )
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
@@ -1551,8 +1573,15 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             imagen is not None
             and not any(a.lower().endswith(".png") for a in ctx.archivos)
         )
-        crudos = contexto.get("Raw_Data")
-        crudos_agrupados = crudos is not None and bool(crudos.attrs.get("agrupado"))
+        # El pivot sale de Raw_Data (lo completo); si no cupo, de Datos (lo
+        # agrupado, con las columnas Tienda/Marca/Mes/Unidades).
+        hoja_del_pivot = "Raw_Data" if "Raw_Data" in contexto else "Datos"
+        crudos = contexto.get(hoja_del_pivot) if "Datos" in contexto else None
+        crudos_agrupados = (
+            "Raw_Data" not in contexto
+            and "Datos" in contexto
+            and bool(contexto["Datos"].attrs.get("agrupado"))
+        )
         # Un pivot solo puede mirar UNA hoja. Si el crudo no cupo en una, la
         # hoja "Raw_Data" es apenas el primer trozo y el pivot estaria
         # resumiendo una parte sin decirlo -- justo lo que se viene
@@ -1572,7 +1601,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             config = excel_pivot.config_ventas_por_tienda(crudos)
             if config:
                 bitacora.paso("armando el pivot de tienda y mes", bitacora.NOTA)
-                if excel_pivot.agregar_pivot(excel, "Raw_Data", **config):
+                if excel_pivot.agregar_pivot(excel, hoja_del_pivot, **config):
                     bitacora.paso("pivot listo", bitacora.NOTA)
                 else:
                     bitacora.paso(
@@ -1627,9 +1656,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     if crudos_agrupados:
         partes.append(
             "OJO: el detalle crudo de este periodo es demasiado grande para ir "
-            "con todas sus columnas en el Excel, asi que la hoja 'Raw_Data' va "
-            "agrupada por tienda, marca y mes. Diselo al usuario, y que si "
-            "quiere todas las columnas acote el periodo (un mes, por ejemplo)."
+            "con todas sus columnas, asi que el Excel lleva el PIVOT y la hoja "
+            "'Datos' (agrupada por tienda, marca y mes) pero NO 'Raw_Data'. "
+            "Diselo al usuario, y que si quiere el detalle completo acote el "
+            "periodo (un mes, por ejemplo)."
         )
 
     if crudo_partido:

@@ -120,4 +120,59 @@ class TestSiElCompletoFallaVaAgrupado:
             _MotorDeCatalogos(),
             "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Elektra] WHERE [Year] = 2026",
         )
-        assert hojas["Raw_Data"].attrs.get("agrupado") is True
+        assert list(hojas) == ["Datos"]
+        assert hojas["Datos"].attrs.get("agrupado") is True
+
+
+class TestLaHojaDatosEsElCompletoAgrupado:
+    def test_agrupa_por_clave_de_tienda_y_suma_igual(self):
+        # La 6169 aparece con dos nombres: se agrupa por el numero.
+        completo = pd.DataFrame({
+            "POS": ["6169 EKT MEGA ZUMPANGO", "6169 MEGA ZUMPANGO", "9797 ELEKTRA.MX"],
+            "Tienda #": [6169, 6169, 9797],
+            "Marca": ["Samsung", "Samsung", "Apple"],
+            "QTY": [2.0, 3.0, 7.0],
+            "Region (catalogo)": ["R9", "R9", "R9"],
+            "Mes": [1, 1, 1],
+        })
+        completo.attrs["pivot"] = {"tienda": "POS", "marca": "Marca", "mes": "Mes", "unidades": "QTY"}
+        datos = contexto.agrupar_completo(completo, contexto.CRUDAS["ELEKTRA"])
+        assert list(datos.columns) == ["Region", "Tienda", "Marca", "Mes", "Unidades"]
+        assert len(datos) == 2 and datos["Unidades"].sum() == completo["QTY"].sum()
+        assert datos.iloc[0]["Unidades"] == 7
+
+    def test_las_filas_iot_sin_clave_se_agrupan_por_su_nombre(self):
+        completo = pd.DataFrame({
+            "Tienda": ["100 • CENTRO-MAX", "100 • CENTRO-MAX"],
+            "Marca": ["HONOR", "HONOR"], "Unidades": [1, 4],
+            "Region (catalogo)": ["R6", "R6"], "Mes": [1, 1],
+        })
+        datos = contexto.agrupar_completo(completo, contexto.CRUDAS["COPPEL"])
+        assert datos["Unidades"].tolist() == [5]
+
+
+class TestCuandoVaLaHojaConsulta:
+    def test_solo_si_se_pide_un_desglose(self):
+        import agent
+
+        assert agent.pidio_desglose("reporte de ventas de Honor por tienda en Elektra")
+        assert agent.pidio_desglose("sales by model at Coppel")
+        assert not agent.pidio_desglose("ventas de Elektra de enero")
+        assert not agent.pidio_desglose("mandame el excel de Coppel")
+
+
+class TestElPeriodoSaleDeLaConsulta:
+    """'Ventas de Honor por tienda en Elektra en enero 2026' devuelve tienda y
+    unidades, sin fecha: el periodo solo esta en el WHERE."""
+
+    def test_formas_de_filtrar(self):
+        p = contexto.periodo_de_la_consulta
+        assert p("WHERE [Year] = 2026 AND [Month] = 1") == ("2026-01-01", "2026-02-01")
+        assert p("WHERE [Year]=2026 AND [Month] IN (6,7,8)") == ("2026-06-01", "2026-09-01")
+        assert p("WHERE [Year] = 2026 AND [Month] BETWEEN 6 AND 8") == ("2026-06-01", "2026-09-01")
+        assert p("WHERE v.[Day] >= '2026-06-01' AND v.[Day] < '2026-09-01'") == ("2026-06-01", "2026-09-01")
+        assert p("WHERE [Year] = 2026") == ("2026-01-01", "2027-01-01")
+
+    def test_si_no_esta_claro_no_adivina(self):
+        assert contexto.periodo_de_la_consulta("WHERE [Year] IN (2025, 2026)") is None
+        assert contexto.periodo_de_la_consulta("SELECT * FROM x") is None

@@ -552,9 +552,12 @@ class TestConsultarSql:
             modulo_agente,
             "contexto_del_resultado",
             lambda df, engine, query, segundos=None: {
+                "Datos": pd.DataFrame(
+                    {"Tienda": ["a"], "Marca": ["HONOR"], "Mes": [1], "Unidades": [1]}
+                ),
                 "Raw_Data": pd.DataFrame(
                     {"Tienda": ["a"], "Marca": ["HONOR"], "Mes": [1], "Unidades": [1]}
-                )
+                ),
             },
         )
         monkeypatch.setattr(
@@ -646,7 +649,7 @@ class TestConsultarSql:
         })
         monkeypatch.setattr(
             modulo_agente, "contexto_del_resultado",
-            lambda df, engine, query, segundos=None: {"Raw_Data": grande},
+            lambda df, engine, query, segundos=None: {"Datos": grande.head(1), "Raw_Data": grande},
         )
         # Dos filas ya "no caben": asi la prueba no tiene que fabricar un
         # millon de filas para ejercer el camino.

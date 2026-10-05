@@ -641,16 +641,20 @@ class TestDatosCrudosParaElPivot:
             }
         )
 
-    def test_se_genera_junto_con_ventas_por_tienda(self):
+    def test_un_reporte_de_cadena_es_datos_y_raw_y_nada_mas(self):
+        # Pedido el 5/10/2026: PIVOT, Datos (agrupado) y Raw_Data (completo).
+        # Aqui la cruda de mentira no trae columnas, asi que el completo no
+        # sale y Datos va agrupado desde la base, marcado para avisar.
         motor = self._motor_con_crudo()
         hojas = contexto_del_resultado(
             self._resultado_por_modelo(), motor, "FROM EKT_B2B"
         )
 
-        assert "Raw_Data" in hojas
-        assert list(hojas["Raw_Data"].columns) == [
+        assert list(hojas) == ["Datos"]
+        assert list(hojas["Datos"].columns) == [
             "Region", "Tienda", "Marca", "Mes", "Unidades",
         ]
+        assert hojas["Datos"].attrs.get("agrupado") is True
 
     def test_no_filtra_por_los_modelos_del_resultado(self):
         # A diferencia de _ventas_por_tienda_y_modelo, esta trae la cadena
@@ -770,6 +774,10 @@ class TestCadaCrudaTieneSuMarca:
 class TestDesglosePorTienda:
     """La hoja que se pidio: cuanto vendio cada tienda en el periodo.
 
+    Desde el 5/10/2026, en un reporte de UNA cadena esta hoja ya no sale:
+    van PIVOT, Datos y Raw_Data. Queda como respaldo cuando la tabla cruda
+    no contesta, y asi se prueba (ver _sin_cruda).
+
     Va por PERIODO y no por modelo. La primera version filtraba los modelos
     del resultado uniendo la consolidada con UNICOS$ por [DESCRIPCION], y esa
     union esta mal por dos lados: en la consolidada [Material_Description] es
@@ -779,6 +787,10 @@ class TestDesglosePorTienda:
     apuntan a 25 homologaciones distintas. Las reglas del propio catalogo ya
     prohibian ese cruce.
     """
+
+    @pytest.fixture(autouse=True)
+    def _sin_cruda(self, monkeypatch):
+        monkeypatch.setattr(contexto, "_datos_y_raw", lambda *a: {})
 
     def _resultado_por_modelo(self):
         return pd.DataFrame(

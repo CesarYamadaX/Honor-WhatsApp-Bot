@@ -573,6 +573,49 @@ def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
     return desde.strftime("%Y-%m-%d"), (fin + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
 
 
+_ANIO_EN_SQL = re.compile(r"\[?Year\]?\s*=\s*'?(\d{4})", re.IGNORECASE)
+_MES_EN_SQL = re.compile(
+    r"\[?Month\]?\s*(?:=\s*'?(\d{1,2})|IN\s*\(([\d\s,]+)\)|BETWEEN\s+(\d{1,2})\s+AND\s+(\d{1,2}))",
+    re.IGNORECASE,
+)
+_FECHA_EN_SQL = re.compile(
+    r"\[?(?:Date|D[ií]a|Day|Fecha)\]?\s*>=\s*'(\d{4}-\d{2}-\d{2})'.*?<\s*'(\d{4}-\d{2}-\d{2})'",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def periodo_de_la_consulta(query: str) -> tuple[str, str] | None:
+    """El periodo que filtro la consulta, cuando el resultado no lo trae.
+
+    "Ventas de Honor por tienda en Elektra en enero 2026" devuelve tienda y
+    unidades, sin columna de fecha: el periodo solo esta en el WHERE
+    ([Year] = 2026 AND [Month] = 1). Sin esto ese reporte salia sin PIVOT,
+    Datos ni Raw_Data (visto el 5/10/2026).
+    """
+    texto = query or ""
+    fechas = _FECHA_EN_SQL.search(texto)
+    if fechas:
+        return fechas.group(1), fechas.group(2)
+    anios = sorted({int(a) for a in _ANIO_EN_SQL.findall(texto)})
+    if len(anios) != 1:
+        return None  # sin anio, o varios: no se adivina
+    anio = anios[0]
+    meses: set[int] = set()
+    for igual, lista, desde, hasta in _MES_EN_SQL.findall(texto):
+        if igual:
+            meses.add(int(igual))
+        elif lista:
+            meses |= {int(m) for m in lista.replace(" ", "").split(",") if m}
+        elif desde and hasta:
+            meses |= set(range(int(desde), int(hasta) + 1))
+    meses = {m for m in meses if 1 <= m <= 12}
+    if not meses:
+        return f"{anio}-01-01", f"{anio + 1}-01-01"
+    inicio = pd.Timestamp(anio, min(meses), 1)
+    fin = pd.Timestamp(anio, max(meses), 1) + pd.offsets.MonthBegin(1)
+    return inicio.strftime("%Y-%m-%d"), fin.strftime("%Y-%m-%d")
+
+
 def _ventas_por_tienda_y_modelo(conexion, cruda: Cruda, modelos: list[str],
                                desde: str, hasta: str):
     """Cuanto vendio cada tienda de esos modelos, por la tabla CRUDA.
@@ -823,6 +866,36 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
     return df
 
 
+def agrupar_completo(completo: pd.DataFrame, cruda: Cruda) -> pd.DataFrame:
+    """La hoja Datos: el Raw_Data completo agrupado por region, tienda, marca
+    y mes, igual que ventas_crudas pero sin volver a consultar la base.
+
+    Se agrupa por la CLAVE de la tienda (el numero, estable) y se muestra su
+    nombre, como en ventas_crudas: en Elektra la 6169 aparece como "EKT MEGA
+    ZUMPANGO" y como "MEGA ZUMPANGO". Las filas IOT no traen clave; ahi la
+    clave es el nombre.
+    """
+    nombres = completo.attrs.get("pivot", {})
+    tienda, unidades = nombres.get("tienda", cruda.etiqueta), nombres.get("unidades", cruda.unidades)
+    trabajo = pd.DataFrame({
+        "Region": completo[COLUMNA_REGION],
+        "Tienda": completo[tienda].astype(str),
+        "Clave": (completo[cruda.clave] if cruda.clave in completo else completo[tienda])
+        .where(lambda s: s.notna(), completo[tienda]).astype(str),
+        "Marca": completo[cruda.marca],
+        "Mes": completo[COLUMNA_MES],
+        "Unidades": pd.to_numeric(completo[unidades], errors="coerce"),
+    })
+    agrupado = (
+        trabajo.groupby(["Region", "Clave", "Marca", "Mes"], dropna=False, sort=False)
+        .agg(Tienda=("Tienda", "max"), Unidades=("Unidades", "sum"))
+        .reset_index()[["Region", "Tienda", "Marca", "Mes", "Unidades"]]
+        .sort_values("Unidades", ascending=False, kind="stable")
+        .reset_index(drop=True)
+    )
+    return agrupado
+
+
 def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     """Ventas de toda la cadena en el periodo, por tienda, marca y mes.
 
@@ -928,6 +1001,36 @@ def _con_plazo(conexion, segundos: int):
         bruta.timeout = anterior
 
 
+def _datos_y_raw(engine, cruda: Cruda, rango, plazo) -> dict[str, pd.DataFrame]:
+    """{"Datos": agrupado, "Raw_Data": completo}, o {} si la cruda no contesta.
+
+    Si el completo no cabe (ver LIMITE_DE_CELDAS_CRUDAS) o falla, va solo
+    Datos, agrupado desde la base, marcado con attrs["agrupado"] para que el
+    bot avise que el detalle no cupo.
+    """
+    completo = None
+    try:
+        with engine.connect() as conexion, _con_plazo(conexion, plazo):
+            completo = ventas_crudas_completas(conexion, cruda, *rango)
+    except Exception:  # noqa: BLE001
+        # Con todas las columnas tarda mas (Coppel, un mes: ~100 s por los
+        # cruces con el catalogo). Si se pasa del plazo o falla, mejor lo
+        # agrupado que nada.
+        logger.exception("No se pudo traer Raw_Data completo; va agrupado")
+    if completo is not None and not completo.empty:
+        return {"Datos": agrupar_completo(completo, cruda), "Raw_Data": completo}
+    try:
+        with engine.connect() as conexion, _con_plazo(conexion, plazo):
+            agrupado = ventas_crudas(conexion, cruda, *rango)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo traer el detalle crudo para el pivot")
+        return {}
+    if agrupado.empty:
+        return {}
+    agrupado.attrs["agrupado"] = True
+    return {"Datos": agrupado}
+
+
 def contexto_del_resultado(
     df: pd.DataFrame, engine, query: str = "", segundos: int | None = None
 ) -> dict[str, pd.DataFrame]:
@@ -960,12 +1063,26 @@ def contexto_del_resultado(
 
     # El desglose por tienda va despues: es lo que se pidio ver, y lo unico
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
-    rango = periodo(df)
+    rango = periodo(df) or periodo_de_la_consulta(query)
     if rango:
+        cruda = CRUDAS.get(retailer_del_resultado(df, query) or "")
+
+        # Reporte de UNA cadena: tres hojas y nada mas (pedido el 5/10/2026,
+        # viendo el de "las ventas de Elektra de enero"): el PIVOT (lo arma
+        # agent.py), Datos con lo agrupado por region, tienda, marca y mes,
+        # y Raw_Data con las filas de la cruda y todas sus columnas. "Ventas
+        # por tienda", las fichas de catalogo y la hoja del resultado se
+        # quedan fuera -- el pivot ya cubre la tienda -- salvo que el usuario
+        # pida un desglose (eso lo decide agent.py, que tiene la pregunta).
+        if cruda:
+            reporte = _datos_y_raw(engine, cruda, rango, plazo)
+            if reporte:
+                return reporte
+
+        # Varias cadenas, o la cruda no contesto: el reporte de siempre.
         # Con el modelo si se puede cuando el reporte es de UNA cadena: ahi
         # hay una tabla cruda donde la homologacion casa. Si son varias, o si
         # no hay modelos, la hoja sale por periodo, que siempre es correcta.
-        cruda = CRUDAS.get(retailer_del_resultado(df, query) or "")
         modelos = modelos_a_desglosar(df)
         try:
             with engine.connect() as conexion, _con_plazo(conexion, plazo):
@@ -986,32 +1103,6 @@ def contexto_del_resultado(
             # El reporte ya esta listo; esta hoja es un extra. Que la vista de
             # ventas no conteste a tiempo no puede costar la respuesta.
             logger.exception("No se pudo desglosar por tienda")
-
-        # Los datos crudos que alimentan el PIVOT, solo cuando hay UNA cadena
-        # identificada: sin eso no hay tabla cruda de la que partir. Va en su
-        # propio try: que esta consulta falle no puede tirar la de arriba, ni
-        # al reves.
-        if cruda:
-            try:
-                crudos = None
-                try:
-                    with engine.connect() as conexion, _con_plazo(conexion, plazo):
-                        crudos = ventas_crudas_completas(conexion, cruda, *rango)
-                except Exception:  # noqa: BLE001
-                    # Con todas las columnas tarda mas (Coppel, un mes: ~100 s
-                    # por los cruces con el catalogo). Si se pasa del plazo o
-                    # falla, mejor la agrupada que ninguna.
-                    logger.exception("No se pudo traer Raw_Data completo; va agrupado")
-                if crudos is None:
-                    # No cabe con todas sus columnas, o fallo: va agrupado por
-                    # tienda, marca y mes, y se avisa (ver agent.py).
-                    with engine.connect() as conexion, _con_plazo(conexion, plazo):
-                        crudos = ventas_crudas(conexion, cruda, *rango)
-                    crudos.attrs["agrupado"] = True
-                if not crudos.empty:
-                    hojas["Raw_Data"] = crudos
-            except Exception:  # noqa: BLE001
-                logger.exception("No se pudo traer el detalle crudo para el pivot")
 
     valores = _valores_de_texto(df)
     if not valores:
