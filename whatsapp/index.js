@@ -11,7 +11,14 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 
-import { autorizado, idiomaDelChat, preguntar, transcribir } from "./agentClient.js";
+import {
+  autorizado,
+  idiomaDelChat,
+  preguntar,
+  reaccionar,
+  registrarEnviados,
+  transcribir,
+} from "./agentClient.js";
 import { programarAvisos } from "./avisos.js";
 import { calcularEsperaReconexion } from "./backoff.js";
 import { repararCredenciales, respaldarCredenciales } from "./credenciales.js";
@@ -167,7 +174,10 @@ async function enviarMensajeSimple(jid, texto) {
   }
 }
 
+// Devuelve los ids de los mensajes que mando: una reaccion 👍/👎 a
+// cualquiera de ellos califica la respuesta (ver calificaciones.py).
 async function enviarTexto(jid, texto) {
+  const ids = [];
   // La traduccion va ANTES de trocear: `**` convertido a `*` cambia el
   // largo, y hacerlo despues podria dejar un par partido entre dos
   // fragmentos, que se veria peor que el markdown crudo.
@@ -175,11 +185,13 @@ async function enviarTexto(jid, texto) {
   for (const [indice, fragmento] of fragmentos.entries()) {
     if (!socketActual) {
       console.error(`[whatsapp] sin conexion activa, se perdio la respuesta para ${jid}`);
-      return;
+      return ids;
     }
-    await socketActual.sendMessage(jid, { text: fragmento });
+    const enviado = await socketActual.sendMessage(jid, { text: fragmento });
+    if (enviado?.key?.id) ids.push(enviado.key.id);
     if (indice < fragmentos.length - 1) await dormir(PAUSA_ENTRE_FRAGMENTOS_MS);
   }
+  return ids;
 }
 
 async function enviarArchivo(jid, ruta, idioma) {
@@ -220,16 +232,14 @@ async function enviarArchivo(jid, ruta, idioma) {
   // La grafica va como IMAGEN, no como documento: asi se ve en la propia
   // conversacion, sin abrir nada. Antes viajaba dentro del Excel, en una
   // segunda hoja que en el telefono nadie abre.
-  if (esImagen) {
-    await socketActual.sendMessage(jid, { image: contenido, mimetype: "image/png" });
-    return;
-  }
-
-  await socketActual.sendMessage(jid, {
-    document: contenido,
-    fileName: path.basename(ruta),
-    mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
+  const enviado = esImagen
+    ? await socketActual.sendMessage(jid, { image: contenido, mimetype: "image/png" })
+    : await socketActual.sendMessage(jid, {
+        document: contenido,
+        fileName: path.basename(ruta),
+        mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+  return enviado?.key?.id ? [enviado.key.id] : [];
 }
 
 // Un mensaje que no se atiende se descarta en silencio, y hay cinco motivos
@@ -345,6 +355,19 @@ async function atender(mensaje) {
       return;
     }
 
+    // Una reaccion (👍/👎) a un mensaje del bot es una calificacion de esa
+    // respuesta. No se contesta nada: es una señal, no una pregunta. El
+    // servicio decide si cuenta (solo pulgares, solo respuestas del bot).
+    const reaccion = mensaje.message?.reactionMessage;
+    if (reaccion) {
+      if (reaccion.key?.fromMe && reaccion.key?.id && (await autorizado(AGENT_API_URL, idAutorizacion))) {
+        await reaccionar(AGENT_API_URL, idAutorizacion, reaccion.key.id, reaccion.text ?? "");
+      } else {
+        descartado("reaccion que no califica", jid);
+      }
+      return;
+    }
+
     const texto = textoDelMensaje(mensaje);
     const audio = audioDelMensaje(mensaje);
     if ((!texto || !texto.trim()) && !audio) {
@@ -405,13 +428,19 @@ async function atender(mensaje) {
       // (un archivo ilegible, "no tengo respuesta") va en el mismo.
       const idioma = resultado.idioma;
       let enviadoAlgo = false;
+      // Los ids de lo que se mando, para que una reaccion a cualquiera de
+      // esos mensajes (el texto, el Excel, la grafica) califique este turno.
+      const ids = [];
       if (resultado.reply && resultado.reply.trim()) {
-        await enviarTexto(jid, resultado.reply);
+        ids.push(...((await enviarTexto(jid, resultado.reply)) ?? []));
         enviadoAlgo = true;
       }
       if (resultado.files.length > 0) {
-        for (const ruta of resultado.files) await enviarArchivo(jid, ruta, idioma);
+        for (const ruta of resultado.files) ids.push(...((await enviarArchivo(jid, ruta, idioma)) ?? []));
         enviadoAlgo = true;
+      }
+      if (resultado.turno && ids.length) {
+        await registrarEnviados(AGENT_API_URL, idAutorizacion, resultado.turno, ids);
       }
       // reply en blanco (trocear lo descarta) o {reply:"", files:[]}: sin
       // esto el usuario se queda sin nada, sin saber si el bot lo escucho.

@@ -207,7 +207,7 @@
   .buscador input:focus-visible { outline: 2px solid var(--acento); }
   .buscador svg { position: absolute; left: 14px; top: 11px; fill: var(--tinta-3); }
 
-  .solapas { display: flex; gap: 8px; }
+  .solapas { display: flex; gap: 8px; flex-wrap: wrap; }
   .solapas button {
     border: none; background: var(--barra); color: var(--tinta-2);
     border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer;
@@ -447,6 +447,22 @@
   .pastilla.limpio { background: var(--ok-suave); color: var(--acento-fuerte); }
 
   .vacio { color: var(--tinta-2); text-align: center; padding: 46px 20px; font-size: 14px; }
+
+  /* --- calificaciones --- */
+  .filtros-calif { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--borde); }
+  .filtros-calif button {
+    border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
+    border-radius: 15px; padding: 4px 12px; font-size: 12.5px; cursor: pointer;
+  }
+  .filtros-calif button[aria-pressed="true"] {
+    background: var(--ok-suave); color: var(--acento-fuerte); border-color: transparent; font-weight: 600;
+  }
+  .filtros-calif button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .avatar.calif { font-size: 22px; background: var(--barra); }
+  .ir-al-chat {
+    display: block; margin: 14px auto 4px; border: 1px solid var(--borde-fuerte); background: var(--panel);
+    color: var(--acento-fuerte); border-radius: 16px; padding: 6px 16px; font-size: 13px; cursor: pointer;
+  }
   .bienvenida {
     flex: 1; display: grid; place-content: center; justify-items: center;
     gap: 14px; text-align: center; padding: 30px; background: var(--panel);
@@ -517,6 +533,9 @@
         <button role="tab" id="tab-logs" aria-selected="false" aria-controls="lista">
           <span data-t="tab_logs">Logs</span> <span class="cuenta" id="cuenta-logs"></span>
         </button>
+        <button role="tab" id="tab-calificaciones" aria-selected="false" aria-controls="lista">
+          <span data-t="tab_calificaciones">Calificaciones</span> <span class="cuenta" id="cuenta-calificaciones"></span>
+        </button>
       </div>
     </div>
 
@@ -586,6 +605,8 @@
       </div>
       <div class="logs-lineas" id="lineas-log" tabindex="0"></div>
     </div>
+
+    <div class="doodle" id="vista-calificacion" hidden></div>
   </main>
 
 </div>
@@ -695,6 +716,13 @@ const TEXTOS = {
       qr: (h) => `WhatsApp pide escanear el QR desde las ${h}`,
       desconocido: () => "Sin datos de la conexión con WhatsApp",
     },
+    tab_calificaciones: "Calificaciones",
+    filtro_calif: { "-1": "👎 Malas", "1": "👍 Buenas", "": "Todas" },
+    sin_calificaciones:
+      "Todavía nadie ha calificado. Cuando un usuario reacciona con 👍 o 👎 a una respuesta del bot, aparece aquí.",
+    calificada: (emoji, fecha) => `${emoji} calificada el ${fecha}`,
+    turno_perdido: "No encontré esa respuesta en la bitácora.",
+    ver_conversacion: "Ver la conversación completa",
   },
   en: {
     marca: "Bot panel",
@@ -790,6 +818,13 @@ const TEXTOS = {
       qr: (h) => `WhatsApp waiting for the QR scan since ${h}`,
       desconocido: () => "No data about the WhatsApp connection",
     },
+    tab_calificaciones: "Ratings",
+    filtro_calif: { "-1": "👎 Bad", "1": "👍 Good", "": "All" },
+    sin_calificaciones:
+      "Nobody has rated anything yet. When a user reacts with 👍 or 👎 to a bot answer, it shows up here.",
+    calificada: (emoji, fecha) => `${emoji} rated on ${fecha}`,
+    turno_perdido: "I couldn't find that answer in the log.",
+    ver_conversacion: "See the whole conversation",
   },
 };
 
@@ -878,6 +913,11 @@ let totalLog = 0;
 // Los logs se releen en cada latido solo si el dia abierto es hoy (los de
 // dias pasados ya no cambian); la lista de dias, cada tanto.
 let latidosDesdeDias = 0;
+// Calificaciones: por defecto se ven las malas, que son las que hay que
+// revisar. "" = todas.
+let cacheCalif = [];
+let filtroCalif = "-1";
+let califElegida = null;
 
 /* ------------------------------------------------------------------ utiles */
 
@@ -988,6 +1028,7 @@ function pintarLista() {
   caja.replaceChildren();
   if (solapa === "usuarios") pintarListaUsuarios(caja);
   else if (solapa === "logs") pintarListaDias(caja);
+  else if (solapa === "calificaciones") pintarListaCalif(caja);
   else pintarListaChats(caja);
 }
 
@@ -1092,6 +1133,7 @@ function mostrarVista(cual) {
   $("vista-actividad").hidden = cual !== "actividad";
   $("vista-usuarios").hidden = cual !== "usuarios";
   $("vista-logs").hidden = cual !== "logs";
+  $("vista-calificacion").hidden = cual !== "calificacion";
   $("app").classList.toggle("viendo-chat", cual !== "bienvenida");
 }
 
@@ -1219,6 +1261,7 @@ function burbujaDeTurno(turno) {
   );
 
   const pieBot = elemento("div", "pie-burbuja");
+  if (turno.calificacion) pieBot.append(elemento("span", null, turno.calificacion.emoji));
   if (turno.archivos.length) pieBot.append(elemento("span", null, `📎 ${turno.archivos.length}`));
   if (turno.idioma) pieBot.append(elemento("span", null, turno.idioma));
   pieBot.append(elemento("span", null, duracion(turno.segundos)));
@@ -1630,6 +1673,91 @@ function pintarFiltros() {
   $("solo-problemas").checked = soloProblemas;
 }
 
+/* ---------------------------------------------------- calificaciones 👍/👎 */
+
+async function cargarCalificaciones() {
+  const consulta = filtroCalif ? `?valor=${filtroCalif}` : "";
+  const datos = await pedir(`/panel/calificaciones${consulta}`);
+  cacheCalif = datos.calificaciones;
+  // En la pestaña, las malas: son las que piden revisar algo.
+  $("cuenta-calificaciones").textContent = datos.malas ? `· ${datos.malas}` : "";
+  if (solapa === "calificaciones") pintarLista();
+}
+
+function pintarListaCalif(caja) {
+  const filtros = elemento("div", "filtros-calif");
+  filtros.setAttribute("role", "group");
+  const nombres = t("filtro_calif");
+  for (const valor of ["-1", "1", ""]) {
+    const boton = elemento("button", null, nombres[valor]);
+    boton.type = "button";
+    boton.setAttribute("aria-pressed", String(valor === filtroCalif));
+    boton.addEventListener("click", () => {
+      filtroCalif = valor;
+      cargarCalificaciones().catch((e) => mostrarError(e.message));
+    });
+    filtros.append(boton);
+  }
+  caja.append(filtros);
+
+  const visibles = cacheCalif.filter((c) => soloNumero(c.chat_id).includes(filtro));
+  if (!visibles.length) {
+    caja.append(elemento("div", "vacio", filtro ? t("sin_coincidencias") : t("sin_calificaciones")));
+    return;
+  }
+  for (const calif of visibles) {
+    const fila = elemento("button", "renglon");
+    fila.type = "button";
+    if (califElegida?.turno_id === calif.turno_id && vista === "calificacion") {
+      fila.setAttribute("aria-current", "true");
+    }
+    const ficha = fichaDe(calif.chat_id);
+    const centro = elemento("div", "centro");
+    const arriba = elemento("div", "arriba");
+    arriba.append(
+      elemento("span", "titulo", ficha?.nombre || soloNumero(calif.chat_id)),
+      elemento("span", "hora", diaLargo(calif.fecha)),
+    );
+    const abajo = elemento("div", "abajo");
+    abajo.append(elemento("span", "vista-previa", calif.turno?.pregunta || t("turno_perdido")));
+    centro.append(arriba, abajo);
+    fila.append(elemento("div", "avatar calif", calif.emoji), centro);
+    fila.addEventListener("click", () => abrirCalificacion(calif));
+    caja.append(fila);
+  }
+}
+
+function abrirCalificacion(calif) {
+  califElegida = calif;
+  mostrarVista("calificacion");
+  const ficha = fichaDe(calif.chat_id);
+  encabezado(
+    ficha?.nombre || soloNumero(calif.chat_id),
+    t("calificada", calif.emoji, `${diaLargo(calif.fecha)} ${horaCorta(calif.fecha)}`),
+    calif.chat_id,
+  );
+  if (solapa === "calificaciones") pintarLista();
+  const caja = $("vista-calificacion");
+  caja.replaceChildren();
+  if (!calif.turno) {
+    caja.append(elemento("div", "vacio", t("turno_perdido")));
+    return;
+  }
+  caja.append(elemento("span", "dia", diaLargo(calif.turno.inicio)));
+  // El turno entero, con lo que hizo el bot por dentro: es lo que hace
+  // falta para entender por que contesto mal.
+  const burbuja = burbujaDeTurno({ ...calif.turno, calificacion: calif });
+  burbuja.querySelector("details.tramoya")?.setAttribute("open", "");
+  caja.append(burbuja);
+  const ir = elemento("button", "ir-al-chat", t("ver_conversacion"));
+  ir.type = "button";
+  ir.addEventListener("click", () => {
+    elegirSolapa("chats");
+    abrirChat(calif.chat_id).catch((e) => mostrarError(e.message));
+  });
+  caja.append(ir);
+}
+
 async function cargarDias() {
   const datos = await pedir("/panel/logs/dias");
   cacheDias = datos.dias;
@@ -1810,6 +1938,7 @@ function aplicarIdioma() {
   if (vista === "usuarios") abrirUsuarios();
   else if (vista === "logs" && diaElegido) abrirLog(diaElegido).catch(() => {});
   else if (vista === "actividad") abrirActividad();
+  else if (vista === "calificacion" && califElegida) abrirCalificacion(califElegida);
   else if (vista === "chat" && chatElegido) abrirChat(chatElegido).catch(() => {});
   else $("subtitulo-principal").textContent = t("elige");
 }
@@ -1825,6 +1954,7 @@ function elegirSolapa(cual) {
   $("tab-chats").setAttribute("aria-selected", String(cual === "chats"));
   $("tab-usuarios").setAttribute("aria-selected", String(cual === "usuarios"));
   $("tab-logs").setAttribute("aria-selected", String(cual === "logs"));
+  $("tab-calificaciones").setAttribute("aria-selected", String(cual === "calificaciones"));
   // Cada solapa busca otra cosa (un numero, o un texto dentro del log): lo
   // escrito en una no tiene sentido en la otra.
   $("buscar").value = "";
@@ -1833,6 +1963,7 @@ function elegirSolapa(cual) {
   $("buscar").placeholder = t(placeholderDeSolapa());
   pintarLista();
   if (cual === "usuarios") abrirUsuarios();
+  if (cual === "calificaciones") cargarCalificaciones().catch((e) => mostrarError(e.message));
   if (cual === "logs") {
     cargarDias()
       .then(() => {
@@ -1846,6 +1977,7 @@ function elegirSolapa(cual) {
 $("tab-chats").addEventListener("click", () => elegirSolapa("chats"));
 $("tab-usuarios").addEventListener("click", () => elegirSolapa("usuarios"));
 $("tab-logs").addEventListener("click", () => elegirSolapa("logs"));
+$("tab-calificaciones").addEventListener("click", () => elegirSolapa("calificaciones"));
 $("solo-problemas").addEventListener("change", (evento) => {
   soloProblemas = evento.target.checked;
   cargarLog(true).catch((e) => mostrarError(e.message));
@@ -1888,6 +2020,7 @@ async function latido() {
     if (latidosDesdeDias >= 15) {
       latidosDesdeDias = 0;
       await cargarDias();
+      await cargarCalificaciones().catch(() => {});
     }
     if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
       $("subtitulo-principal").textContent = t("consultando");
@@ -1938,9 +2071,11 @@ async function arranque() {
   // El contador de errores de la pestaña Logs se ve desde el principio. Que
   // falle no puede tumbar el resto del panel.
   await cargarDias().catch(() => {});
+  await cargarCalificaciones().catch(() => {});
 
   const destino = location.hash.slice(1);
   if (destino === "usuarios") elegirSolapa("usuarios");
+  else if (destino === "calificaciones") elegirSolapa("calificaciones");
   else if (destino === "logs" || destino.startsWith("logs=")) {
     diaElegido = destino.slice(5) || null;
     elegirSolapa("logs");

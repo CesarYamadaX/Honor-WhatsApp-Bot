@@ -58,7 +58,10 @@ class TestAutorizacion:
     def test_numero_autorizado_recibe_respuesta(self, cliente, agente):
         r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
         assert r.status_code == 200
-        assert r.json() == {"reply": "listo", "files": [], "idioma": "es"}
+        cuerpo = r.json()
+        # El id del turno viaja para poder calificar la respuesta con 👍/👎.
+        assert cuerpo.pop("turno")
+        assert cuerpo == {"reply": "listo", "files": [], "idioma": "es"}
         assert agente.preguntas == ["hola"]
 
     def test_numero_no_autorizado_recibe_403(self, cliente, agente):

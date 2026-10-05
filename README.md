@@ -35,6 +35,7 @@ asi que migrar a la API oficial de Meta seria reescribir solo el sidecar.
 | `whatsapp/chunk.js` | Trocea respuestas largas respetando parrafos, lineas y emojis |
 | `whatsapp/dedupe.js` | Evita atender dos veces el mismo mensaje tras una reconexion |
 | `whatsapp/notasDeVoz.js` | Notas de voz: que audios se atienden (hasta 2 minutos) y en que formato van a transcribirse |
+| `sql_agent/calificaciones.py` | Las reacciones 👍/👎 de los usuarios a las respuestas del bot; el panel las muestra en la pestaña Calificaciones con la pregunta, la respuesta y lo que hizo el bot |
 | `sql_agent/transcripcion.py` | Transcribe las notas de voz con un modelo de OpenRouter (`/transcribir`); el bot contesta "🎤 Entendí: ..." y pregunta como si estuviera escrito |
 | `whatsapp/repartir.js` | Atiende en paralelo los mensajes de chats distintos que llegan juntos; los de un mismo chat, en orden |
 | `whatsapp/backoff.js` | Espera exponencial entre reintentos de conexion |

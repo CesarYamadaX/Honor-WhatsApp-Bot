@@ -25,6 +25,7 @@ import resumen_local
 import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
+from calificaciones import Calificaciones, valor_de
 from fotos import AlmacenDeFotos, ErrorDeFoto
 from config import Config
 from session import RegistroSesiones
@@ -170,6 +171,21 @@ class Respuesta(BaseModel):
     # Para que el sidecar escriba SUS mensajes (archivo ilegible, "no tengo
     # respuesta") en el mismo idioma en que acaba de contestar el bot.
     idioma: str = idiomas.POR_DEFECTO
+    # El id del turno: el sidecar lo asocia a los mensajes que manda para
+    # que una reaccion 👍/👎 a cualquiera de ellos califique esta respuesta.
+    turno: str = ""
+
+
+class Enviados(BaseModel):
+    chat_id: str
+    turno: str
+    mensajes: list[str]
+
+
+class Reaccion(BaseModel):
+    chat_id: str
+    mensaje_id: str
+    emoji: str = ""  # vacio = el usuario quito la reaccion
 
 
 def crear_app(
@@ -178,6 +194,7 @@ def crear_app(
     usuarios: RegistroUsuarios | None = None,
     bitacora: Bitacora | None = None,
     fotos: AlmacenDeFotos | None = None,
+    calificaciones: Calificaciones | None = None,
     carpeta_logs: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="sql_agent")
@@ -195,9 +212,11 @@ def crear_app(
     usuarios = usuarios if usuarios is not None else RegistroUsuarios(semilla=config.allowlist)
     diario = bitacora if bitacora is not None else Bitacora()
     album = fotos if fotos is not None else AlmacenDeFotos()
+    notas = calificaciones if calificaciones is not None else Calificaciones()
     app.state.usuarios = usuarios
     app.state.bitacora = diario
     app.state.fotos = album
+    app.state.calificaciones = notas
 
     def autorizado(chat_id: str) -> bool:
         """Unico punto donde se decide si un chat existe para el bot.
@@ -229,7 +248,7 @@ def crear_app(
                 segundos=time.monotonic() - comenzo,
             )
             return Respuesta(
-                reply=texto, files=list(archivos), idioma=idioma_usado
+                reply=texto, files=list(archivos), idioma=idioma_usado, turno=turno.id
             )
         except ConsultaCancelada:
             # None, no un mensaje: al usuario ya le esta contestando la
@@ -352,6 +371,44 @@ def crear_app(
             # contestar. 409 le dice al sidecar que no mande nada.
             raise HTTPException(status_code=409, detail="Consulta cancelada")
         return respuesta
+
+    @app.post("/enviados")
+    async def enviados(peticion: Enviados) -> dict:
+        """Que mensajes de WhatsApp mando el sidecar para un turno."""
+        if not autorizado(peticion.chat_id):
+            raise HTTPException(status_code=403, detail="No autorizado")
+        await run_in_threadpool(
+            notas.registrar_enviados, peticion.chat_id, peticion.turno, peticion.mensajes
+        )
+        return {"ok": True}
+
+    @app.post("/reaccion")
+    async def reaccion(peticion: Reaccion) -> dict:
+        """Un 👍 o 👎 del usuario a un mensaje del bot.
+
+        Otras reacciones (❤️, 😂) no califican y se ignoran. Una reaccion a
+        un mensaje que no es una respuesta del bot (un aviso de espera, un
+        mensaje de antes de que esto existiera) tampoco.
+        """
+        if not autorizado(peticion.chat_id):
+            raise HTTPException(status_code=403, detail="No autorizado")
+        turno_id = await run_in_threadpool(
+            notas.turno_de, peticion.mensaje_id, peticion.chat_id
+        )
+        if turno_id is None:
+            return {"calificado": False, "motivo": "no es una respuesta del bot"}
+        if not peticion.emoji:
+            await run_in_threadpool(notas.quitar, turno_id, peticion.chat_id)
+            logger.info("%s quito su calificacion de %s", peticion.chat_id, turno_id)
+            return {"calificado": False, "turno": turno_id, "motivo": "quitada"}
+        valor = valor_de(peticion.emoji)
+        if valor is None:
+            return {"calificado": False, "turno": turno_id, "motivo": "no es 👍 ni 👎"}
+        await run_in_threadpool(
+            notas.calificar, turno_id, peticion.chat_id, valor, peticion.emoji
+        )
+        logger.info("%s califico %s con %s", peticion.chat_id, turno_id, peticion.emoji)
+        return {"calificado": True, "turno": turno_id, "valor": valor}
 
     @app.post("/transcribir")
     async def transcribir(peticion: NotaDeVoz) -> dict:
@@ -637,12 +694,26 @@ def crear_app(
         # Se pide uno de mas para saber si quedan anteriores, sin contar todo.
         pagina = diario.turnos(limite=limite + 1, chat_id=chat_id, salto=salto)
         hay_mas = len(pagina) > limite
+        pagina = pagina[:limite]
+        calificadas = notas.de_turnos([turno.get("id", "") for turno in pagina])
+        for turno in pagina:
+            if turno.get("id") in calificadas:
+                turno["calificacion"] = calificadas[turno["id"]]
         return {
-            "turnos": pagina[:limite],
+            "turnos": pagina,
             "salto": salto,
             "hay_mas": hay_mas,
             "total": diario.cuantos(chat_id),
         }
+
+    @app.get("/panel/calificaciones")
+    async def ver_calificaciones(valor: int | None = None, limite: int = 200) -> dict:
+        """Las respuestas calificadas, la mas reciente primero, con su turno."""
+        _solo_local()
+        filas = notas.lista(valor=valor, limite=max(1, min(limite, 500)))
+        for fila in filas:
+            fila["turno"] = diario.buscar(fila["turno_id"])
+        return {"calificaciones": filas, **notas.cuantas()}
 
     _FUENTES_DE_LOG = {"whatsapp", "api", "iniciar"}
 
@@ -705,8 +776,11 @@ def main() -> None:
     usuarios = RegistroUsuarios(datos / "usuarios.json", semilla=config.allowlist)
     diario = Bitacora(datos / "bitacora")
     album = AlmacenDeFotos(datos / "fotos")
+    calificadas = Calificaciones(datos / "calificaciones.sqlite")
 
-    app = crear_app(config, lambda: SQLAgent(engine=motor), usuarios, diario, album)
+    app = crear_app(
+        config, lambda: SQLAgent(engine=motor), usuarios, diario, album, calificadas
+    )
 
     # En hilos de fondo, para que el bot conteste desde el primer segundo:
     # el resumen local tarda ~7 minutos en construirse y mientras tanto todo

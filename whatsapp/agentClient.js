@@ -213,7 +213,8 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
   if (typeof cuerpo.reply !== "string") return aviso(MENSAJES.desconocido);
   const files = Array.isArray(cuerpo.files) ? cuerpo.files : [];
 
-  return { reply: cuerpo.reply, files, idioma };
+  const turno = typeof cuerpo.turno === "string" ? cuerpo.turno : "";
+  return { reply: cuerpo.reply, files, idioma, turno };
 }
 
 // Una nota de voz de un minuto tarda unos segundos en transcribirse; esto es
@@ -269,4 +270,38 @@ export async function transcribir(baseUrl, chatId, audio, formato, timeoutMs = T
     console.error(`[agentClient] respuesta ilegible de /transcribir: ${error.message}`);
     return { falla: "audio_fallo" };
   }
+}
+
+// Avisos al servicio que no cambian lo que ve el usuario: si fallan, se
+// anota y se sigue. Una calificacion perdida no vale una respuesta perdida.
+const TIMEOUT_AVISO_MS = 5000;
+
+async function avisar(baseUrl, ruta, cuerpo) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIMEOUT_AVISO_MS);
+  try {
+    const respuesta = await fetch(`${baseUrl}${ruta}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+      signal: controlador.signal,
+    });
+    if (!respuesta.ok) console.error(`[agentClient] ${ruta} contesto ${respuesta.status}`);
+    return respuesta.ok ? await respuesta.json() : null;
+  } catch (error) {
+    console.error(`[agentClient] no pude avisar ${ruta}: ${error.message}`);
+    return null;
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/** Que mensajes de WhatsApp forman la respuesta de un turno. */
+export function registrarEnviados(baseUrl, chatId, turno, mensajes) {
+  return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes });
+}
+
+/** Una reaccion del usuario a un mensaje del bot; emoji vacio = la quito. */
+export function reaccionar(baseUrl, chatId, mensajeId, emoji) {
+  return avisar(baseUrl, "/reaccion", { chat_id: chatId, mensaje_id: mensajeId, emoji });
 }

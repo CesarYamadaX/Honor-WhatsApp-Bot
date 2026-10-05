@@ -18,6 +18,7 @@ las pruebas) no hace nada.
 """
 
 import json
+import secrets
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -47,6 +48,12 @@ def _ahora() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _nuevo_id() -> str:
+    """'20261005-143012-a1b2c3': el dia va adelante para saber en que
+    archivo buscarlo sin leer toda la historia."""
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
+
+
 def _recortar(texto: str, tope: int) -> str:
     texto = texto or ""
     return texto if len(texto) <= tope else texto[:tope] + " [...]"
@@ -64,9 +71,13 @@ class Turno:
     segundos: float = 0.0
     # "en curso" mientras corre; despues "listo", "error" o "cancelado".
     estado: str = "en curso"
+    # Con el se califica la respuesta: el sidecar lo asocia a los mensajes
+    # de WhatsApp que mando, y una reaccion a cualquiera de ellos llega aqui.
+    id: str = field(default_factory=_nuevo_id)
 
     def como_dict(self) -> dict:
         return {
+            "id": self.id,
             "chat_id": self.chat_id,
             "pregunta": self.pregunta,
             "inicio": self.inicio,
@@ -183,6 +194,22 @@ class Bitacora:
             except json.JSONDecodeError:
                 continue
         return turnos
+
+    def buscar(self, turno_id: str) -> dict | None:
+        """Un turno ya terminado por su id, o None.
+
+        El id empieza con el dia, asi que basta abrir ese archivo.
+        """
+        if self.carpeta is None or len(turno_id or "") < 8:
+            return None
+        dia = f"{turno_id[:4]}-{turno_id[4:6]}-{turno_id[6:8]}"
+        archivo = self._archivo_del_dia(dia)
+        if archivo is None or not archivo.exists():
+            return None
+        for turno in self._leer(archivo):
+            if turno.get("id") == turno_id:
+                return turno
+        return None
 
     def turnos(
         self, limite: int = 100, chat_id: str | None = None, salto: int = 0

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-import { autorizado, idiomaDelChat, preguntar } from "../agentClient.js";
+import { autorizado, idiomaDelChat, preguntar, reaccionar, registrarEnviados } from "../agentClient.js";
 import { texto } from "../textos.js";
 
 async function servidorFalso(manejador) {
@@ -32,10 +32,18 @@ function responderCrudo(codigo, textoCrudo) {
 }
 
 test("200 devuelve la respuesta y los archivos", async () => {
-  const s = await servidorFalso(responder(200, { reply: "listo", files: ["/tmp/a.xlsx"] }));
+  const s = await servidorFalso(
+    responder(200, { reply: "listo", files: ["/tmp/a.xlsx"], turno: "20261005-120000-abc123" }),
+  );
   try {
     const r = await preguntar(s.url, "chat@s.whatsapp.net", "hola");
-    assert.deepEqual(r, { reply: "listo", files: ["/tmp/a.xlsx"], idioma: "es" });
+    // El turno viaja para poder calificar la respuesta con 👍/👎.
+    assert.deepEqual(r, {
+      reply: "listo",
+      files: ["/tmp/a.xlsx"],
+      idioma: "es",
+      turno: "20261005-120000-abc123",
+    });
   } finally {
     await s.cerrar();
   }
@@ -308,4 +316,31 @@ test("idiomaDelChat: manda solo el chat_id", async () => {
   } finally {
     await s.cerrar();
   }
+});
+
+test("los mensajes enviados y las reacciones van al servicio", async () => {
+  const recibidos = [];
+  const s = await servidorFalso((req, res) => {
+    let datos = "";
+    req.on("data", (trozo) => (datos += trozo));
+    req.on("end", () => {
+      recibidos.push({ ruta: req.url, cuerpo: JSON.parse(datos) });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ calificado: true }));
+    });
+  });
+  try {
+    await registrarEnviados(s.url, "chat", "t1", ["wamid-1", "wamid-2"]);
+    assert.deepEqual(await reaccionar(s.url, "chat", "wamid-2", "👎"), { calificado: true });
+    assert.deepEqual(recibidos, [
+      { ruta: "/enviados", cuerpo: { chat_id: "chat", turno: "t1", mensajes: ["wamid-1", "wamid-2"] } },
+      { ruta: "/reaccion", cuerpo: { chat_id: "chat", mensaje_id: "wamid-2", emoji: "👎" } },
+    ]);
+  } finally {
+    await s.cerrar();
+  }
+});
+
+test("si el servicio no contesta, calificar no truena", async () => {
+  assert.equal(await reaccionar("http://127.0.0.1:1", "chat", "m", "👍"), null);
 });
