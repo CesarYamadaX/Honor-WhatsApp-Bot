@@ -47,6 +47,7 @@ import excel_pivot
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
+import inventario
 import resumen_local
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
@@ -1229,6 +1230,46 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
 
 
 @tool
+def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
+    """Para cuantas semanas le alcanza el inventario a Telcel.
+
+    Usala SIEMPRE que pregunten por semanas de inventario, cobertura, "para
+    cuanto le alcanza", "cuanto le dura el stock" o sell-through de Telcel.
+    No lo calcules con `consultar_sql`: la cuenta ya esta definida por el
+    negocio (stock de la foto mas reciente / venta semanal promedio de las
+    ultimas 4 semanas, de todos los canales de Telcel) y aqui sale siempre
+    igual.
+
+    `modelo` es lo que dijo el usuario ("X6C", "MAGIC 8 LITE"); vacio para
+    toda la marca. `marca` es la marca en mayusculas ("HONOR", "SAMSUNG");
+    si nombran un modelo de otra marca, pasala. Solo existe para Telcel: de
+    las demas cadenas no hay inventario en la base.
+    """
+    bitacora.paso(
+        f"calculando semanas de inventario en Telcel ({marca} {modelo})".strip(),
+        bitacora.NOTA,
+    )
+    ctx = _contexto_actual()
+    try:
+        resultado = inventario.calcular(ctx.engine, modelo, (marca or "").strip().upper())
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo el calculo de semanas de inventario")
+        return f"No pude calcular las semanas de inventario: {error}"
+    if resultado is None:
+        return (
+            f"No hay stock ni venta en Telcel que coincida con {marca} {modelo!r}. "
+            "Revisa el nombre con `buscar_modelos` o pregunta al usuario."
+        )
+    texto = inventario.como_texto(resultado)
+    if len(resultado.tabla) > 15:
+        try:
+            ctx.archivos.append(ExcelExporter.export_to_excel(resultado.tabla))
+        except Exception:  # noqa: BLE001 - el texto ya trae el total y los principales
+            logger.exception("No se pudo armar el Excel de semanas de inventario")
+    return texto
+
+
+@tool
 def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
 
@@ -1807,6 +1848,8 @@ class SQLAgent:
            resultado corto se responde solo como texto, y sin eso el usuario se
            queda esperando un adjunto que nunca llega.
            `consultar_sql` es SOLO para la respuesta final, nunca para explorar.
+           Semanas de inventario, cobertura o "para cuanto le alcanza el
+           stock" en Telcel: `semanas_de_inventario`, nunca un SELECT propio.
            Para explorar tienes tres herramientas que NO generan reporte:
            `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
            celular) y `valores_distintos` (como estan escritos los valores de una
@@ -1938,6 +1981,7 @@ class SQLAgent:
                 valores_distintos,
                 pronosticar_ventas,
                 precio_en_internet,
+                semanas_de_inventario,
             ],
         )
 

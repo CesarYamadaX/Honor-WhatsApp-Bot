@@ -1056,6 +1056,7 @@ class TestToolkitDelAgente:
             "valores_distintos",
             "pronosticar_ventas",
             "precio_en_internet",
+            "semanas_de_inventario",
         }
 
     def test_el_prompt_reserva_el_pronostico_para_el_futuro(self, engine, monkeypatch):
