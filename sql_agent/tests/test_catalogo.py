@@ -551,6 +551,25 @@ class TestPromotoriaNoCuentaDeMas:
     def test_otras_tablas_no_se_tocan(self):
         assert catalogo.avisos_de_promotoria("SELECT * FROM CustomerStores", self.PREGUNTA) == []
 
+    def test_el_mes_de_la_pregunta_manda_la_semana(self):
+        # 5/10/2026: "agosto 2026" se filtro con W30 (julio): 754 y eran 757.
+        pregunta = "cuantas tiendas de Coppel tienen promotor en agosto 2026"
+        mal = self.BIEN.replace("'W35'", "'W30'")
+        avisos = catalogo.avisos_de_promotoria(mal, pregunta)
+        assert len(avisos) == 1 and "W35" in avisos[0]
+        assert catalogo.avisos_de_promotoria(self.BIEN, pregunta) == []
+
+    def test_2025_tiene_su_propio_mapa(self):
+        # Octubre es W43 en 2025 y W44 en 2026.
+        pregunta = "promotoria de Coppel en octubre de 2025"
+        q = self.BIEN.replace("2026", "2025").replace("'W35'", "'W44'")
+        assert "W43" in " ".join(catalogo.avisos_de_promotoria(q, pregunta))
+
+    def test_sin_mes_en_la_pregunta_no_exige_semana(self):
+        assert catalogo.avisos_de_promotoria(
+            self.BIEN.replace("'W35'", "'W40'"), "cuantas tiendas de Coppel tienen promotor hoy"
+        ) == []
+
     def test_cuantos_promotores_cuenta_personas(self):
         # Fijo y doble en 1 son DOS promotores: contar tiendas da de menos.
         pregunta = "cuantos promotores de Honor hay en Coppel"

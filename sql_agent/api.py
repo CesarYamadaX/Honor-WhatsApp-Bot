@@ -60,6 +60,24 @@ def es_falla_del_servicio(error: BaseException | None) -> bool:
     return False
 
 
+def es_falla_de_red_del_modelo(error: BaseException | None) -> bool:
+    """True si no se pudo hablar con el proveedor del modelo (red, timeout).
+
+    Antes esto caia en "error_interno", que culpa a la base de datos: el
+    5/10/2026 un corte con OpenRouter a media respuesta le llego al usuario
+    como "tuve un problema al consultar la base de datos".
+    """
+    vistos: set[int] = set()
+    while error is not None and id(error) not in vistos:
+        vistos.add(id(error))
+        nombre = type(error).__name__
+        modulo = type(error).__module__.split(".")[0]
+        if modulo in _MODULOS_DEL_MODELO and ("Connection" in nombre or "Timeout" in nombre):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
+
+
 # SQLSTATE de "no hay conexion con el servidor": 08xxx es la familia de
 # errores de conexion (08001: no se pudo establecer), y HYT00 es el login
 # timeout con el que ODBC se rinde cuando el nombre ni siquiera resuelve.
@@ -286,6 +304,13 @@ def crear_app(
                 )
                 return Respuesta(
                     reply=idiomas.texto("servicio_caido", idioma),
+                    files=[],
+                    idioma=idioma,
+                )
+            if es_falla_de_red_del_modelo(error):
+                logger.error("No se pudo hablar con el proveedor del modelo (%s)", chat_id)
+                return Respuesta(
+                    reply=idiomas.texto("modelo_sin_conexion", idioma),
                     files=[],
                     idioma=idioma,
                 )

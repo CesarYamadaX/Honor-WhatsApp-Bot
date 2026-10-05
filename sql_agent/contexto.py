@@ -39,6 +39,7 @@ usuario.
 
 import logging
 import re
+from datetime import timedelta
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -540,8 +541,11 @@ def periodo(df: pd.DataFrame) -> tuple[str, str] | None:
             fechas = df[nombre].dropna()
             if fechas.empty:
                 continue
-            desde = fechas.min().normalize()
-            hasta = fechas.max().normalize() + pd.Timedelta(days=1)
+            # El dia se suma con datetime.timedelta y no con pd.Timedelta: con
+            # pandas 2.2 y numpy 2.x, Timestamp + pd.Timedelta ya avisa que
+            # sera error ("generic unit for NumPy timedelta").
+            desde = pd.Timestamp(fechas.min()).normalize()
+            hasta = pd.Timestamp(fechas.max()).normalize() + timedelta(days=1)
             return desde.strftime("%Y-%m-%d"), hasta.strftime("%Y-%m-%d")
 
     anio = tiempo.columna(df, tiempo.ES_ANIO)

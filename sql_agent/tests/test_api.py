@@ -169,6 +169,40 @@ class TestRespuesta:
         )
         assert not api.es_falla_del_servicio(error)
 
+    def test_un_corte_con_el_modelo_no_culpa_a_la_base(self):
+        # 5/10/2026: un corte con OpenRouter a media respuesta le llego al
+        # usuario como "tuve un problema al consultar la base de datos".
+        from langchain_openai.chat_models.base import OpenAIConnectionError
+
+        peticion = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+
+        class AgenteSinRed(AgenteFalso):
+            def responder(self, pregunta, cancelacion=None):
+                try:
+                    raise openai.APIConnectionError(request=peticion)
+                except openai.APIConnectionError as e:
+                    raise OpenAIConnectionError(message=e.message, request=e.request) from e
+
+        app = crear_app(_config(), AgenteSinRed)
+        with TestClient(app) as cliente:
+            r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"})
+        assert r.json()["reply"] == idiomas.texto("modelo_sin_conexion", idiomas.ESPANOL)
+        assert "base de datos" not in r.json()["reply"]
+
+
+class TestElModeloSinStreaming:
+    """Con LangChain 1.x el agente pedia la respuesta en streaming, y un corte
+    de red a media respuesta la perdia sin reintento."""
+
+    def test_el_agente_no_pide_streaming(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+        import agent as modulo_agente
+
+        agente = modulo_agente.SQLAgent(engine=object())
+        assert agente.agent_executor.agent.stream_runnable is False
+        assert agente.llm.disable_streaming is True
+        assert agente.llm.max_retries == 3
+
 
 class TestConcurrencia:
     # TestClient corre la app en un event loop de fondo, asi que la unica forma

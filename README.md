@@ -216,8 +216,9 @@ Esto tiene que existir ANTES de instalar nada. Lo que se instala con
 - **Windows 10 u 11.** El bot usa `taskkill` para apagarse, abre el panel en
   una ventana de Microsoft Edge y arma las tablas dinamicas con Excel por COM
   (`pywin32`), asi que no corre tal cual en Linux ni en Mac.
-- **Python 3.13** (probado en 3.13.15), desde python.org. Al instalarlo,
-  marcar "Add python.exe to PATH".
+- **Python 3.12** (probado en 3.12.10, el de la compu del bot), desde
+  python.org. Al instalarlo, marcar "Add python.exe to PATH". Con 3.13 no
+  instala: `pandas 2.2.2` no tiene paquete para esa version.
 - **Node.js 20 o superior** (probado en 24.19), desde nodejs.org. Trae `npm`.
 - **ODBC Driver 18 for SQL Server**, de Microsoft. Es el que usa `DB_URI`;
   sin el, `pyodbc` no se puede conectar. Para ver si ya esta, en PowerShell:
@@ -258,11 +259,15 @@ virtual `.venv` dentro de `sql_agent`, que es donde `iniciar.py` lo busca:
     .venv\Scripts\python.exe -m pip install -r requirements.txt
     cd ..
 
-`requirements.txt` fija las versiones exactas. Lo principal: `langchain`,
-`langchain-community` y `langchain-openai` (el agente), `sqlalchemy` y
+`requirements.txt` fija las versiones exactas. Lo principal: `langchain-core`,
+`langchain-openai` y `langchain-classic` (el agente, LangChain 1.x), `sqlalchemy` y
 `pyodbc` (la base), `fastapi` y `uvicorn` (el servicio HTTP), `pandas`,
 `openpyxl` y `matplotlib` (Excel y graficas), `pywin32` (la tabla dinamica)
 y `Pillow` (las fotos del panel).
+
+Despues de esto no hace falta volver a correr `pip`: cada vez que
+`requirements.txt` cambia (por ejemplo, tras un `git pull`), `iniciar.py`
+instala lo que falte antes de arrancar el bot.
 
 **2. Dependencias de Node** (sidecar `whatsapp/`):
 

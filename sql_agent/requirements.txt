@@ -1,11 +1,16 @@
-langchain==0.1.16
-langchain-community==0.0.33
-langchain-openai==0.1.3
-langchain-experimental==0.0.57
+# LangChain 1.x. El agente es el AgentExecutor de siempre, que ahora vive en
+# langchain-classic; langchain-community (que se descontinua) y
+# langchain-experimental ya no se usan. Ver agent.py, _create_agent.
+langchain-core==1.6.6
+langchain-openai==1.6.7
+langchain-classic==1.0.8
 sqlalchemy==2.0.29
 sqlparse==0.5.3
 pyodbc==5.1.0
 pandas==2.2.2
+# El que ya corre en la compu del bot con este pandas. Sin fijarlo, una
+# instalacion nueva trae numpy 2.x, con el que pandas 2.2 ya avisa errores.
+numpy==1.26.4
 openpyxl==3.1.2
 matplotlib==3.11.2
 python-dotenv==1.0.1

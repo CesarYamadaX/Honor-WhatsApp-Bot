@@ -222,7 +222,7 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
             "Al contestar, da el total y nombra los 3 modelos con mas stock con "
             "sus semanas; el detalle completo va en el Excel si hay muchos."
         )
-    lentos = r.tabla.loc[r.tabla["Semanas de inventario"].fillna(0) > 52, "Modelo"].tolist()
+    lentos = r.tabla.loc[pd.to_numeric(r.tabla["Semanas de inventario"], errors="coerce").fillna(0) > 52, "Modelo"].tolist()
     if lentos:
         lineas.append(
             f"Con mas de un ano de inventario: {', '.join(lentos[:5])}. Casi "

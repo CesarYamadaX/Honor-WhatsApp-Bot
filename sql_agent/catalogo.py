@@ -21,7 +21,7 @@ import weakref
 from functools import lru_cache
 from pathlib import Path
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 logger = logging.getLogger("sql_agent.catalogo")
 
@@ -327,6 +327,45 @@ _UNION_DE_PROMOTORIA = (
     "[GTM BI Database].dbo.[CustomerStores]) cs ON cs.[ID] = h.[ID]"
 )
 
+# La semana que representa cada mes en promotoria (la ultima completa), el
+# mismo mapa que trae V_HCReport_Informes. 2025 y 2026 difieren en enero,
+# febrero y octubre.
+SEMANA_DEL_MES = {
+    2025: {1: "W04", 2: "W08", 3: "W13", 4: "W17", 5: "W22", 6: "W26",
+           7: "W30", 8: "W35", 9: "W39", 10: "W43", 11: "W48", 12: "W52"},
+    2026: {1: "W05", 2: "W09", 3: "W13", 4: "W17", 5: "W22", 6: "W26",
+           7: "W30", 8: "W35", 9: "W39", 10: "W44", 11: "W48", 12: "W52"},
+}
+_MESES_EN_PREGUNTA = (
+    (1, r"enero|january"), (2, r"febrero|february"), (3, r"marzo|march"),
+    (4, r"abril|april"), (5, r"mayo|may"), (6, r"junio|june"),
+    (7, r"julio|july"), (8, r"agosto|august"), (9, r"septiembre|setiembre|september"),
+    (10, r"octubre|october"), (11, r"noviembre|november"), (12, r"diciembre|december"),
+)
+
+
+def _semanas_que_faltan(query: str, pregunta: str) -> list[tuple[str, int, str]]:
+    """Los meses que nombra la pregunta cuya semana no esta en la consulta.
+
+    Visto el 5/10/2026: "cuantos promotores hay en Coppel en agosto 2026" se
+    filtro con W30 (julio) y salio 754 en vez de 757. La nota del catalogo
+    tiene el mapa; el modelo lo leyo mal.
+    """
+    semanas = {s.upper() for s in re.findall(r"'(W\d{2})'", query, re.IGNORECASE)}
+    if not semanas:
+        return []  # sin semana fija (una tendencia por semana): no aplica
+    anios = {int(a) for a in re.findall(r"\bYEAR\]?\s*=\s*(\d{4})", query, re.IGNORECASE)}
+    anios |= {int(a) for a in re.findall(r"\b(2025|2026)\b", pregunta or "")}
+    faltan = []
+    for mes, patron in _MESES_EN_PREGUNTA:
+        if not re.search(rf"\b(?:{patron})\b", pregunta or "", re.IGNORECASE):
+            continue
+        for anio in sorted(anios) or [2026]:
+            esperada = SEMANA_DEL_MES.get(anio, {}).get(mes)
+            if esperada and esperada not in semanas:
+                faltan.append((esperada, anio, patron.split("|")[0]))
+    return faltan
+
 
 def _filtra_o_agrupa(query: str, columna: str) -> bool:
     filtra = re.search(
@@ -399,6 +438,13 @@ def avisos_de_promotoria(query: str, pregunta: str = "") -> list[str]:
             "Preguntan cuantos PROMOTORES (personas), no cuantas tiendas: si "
             "las dos columnas valen 1, esa tienda tiene DOS promotores. Cuenta "
             "con `SUM(h.[FIXED PROMOTER] + h.[DOUBLE PROMOTER])`."
+        )
+
+    for esperada, anio, mes in _semanas_que_faltan(query, pregunta):
+        avisos.append(
+            f"La pregunta es de {mes} de {anio}, y en promotoria ese mes es la "
+            f"semana {esperada} (su ultima semana completa); la consulta filtra "
+            "otra. Usa `h.[Week] = '" + esperada + "'`."
         )
 
     usa_catalogo = re.search(r"CustomerStores|RetailName", query, re.IGNORECASE)

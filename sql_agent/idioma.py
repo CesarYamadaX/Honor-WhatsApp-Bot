@@ -109,6 +109,21 @@ TEXTOS = {
     # si pasaba al abrir la conversacion, como un 500 que el sidecar traducia
     # a "no pude procesar tu pregunta". Las dos cosas mandan a buscar el
     # problema en la pregunta, y ahi no esta: reformular no sirve de nada.
+    # No se pudo hablar con el servicio de IA (corte de red, timeout). A
+    # diferencia de "servicio_caido" (la cuenta), esto casi siempre se
+    # arregla solo: intentar de nuevo si sirve.
+    "modelo_sin_conexion": {
+        ESPANOL: (
+            "Se corto la conexion con el servicio de inteligencia artificial "
+            "mientras preparaba tu respuesta. No es tu pregunta: mandala de "
+            "nuevo en un momento."
+        ),
+        INGLES: (
+            "The connection to the AI service dropped while I was preparing "
+            "your answer. It's not your question: send it again in a moment."
+        ),
+        CHINO: "准备回答时与人工智能服务的连接中断了。不是你的问题，请稍后再发一次。",
+    },
     "base_no_disponible": {
         ESPANOL: (
             "Ahorita no me puedo conectar a la base de datos de ventas, asi "

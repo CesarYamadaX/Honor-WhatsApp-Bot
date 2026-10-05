@@ -95,6 +95,58 @@ def python_del_entorno(servicio: Path = SERVICIO) -> Path | None:
     return None
 
 
+# Que requirements.txt quedo instalado por ultima vez en el venv. Vive DENTRO
+# del venv: si se borra y se rehace el venv, la marca se va con el y la
+# siguiente vez se instala todo.
+MARCA_DE_DEPENDENCIAS = ".requirements-instalado"
+
+
+def _huella(archivo: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(archivo.read_bytes()).hexdigest()
+
+
+def sincronizar_dependencias(
+    interprete: Path, servicio: Path = SERVICIO, correr=subprocess.run
+) -> bool:
+    """Instala requirements.txt si cambio desde la ultima vez.
+
+    El bot se actualiza con git pull, y eso trae el codigo pero no los
+    paquetes: cuando LangChain paso de 0.1 a 1.x (octubre de 2026) el codigo
+    nuevo necesitaba langchain-classic, y sin esto el servicio habria muerto
+    al importar en cuanto llegara la actualizacion. Solo corre pip cuando el
+    archivo cambio, asi que un arranque normal no tarda nada mas.
+
+    Devuelve False si pip fallo (sin internet, por ejemplo). Quien llama
+    arranca igual: si lo que falta es de verdad necesario, el servicio muere
+    al importar y lo dice; si no, mejor un bot que funciona que uno apagado.
+    """
+    requisitos = servicio / "requirements.txt"
+    if not requisitos.exists():
+        return True
+    marca = interprete.parent.parent / MARCA_DE_DEPENDENCIAS
+    huella = _huella(requisitos)
+    if marca.exists() and marca.read_text(encoding="utf-8").strip() == huella:
+        return True
+    print("[iniciar] requirements.txt cambio: instalando dependencias...", flush=True)
+    resultado = correr(
+        [str(interprete), "-m", "pip", "install", "--disable-pip-version-check",
+         "-r", str(requisitos)],
+        cwd=servicio,
+    )
+    if resultado.returncode != 0:
+        print(
+            "[iniciar] no se pudieron instalar las dependencias (pip termino con "
+            f"codigo {resultado.returncode}); arranco con las que hay.",
+            file=sys.stderr, flush=True,
+        )
+        return False
+    marca.write_text(huella, encoding="utf-8")
+    print("[iniciar] dependencias al dia.", flush=True)
+    return True
+
+
 def revisar_requisitos(raiz: Path = RAIZ) -> list[str]:
     """Devuelve los problemas que impiden arrancar, en lenguaje llano.
 
@@ -407,6 +459,7 @@ def main(abrir_el_panel: bool = True) -> int:
     olvidar_encendido()
 
     interprete = python_del_entorno()
+    sincronizar_dependencias(interprete)
     procesos: list[tuple[str, subprocess.Popen]] = []
 
     try:

@@ -11,11 +11,14 @@ from typing import Any, Iterator
 import pandas as pd
 import sqlparse
 from dotenv import load_dotenv
-from langchain.tools import tool
+from langchain_core.tools import tool
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_community.agent_toolkits import create_sql_agent
-from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
-from langchain_community.utilities import SQLDatabase
+# El bucle del agente (pensar -> herramienta -> resultado -> pensar) es el
+# AgentExecutor de siempre, que en LangChain 1.x vive en langchain-classic.
+# Antes llegaba por create_sql_agent de langchain-community, que se
+# descontinua y aqui solo aportaba un toolkit vacio (ver _create_agent).
+from langchain_classic.agents import AgentExecutor, create_openai_tools_agent
+from langchain_classic.agents.agent import RunnableMultiActionAgent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import (
     ChatPromptTemplate,
@@ -1661,37 +1664,6 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     return "\n\n".join(partes)
 
 
-class _ToolkitSoloLectura(SQLDatabaseToolkit):
-    """El toolkit estandar de LangChain, sin ninguna de sus cuatro herramientas.
-
-    `SQLDatabaseToolkit.get_tools()` trae `sql_db_query`, que corre cualquier
-    SQL contra la base sin pasar por `es_select` (Importante 4 de la
-    revision). Se excluye tambien `sql_db_query_checker`, que solo tiene
-    sentido junto a esa herramienta.
-
-    `sql_db_list_tables` y `sql_db_schema` se excluyen por un motivo distinto:
-    reflejan la base del connection string, y DB_URI apunta a `master`, donde
-    no hay ni un solo dato de negocio. Devolverle al modelo el catalogo de
-    master no es util, es desinformacion -- invita a concluir que no hay nada
-    que consultar. El esquema real, que vive repartido en otras cinco bases del
-    servidor, se lo damos por el modulo `catalogo`: el indice va en el prompt y
-    las columnas exactas salen de `describir_objeto`.
-
-    El toolkit se sigue pasando a `create_sql_agent` porque de el sale
-    `toolkit.dialect` para el prompt, aunque ya no aporte herramientas.
-    """
-
-    _EXCLUIDAS = {
-        "sql_db_query",
-        "sql_db_query_checker",
-        "sql_db_list_tables",
-        "sql_db_schema",
-    }
-
-    def get_tools(self) -> list:
-        return [t for t in super().get_tools() if t.name not in self._EXCLUIDAS]
-
-
 class Observador(BaseCallbackHandler):
     """Escucha al agente y anota en la bitacora todo lo que va haciendo.
 
@@ -1783,7 +1755,6 @@ class SQLAgent:
 
     def __init__(self, engine: Engine | None = None):
         self.engine = engine if engine is not None else self._crear_engine()
-        self.db = SQLDatabase(self.engine)
         self.llm = self._init_llm()
         self.historial: list[BaseMessage] = []
         # El idioma se sostiene entre turnos: los mensajes de WhatsApp son
@@ -1808,8 +1779,12 @@ class SQLAgent:
         return ChatOpenAI(
             temperature=0,
             model=model_name,
-            openai_api_key=openrouter_api_key,
-            openai_api_base="https://openrouter.ai/api/v1",
+            api_key=openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            # Ver stream_runnable en _create_agent. Sin streaming, el cliente
+            # de openai reintenta solo si la conexion se cae.
+            disable_streaming=True,
+            max_retries=3,
             default_headers={
                 "HTTP-Referer": "http://localhost",
                 "X-Title": "SQL Agent",
@@ -1955,34 +1930,45 @@ class SQLAgent:
             ]
         )
 
-        # No se usa `db=self.db`: eso arma el toolkit estandar completo, que
-        # incluye `sql_db_query` (QuerySQLDataBaseTool), una herramienta que
-        # ejecuta SQL arbitrario contra la base sin pasar por es_select. El
-        # toolkit propio de abajo se queda solo con las herramientas de
-        # exploracion de esquema; la unica forma de traer datos es
-        # `consultar_sql`, que si filtra.
-        toolkit = _ToolkitSoloLectura(db=self.db, llm=self.llm)
-
-        return create_sql_agent(
-            llm=self.llm,
-            toolkit=toolkit,
-            # Cadena literal y no `AgentType.OPENAI_TOOLS`: ese miembro del
-            # enum no existe en langchain 0.1.16 (el pin de requirements.txt),
-            # asi que el atributo revienta con AttributeError antes de
-            # siquiera llamar a create_sql_agent. La firma de create_sql_agent
-            # acepta este string directamente (Literal["openai-tools"]).
-            agent_type="openai-tools",
+        # Las UNICAS herramientas del agente. Antes esto se armaba con
+        # create_sql_agent de langchain-community, que ademas metia el
+        # toolkit SQL estandar; sus cuatro herramientas se quitaban a mano
+        # (sql_db_query corre cualquier SQL sin pasar por es_select, y las de
+        # esquema reflejaban `master`, sin un dato de negocio). Quedaba vacio,
+        # y para llenarlo de nada se creaba un SQLDatabase que inspeccionaba la
+        # base cada vez que se abria una conversacion. Esto es lo mismo que
+        # create_sql_agent armaba con agent_type="openai-tools", sin eso.
+        herramientas = [
+            consultar_sql,
+            describir_objeto,
+            buscar_modelos,
+            valores_distintos,
+            pronosticar_ventas,
+            precio_en_internet,
+            semanas_de_inventario,
+        ]
+        agente = RunnableMultiActionAgent(
+            runnable=create_openai_tools_agent(self.llm, herramientas, prompt),
+            input_keys_arg=["input"],
+            return_keys_arg=["output"],
+            # Sin streaming: la respuesta se manda entera por WhatsApp, y con
+            # streaming un corte de red a media respuesta la pierde sin
+            # reintento. Visto el 5/10/2026 al pasar a LangChain 1.x, que
+            # pide la respuesta en streaming por defecto: un pronostico murio
+            # con "peer closed connection without sending complete message
+            # body" y al usuario le llego un error.
+            stream_runnable=False,
+        )
+        return AgentExecutor(
+            name="SQL Agent Executor",
+            agent=agente,
+            tools=herramientas,
             verbose=False,
-            prompt=prompt,
-            extra_tools=[
-                consultar_sql,
-                describir_objeto,
-                buscar_modelos,
-                valores_distintos,
-                pronosticar_ventas,
-                precio_en_internet,
-                semanas_de_inventario,
-            ],
+            # Los mismos topes que traia create_sql_agent: 15 vueltas, y al
+            # agotarlas se corta ("Agent stopped due to max iterations.", que
+            # `responder` traduce) en vez de pedirle al modelo otra vuelta.
+            max_iterations=15,
+            early_stopping_method="force",
         )
 
     @staticmethod

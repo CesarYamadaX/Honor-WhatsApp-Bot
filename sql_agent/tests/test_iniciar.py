@@ -302,3 +302,48 @@ class TestLaConsolaQuedaEnElLog:
         # ahi: hay codigo que los consulta.
         consola.flush()
         assert hasattr(consola, "getvalue")
+
+
+class TestDependenciasAlDia:
+    """git pull trae el codigo pero no los paquetes: cuando LangChain paso a
+    1.x, el servicio habria muerto al importar langchain-classic en cuanto
+    llegara la actualizacion a la compu del bot."""
+
+    def _armar(self, tmp_path, requisitos="langchain-core==1.6.6\n"):
+        servicio = tmp_path / "sql_agent"
+        interprete = servicio / ".venv" / "Scripts" / "python.exe"
+        interprete.parent.mkdir(parents=True)
+        interprete.write_text("")
+        (servicio / "requirements.txt").write_text(requisitos)
+        llamadas = []
+
+        def correr(comando, cwd, codigo=0):
+            llamadas.append(comando)
+            return type("R", (), {"returncode": codigo})()
+
+        return servicio, interprete, llamadas, correr
+
+    def test_instala_la_primera_vez_y_despues_no(self, tmp_path):
+        servicio, interprete, llamadas, correr = self._armar(tmp_path)
+        assert iniciar.sincronizar_dependencias(interprete, servicio, correr)
+        assert iniciar.sincronizar_dependencias(interprete, servicio, correr)
+        assert len(llamadas) == 1
+        assert llamadas[0][1:4] == ["-m", "pip", "install"]
+
+    def test_si_requirements_cambia_vuelve_a_instalar(self, tmp_path):
+        servicio, interprete, llamadas, correr = self._armar(tmp_path)
+        iniciar.sincronizar_dependencias(interprete, servicio, correr)
+        (servicio / "requirements.txt").write_text("langchain-core==1.6.7\n")
+        iniciar.sincronizar_dependencias(interprete, servicio, correr)
+        assert len(llamadas) == 2
+
+    def test_si_pip_falla_no_se_marca_y_se_reintenta(self, tmp_path):
+        servicio, interprete, llamadas, _ = self._armar(tmp_path)
+
+        def falla(comando, cwd):
+            llamadas.append(comando)
+            return type("R", (), {"returncode": 1})()
+
+        assert not iniciar.sincronizar_dependencias(interprete, servicio, falla)
+        assert not iniciar.sincronizar_dependencias(interprete, servicio, falla)
+        assert len(llamadas) == 2
