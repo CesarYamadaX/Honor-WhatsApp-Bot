@@ -121,6 +121,7 @@ class ExcelExporter:
         df: pd.DataFrame,
         filename: str = None,
         contexto: dict[str, pd.DataFrame] | None = None,
+        con_datos: bool = True,
     ) -> str:
         """
         Exporta un DataFrame de Pandas a un archivo Excel.
@@ -130,6 +131,11 @@ class ExcelExporter:
         `contexto` son hojas adicionales con la ficha de las tiendas, modelos
         y carriers que aparecen en el resultado (ver contexto.py). Van DESPUES
         de los datos: la primera hoja es siempre lo que se pregunto.
+
+        `con_datos=False` deja fuera la hoja "Datos" (el resultado de la
+        consulta) cuando hay otras hojas: si el resultado es un numero que ya
+        llego entero en el mensaje, esa hoja no aporta nada (pedido el
+        5/10/2026). Sin otras hojas se pone igual: un Excel no puede ir vacio.
         """
         if df is None or df.empty:
             raise ValueError("No hay datos para exportar. El DataFrame está vacío.")
@@ -187,11 +193,13 @@ class ExcelExporter:
         # Cada tabla puede ocupar MAS de una hoja: ninguna fila se tira por no
         # caber. Se lleva el mapa hoja -> tabla porque despues hay que dar
         # formato a cada una con SU trozo, no con la tabla entera.
-        por_hoja: list[tuple[str, pd.DataFrame]] = partir_en_hojas(HOJA_DATOS, df)
+        por_hoja: list[tuple[str, pd.DataFrame]] = []
         for nombre, ficha in (contexto or {}).items():
             if ficha is None or ficha.empty:
                 continue
             por_hoja.extend(partir_en_hojas(nombre, ficha))
+        if con_datos or not por_hoja:
+            por_hoja = partir_en_hojas(HOJA_DATOS, df) + por_hoja
 
         with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
             for nombre, trozo in por_hoja:

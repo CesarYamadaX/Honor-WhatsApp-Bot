@@ -56,7 +56,7 @@ import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from sugerencias import sugerir
 import tiempo
-from formatting import formatear_resultado
+from formatting import MAX_ROWS_AS_TEXT, formatear_resultado
 
 logger = logging.getLogger("sql_agent.agent")
 
@@ -1504,6 +1504,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     excel = None
     contexto: dict = {}
     crudo_partido = False
+    crudos_agrupados = False
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -1520,7 +1521,15 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             contexto = {}
 
         try:
-            excel = ExcelExporter.export_to_excel(df, contexto=contexto)
+            # La hoja "Datos" sobra cuando el resultado ya llego entero en el
+            # mensaje (cabe como texto) y el Excel trae el detalle en otras
+            # hojas: "las ventas de Elektra de enero" daba una hoja con un
+            # solo renglon, 181 628, que es lo que ya decia el WhatsApp.
+            excel = ExcelExporter.export_to_excel(
+                df,
+                contexto=contexto,
+                con_datos=not (contexto and len(df) <= MAX_ROWS_AS_TEXT),
+            )
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
             return f"Obtuve {len(df)} registros pero fallo el Excel: {error}"
@@ -1543,6 +1552,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             and not any(a.lower().endswith(".png") for a in ctx.archivos)
         )
         crudos = contexto.get("Raw_Data")
+        crudos_agrupados = crudos is not None and bool(crudos.attrs.get("agrupado"))
         # Un pivot solo puede mirar UNA hoja. Si el crudo no cupo en una, la
         # hoja "Raw_Data" es apenas el primer trozo y el pivot estaria
         # resumiendo una parte sin decirlo -- justo lo que se viene
@@ -1614,6 +1624,14 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
     # aclara que el mes va por la mitad: el numero es correcto y la lectura
     # es un desplome que no ocurrio.
+    if crudos_agrupados:
+        partes.append(
+            "OJO: el detalle crudo de este periodo es demasiado grande para ir "
+            "con todas sus columnas en el Excel, asi que la hoja 'Raw_Data' va "
+            "agrupada por tienda, marca y mes. Diselo al usuario, y que si "
+            "quiere todas las columnas acote el periodo (un mes, por ejemplo)."
+        )
+
     if crudo_partido:
         partes.append(
             "OJO: los datos crudos no caben en una sola hoja de Excel, asi que "

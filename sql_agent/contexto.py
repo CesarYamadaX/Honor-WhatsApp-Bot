@@ -210,6 +210,9 @@ class Cruda:
     # trae una mitad: sin esto, "las ventas de Coppel" en la hoja Raw_Data
     # se quedan 880 689 unidades cortas (medido, 2026).
     vista_iot: str = ""
+    # La columna de la cruda donde va la descripcion del producto. Solo la
+    # usan Coppel y Liverpool, para acomodar su mitad IOT en Raw_Data.
+    descripcion: str = ""
 
 
 # Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
@@ -230,7 +233,8 @@ CRUDAS = {
     "COPPEL": Cruda("COPPEL_B2B", ("COPPEL",),
                     "CONCAT(v.[Marca], ' ', v.[Modelo])", _FINAL,
                     "Tienda", "Tienda", "Día", "Unidades", "COPPEL",
-                    _POR_NOMBRE, marca="Marca", vista_iot="vw_ETL_COPPEL_IOT"),
+                    _POR_NOMBRE, marca="Marca", vista_iot="vw_ETL_COPPEL_IOT",
+                    descripcion="Modelo"),
     "ELEKTRA": Cruda("EKT_B2B", ("ELEKTRA",), "v.[Desc Sku]", _DESCRIPCION,
                      "Tienda #", "POS", "Day", "QTY", "ELEKTRA", _POR_NUMERO,
                      marca="Marca"),
@@ -241,7 +245,8 @@ CRUDAS = {
                        "v.[Material Description]", _DESCRIPCION,
                        "Centro", "STORE", "Día/Periodo", "Vtas# U Per 1",
                        "LIVERPOOL", _POR_NOMBRE, marca="Brand",
-                       vista_iot="vw_ETL_Liverpool_IOT"),
+                       vista_iot="vw_ETL_Liverpool_IOT",
+                       descripcion="Material Description"),
     # Los dos [Retail] de AT&T: con DEALERS solo se casa el 80.7% del mes, con
     # los dos el 88.9% (medido, agosto de 2026).
     "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "v.[Model]",
@@ -684,6 +689,140 @@ _MITAD_IOT = """
 """
 
 
+# Raw_Data con TODAS las columnas de la tabla cruda, fila por fila. Pedido el
+# 5 de octubre de 2026: la hoja venia agrupada por tienda, marca y mes (5
+# columnas), y faltaban el modelo, el SKU, el dia, el precio y el resto de lo
+# que trae la descarga de cada cadena.
+#
+# Pesa: un mes de Elektra son 163 034 filas x 22 columnas, 19 MB y ~40 s de
+# escritura (medido). Por encima de este tope de celdas el archivo pasaria de
+# ~40 MB y tardaria minutos, asi que se vuelve a la hoja agrupada y se avisa.
+# Un mes de AT&T (445 mil filas x 24) ya no cabe; uno de Elektra o Liverpool si.
+LIMITE_DE_CELDAS_CRUDAS = 8_000_000
+
+# Columnas que se agregan al final, para el pivot y para ubicar la tienda. No
+# chocan con las de ninguna cruda (Elektra y Sears ya traen [Region] y
+# [Month], por eso estas llevan otro nombre).
+COLUMNA_REGION = "Region (catalogo)"
+COLUMNA_MES = "Mes"
+COLUMNA_FUENTE = "Fuente"
+
+
+def _columnas_de(conexion, tabla: str) -> list[str]:
+    filas = conexion.exec_driver_sql(
+        "SELECT COLUMN_NAME FROM [RAW_DATA_B2B].INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+        (tabla,),
+    ).fetchall()
+    return [f[0] for f in filas]
+
+
+def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
+    """Las filas de la tabla cruda del periodo, con todas sus columnas.
+
+    Las mismas filas que cuenta el bot: unidades >= 1 (las vistas descartan
+    devoluciones y ajustes, y sin eso el total del Excel no seria el del
+    mensaje: en Elektra, enero de 2026, 181 362 contra 181 628). Coppel y
+    Liverpool llevan ademas su mitad IOT, acomodada en las columnas
+    equivalentes y marcada en [Fuente].
+
+    None si no cabe (ver LIMITE_DE_CELDAS_CRUDAS): quien llama usa entonces
+    la version agrupada.
+    """
+    columnas = _columnas_de(conexion, cruda.tabla)
+    if not columnas:
+        return None
+    filas = conexion.exec_driver_sql(
+        f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] "
+        f"WHERE [{cruda.fecha}] >= ? AND [{cruda.fecha}] < ? AND [{cruda.unidades}] >= 1",
+        (desde, hasta),
+    ).scalar() or 0
+    if cruda.vista_iot:
+        filas += conexion.exec_driver_sql(
+            f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}] "
+            "WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1",
+            (desde, hasta),
+        ).scalar() or 0
+    extras = 3 if cruda.vista_iot else 2
+    if filas * (len(columnas) + extras) > LIMITE_DE_CELDAS_CRUDAS:
+        logger.info(
+            "Raw_Data completo de %s no cabe (%d filas x %d columnas); va agrupado",
+            cruda.tabla, filas, len(columnas) + extras,
+        )
+        return None
+
+    join_region, region, parametros_region = _join_region(cruda)
+    lista = ", ".join(f"v.[{c}]" for c in columnas)
+    fuente = f", '{cruda.tabla}' AS [{COLUMNA_FUENTE}]" if cruda.vista_iot else ""
+    partes = [f"""
+        SELECT {lista},
+               {region} AS [{COLUMNA_REGION}],
+               MONTH(v.[{cruda.fecha}]) AS [{COLUMNA_MES}]{fuente}
+        FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
+        {join_region}
+        WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
+          AND v.[{cruda.unidades}] >= 1
+    """]
+    parametros = [*parametros_region, desde, hasta]
+
+    if cruda.vista_iot:
+        # La vista IOT trae otras columnas: cada una va a su equivalente de
+        # la cruda, y lo que la cruda tiene y la vista no, va vacio.
+        # La tienda IOT viene como numero ("1"): con el puente `p` (el mismo
+        # de _MITAD_IOT) se convierte en el nombre de la vista principal, y
+        # de ahi sale la region. Sin esto, en Coppel el 17% de las filas
+        # (todas las IOT) quedaban sin region y con la tienda "1".
+        equivalentes = {
+            cruda.etiqueta: "COALESCE(p.[nombre], i.[Store])",
+            cruda.marca: "i.[Brand]",
+            cruda.fecha: "i.[Date]",
+            cruda.unidades: "i.[QTY]",
+            cruda.descripcion: "i.[Material_Description]",
+            "Carrier": "i.[Carrier]",
+        }
+        lista_iot = ", ".join(
+            f"{equivalentes.get(c, 'NULL')} AS [{c}]" for c in columnas
+        )
+        partes.append(f"""
+            SELECT {lista_iot},
+                   COALESCE(csi.[Region], csi2.[Region], p.[Region]) AS [{COLUMNA_REGION}],
+                   MONTH(i.[Date]) AS [{COLUMNA_MES}],
+                   '{cruda.vista_iot}' AS [{COLUMNA_FUENTE}]
+            FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}] i
+            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                       FROM [GTM BI Database].dbo.[CustomerStores]
+                       WHERE [RetailName] = ?) csi
+              ON csi.[nombre] = i.[Store]
+            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
+                       FROM [GTM BI Database].dbo.[CustomerStores]
+                       WHERE [RetailName] = ?) csi2
+              ON {_NORMALIZAR.format(expr="csi2.[nombre]")} = {_NORMALIZAR.format(expr="i.[Store]")}
+            LEFT JOIN (
+                SELECT TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1)) AS [numero],
+                       MIN(cs.[Region]) AS [Region],
+                       MIN(w.[Store]) AS [nombre]
+                FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot[: -len("_IOT")]}] w
+                JOIN [GTM BI Database].dbo.[CustomerStores] cs
+                  ON cs.[Coppel Name] = w.[Store] AND cs.[RetailName] = ?
+                GROUP BY TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1))
+            ) p ON p.[numero] = TRY_CONVERT(int, i.[Store])
+            WHERE i.[Date] >= ? AND i.[Date] < ? AND i.[QTY] >= 1
+        """)
+        parametros.extend([cruda.retail_en_catalogo] * 3 + [desde, hasta])
+
+    cursor = conexion.exec_driver_sql(" UNION ALL ".join(partes), tuple(parametros))
+    df = pd.DataFrame.from_records(cursor.fetchall(), columns=list(cursor.keys()))
+    # Con que columnas se arma el pivot (excel_pivot.config_ventas_por_tienda):
+    # cada cruda nombra distinto la tienda, la marca y las unidades.
+    df.attrs["pivot"] = {
+        "tienda": cruda.etiqueta,
+        "marca": cruda.marca,
+        "mes": COLUMNA_MES,
+        "unidades": cruda.unidades,
+    }
+    return df
+
+
 def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
     """Ventas de toda la cadena en el periodo, por tienda, marca y mes.
 
@@ -854,8 +993,21 @@ def contexto_del_resultado(
         # al reves.
         if cruda:
             try:
-                with engine.connect() as conexion, _con_plazo(conexion, plazo):
-                    crudos = ventas_crudas(conexion, cruda, *rango)
+                crudos = None
+                try:
+                    with engine.connect() as conexion, _con_plazo(conexion, plazo):
+                        crudos = ventas_crudas_completas(conexion, cruda, *rango)
+                except Exception:  # noqa: BLE001
+                    # Con todas las columnas tarda mas (Coppel, un mes: ~100 s
+                    # por los cruces con el catalogo). Si se pasa del plazo o
+                    # falla, mejor la agrupada que ninguna.
+                    logger.exception("No se pudo traer Raw_Data completo; va agrupado")
+                if crudos is None:
+                    # No cabe con todas sus columnas, o fallo: va agrupado por
+                    # tienda, marca y mes, y se avisa (ver agent.py).
+                    with engine.connect() as conexion, _con_plazo(conexion, plazo):
+                        crudos = ventas_crudas(conexion, cruda, *rango)
+                    crudos.attrs["agrupado"] = True
                 if not crudos.empty:
                     hojas["Raw_Data"] = crudos
             except Exception:  # noqa: BLE001

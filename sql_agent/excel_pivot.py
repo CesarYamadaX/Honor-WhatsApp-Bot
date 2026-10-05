@@ -289,13 +289,18 @@ def config_ventas_por_tienda(df: pd.DataFrame) -> dict | None:
     su tienda. None si la hoja no trae las columnas esperadas -- un archivo
     a medio construir no debe intentar un pivot que va a fallar seguro.
     """
-    esperadas = {"Tienda", "Marca", "Mes", "Unidades"}
-    if not esperadas.issubset(df.columns):
+    # La hoja con todas las columnas de la cruda (contexto.ventas_crudas_
+    # completas) dice como se llaman ahi la tienda, la marca y las unidades;
+    # la agrupada usa siempre Tienda, Marca, Mes y Unidades.
+    nombres = df.attrs.get("pivot") or {
+        "tienda": "Tienda", "marca": "Marca", "mes": "Mes", "unidades": "Unidades",
+    }
+    if not {nombres["tienda"], nombres["marca"], nombres["mes"], nombres["unidades"]}.issubset(df.columns):
         return None
     return {
-        "filas": ["Tienda", "Marca"],
-        "columnas": ["Mes"],
-        "medida": "Unidades",
+        "filas": [nombres["tienda"], nombres["marca"]],
+        "columnas": [nombres["mes"]],
+        "medida": nombres["unidades"],
         "nombre_medida": "Unidades",
         "con_share": True,
     }
