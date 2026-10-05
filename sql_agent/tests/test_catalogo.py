@@ -449,6 +449,20 @@ class TestConsolidadaDeRepuesto:
         assert catalogo.consolidada_de_repuesto("SELECT * FROM vw_ETL_Elektra") is None
 
 
+class TestTelcelSeHomologaDesdeLaVista:
+    """Visto el 5/10/2026 con "cuantos telefonos vendio Honor en Telcel": el
+    modelo fue a la cruda TELCEL_B2B, porque la nota decia que desde la vista
+    no casaba, y contesto 55 730 cuando eran 59 438. Quitandole el SKU a
+    [Material_Description] la vista casa al 100%.
+    """
+
+    def test_la_nota_manda_a_la_vista_y_dice_como_unir(self):
+        texto = catalogo.indice()
+        assert "NO uses la cruda TELCEL_B2B para contar" in texto
+        assert "SUBSTRING(v.[Material_Description]" in texto
+        assert "59 438" in texto
+
+
 class TestPromotoriaNoCuentaDeMas:
     """La promotoria se saca de HCReport: una tienda la tiene si [FIXED
     PROMOTER] o [DOUBLE PROMOTER] vale 1. "Cuantas tiendas de Coppel tienen
