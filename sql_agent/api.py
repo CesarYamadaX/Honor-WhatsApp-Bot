@@ -22,6 +22,7 @@ import binascii
 import idioma as idiomas
 import registro_de_logs
 import resumen_local
+import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
 from fotos import AlmacenDeFotos, ErrorDeFoto
@@ -149,6 +150,18 @@ class Peticion(BaseModel):
 
 class Autorizacion(BaseModel):
     chat_id: str
+
+
+class NotaDeVoz(BaseModel):
+    chat_id: str
+    audio: str  # base64
+    formato: str = "ogg"
+
+
+# Una nota de voz de WhatsApp (Opus) pesa ~2 KB por segundo: 5 MB son mas de
+# media hora. El tope de duracion de verdad lo pone el sidecar; esto es para
+# que nadie mande un archivo enorme por aqui.
+MAX_BYTES_DE_AUDIO = 5 * 1024 * 1024
 
 
 class Respuesta(BaseModel):
@@ -339,6 +352,37 @@ def crear_app(
             # contestar. 409 le dice al sidecar que no mande nada.
             raise HTTPException(status_code=409, detail="Consulta cancelada")
         return respuesta
+
+    @app.post("/transcribir")
+    async def transcribir(peticion: NotaDeVoz) -> dict:
+        """El texto de una nota de voz, para que el sidecar la pregunte.
+
+        Va aparte de /ask para que el sidecar pueda mostrarle al usuario que
+        entendio ANTES de correr la consulta: si el audio se entendio mal,
+        lo ve en seguida y no despues de esperar un reporte de otra cosa.
+        """
+        if not autorizado(peticion.chat_id):
+            logger.warning("Nota de voz rechazada de %s", peticion.chat_id)
+            raise HTTPException(status_code=403, detail="No autorizado")
+        try:
+            audio = base64.b64decode(peticion.audio, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail="Audio mal codificado")
+        if not audio:
+            raise HTTPException(status_code=400, detail="Audio vacio")
+        if len(audio) > MAX_BYTES_DE_AUDIO:
+            raise HTTPException(status_code=413, detail="Audio demasiado grande")
+        try:
+            texto = await run_in_threadpool(
+                transcripcion.transcribir, audio, peticion.formato
+            )
+        except transcripcion.TranscripcionFallida:
+            logger.exception("No se pudo transcribir la nota de %s", peticion.chat_id)
+            raise HTTPException(status_code=502, detail="No se pudo transcribir")
+        logger.info("Nota de voz de %s (%d KB): %s", peticion.chat_id, len(audio) // 1024, texto[:200])
+        if not texto:
+            raise HTTPException(status_code=422, detail="No se entendio el audio")
+        return {"texto": texto, "idioma": idiomas.detectar(texto) or idiomas.POR_DEFECTO}
 
     @app.post("/authorized")
     async def authorized(peticion: Autorizacion) -> dict:

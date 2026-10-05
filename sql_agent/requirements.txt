@@ -19,3 +19,6 @@ Pillow>=10
 # (el panel ya abre una ventana de Edge, la app corre en la maquina del
 # usuario), asi que no es una dependencia nueva de plataforma.
 pywin32==312
+# Llama a OpenRouter para transcribir notas de voz (transcripcion.py). Ya
+# entraba como dependencia de openai; se declara porque ahora se usa directo.
+httpx==0.28.1

@@ -13,6 +13,10 @@ const CLAVES = [
   "desconocido",
   "sin_respuesta",
   "archivo_ilegible",
+  "audio_entendido",
+  "audio_no_entendido",
+  "audio_largo",
+  "audio_fallo",
 ];
 
 test("cada texto existe en los tres idiomas y ninguno viene vacio", () => {

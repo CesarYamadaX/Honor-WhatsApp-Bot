@@ -215,3 +215,58 @@ export async function preguntar(baseUrl, chatId, texto, timeoutMs = TIMEOUT_MS_D
 
   return { reply: cuerpo.reply, files, idioma };
 }
+
+// Una nota de voz de un minuto tarda unos segundos en transcribirse; esto es
+// solo la red de seguridad si el servicio nunca contesta.
+const TIMEOUT_TRANSCRIPCION_MS = 90_000;
+
+// Que decirle al usuario segun como fallo /transcribir.
+const FALLAS_DE_AUDIO = {
+  413: "audio_largo",
+  422: "audio_no_entendido",
+};
+
+/**
+ * Transcribe una nota de voz en el servicio Python.
+ *
+ * @param {string} baseUrl
+ * @param {string} chatId
+ * @param {Buffer} audio
+ * @param {string} formato - "ogg", "mp3"... (ver formatoDelAudio en notasDeVoz.js)
+ * @returns {Promise<null | {texto: string, idioma: string} | {falla: string}>}
+ *   null si el chat no esta autorizado (silencio); `falla` es la clave del
+ *   texto que hay que mandarle al usuario.
+ */
+export async function transcribir(baseUrl, chatId, audio, formato, timeoutMs = TIMEOUT_TRANSCRIPCION_MS) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), timeoutMs);
+  let respuesta;
+  try {
+    respuesta = await fetch(`${baseUrl}/transcribir`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, audio: audio.toString("base64"), formato }),
+      signal: controlador.signal,
+    });
+  } catch (error) {
+    console.error(`[agentClient] no pude transcribir: ${error.message}`);
+    return { falla: "audio_fallo" };
+  } finally {
+    clearTimeout(temporizador);
+  }
+  if (respuesta.status === 403) return null;
+  if (!respuesta.ok) {
+    console.error(`[agentClient] /transcribir contesto ${respuesta.status}`);
+    return { falla: FALLAS_DE_AUDIO[respuesta.status] ?? "audio_fallo" };
+  }
+  try {
+    const cuerpo = await respuesta.json();
+    if (typeof cuerpo?.texto !== "string" || !cuerpo.texto.trim()) {
+      return { falla: "audio_no_entendido" };
+    }
+    return { texto: cuerpo.texto.trim(), idioma: cuerpo.idioma ?? IDIOMA_POR_DEFECTO };
+  } catch (error) {
+    console.error(`[agentClient] respuesta ilegible de /transcribir: ${error.message}`);
+    return { falla: "audio_fallo" };
+  }
+}

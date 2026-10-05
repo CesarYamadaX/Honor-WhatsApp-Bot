@@ -3,6 +3,7 @@ import path from "node:path";
 
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   isJidBroadcast,
   isJidGroup,
   useMultiFileAuthState,
@@ -10,7 +11,7 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 
-import { autorizado, idiomaDelChat, preguntar } from "./agentClient.js";
+import { autorizado, idiomaDelChat, preguntar, transcribir } from "./agentClient.js";
 import { programarAvisos } from "./avisos.js";
 import { calcularEsperaReconexion } from "./backoff.js";
 import { repararCredenciales, respaldarCredenciales } from "./credenciales.js";
@@ -18,6 +19,7 @@ import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
 import { atenderPorChat } from "./repartir.js";
 import { aFormatoWhatsApp } from "./markdown.js";
+import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio } from "./notasDeVoz.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
@@ -250,6 +252,53 @@ function textoDelMensaje(mensaje) {
   );
 }
 
+// Una nota de voz convertida en la pregunta, o null si no hay que seguir
+// (no se entendio, es muy larga, fallo la transcripcion: en esos casos al
+// usuario ya se le dijo por que). Solo se llama con el chat ya autorizado.
+async function preguntaDeLaNota(jid, idAutorizacion, mensaje, audio) {
+  const avisar = async (clave) => {
+    const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+    await enviarMensajeSimple(jid, traducir(clave, idioma));
+  };
+  if (esDemasiadoLargo(audio)) {
+    console.log(`[whatsapp] nota de voz de ${jid} demasiado larga (${audio.seconds}s)`);
+    await avisar("audio_largo");
+    return null;
+  }
+  const detener = mantenerEscribiendo(jid);
+  try {
+    let datos;
+    try {
+      datos = await downloadMediaMessage(
+        mensaje,
+        "buffer",
+        {},
+        {
+          logger: pino({ level: "silent" }),
+          reuploadRequest: (m) => socketActual.updateMediaMessage(m),
+        },
+      );
+    } catch (error) {
+      console.error(`[whatsapp] no pude descargar la nota de voz de ${jid}: ${error.message}`);
+      await avisar("audio_fallo");
+      return null;
+    }
+    const resultado = await transcribir(AGENT_API_URL, idAutorizacion, datos, formatoDelAudio(audio.mimetype));
+    if (resultado === null) return null;
+    if (resultado.falla) {
+      await avisar(resultado.falla);
+      return null;
+    }
+    console.log(`[whatsapp] nota de voz de ${jid} (${audio.seconds ?? "?"}s): ${resultado.texto}`);
+    // Lo que se entendio, antes de correr la consulta: si salio mal, el
+    // usuario lo ve ya y no despues de esperar un reporte de otra cosa.
+    await enviarMensajeSimple(jid, `${traducir("audio_entendido", resultado.idioma)} _${resultado.texto}_`);
+    return resultado.texto;
+  } finally {
+    detener();
+  }
+}
+
 async function atender(mensaje) {
   // Declarado fuera del try para que el catch de abajo pueda desmarcarlo.
   let idMensaje;
@@ -297,10 +346,12 @@ async function atender(mensaje) {
     }
 
     const texto = textoDelMensaje(mensaje);
-    if (!texto || !texto.trim()) {
-      // Una foto, un audio, un sticker o un tipo de mensaje que todavia no
-      // se sabe leer. Se anota cual, que es justo lo que hace falta para
-      // decidir si vale la pena soportarlo.
+    const audio = audioDelMensaje(mensaje);
+    if ((!texto || !texto.trim()) && !audio) {
+      // Una foto, un sticker o un tipo de mensaje que todavia no se sabe
+      // leer (los audios si: se transcriben, ver preguntaDeLaNota). Se
+      // anota cual, que es justo lo que hace falta para decidir si vale la
+      // pena soportarlo.
       descartado("sin texto", jid, ` (${Object.keys(mensaje.message ?? {}).join(", ") || "vacio"})`);
       return;
     }
@@ -315,6 +366,12 @@ async function atender(mensaje) {
     if (!(await autorizado(AGENT_API_URL, idAutorizacion))) {
       descartado("no autorizado", idAutorizacion, idAutorizacion === jid ? "" : ` (chat ${jid})`);
       return;
+    }
+
+    let pregunta = texto?.trim();
+    if (!pregunta) {
+      pregunta = await preguntaDeLaNota(jid, idAutorizacion, mensaje, audio);
+      if (!pregunta) return;
     }
 
     // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo,
@@ -333,7 +390,7 @@ async function atender(mensaje) {
     );
 
     try {
-      const resultado = await preguntar(AGENT_API_URL, idAutorizacion, texto.trim());
+      const resultado = await preguntar(AGENT_API_URL, idAutorizacion, pregunta);
       // Los avisos se cortan en cuanto hay respuesta, no al terminar de
       // entregarla: subir un Excel grande tarda, y en ese rato el de
       // paciencia ("te aviso en cuanto este") saldria con el reporte ya a

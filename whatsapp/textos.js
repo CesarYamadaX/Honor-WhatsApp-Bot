@@ -75,6 +75,29 @@ const TEXTOS = {
     en: "I generated the file but couldn't read it to send it to you.",
     zh: "我生成了文件，但无法读取并发送给你。",
   },
+  // Notas de voz. Lo que se entendio se le muestra ANTES de correr la
+  // consulta: si el audio se entendio mal, lo ve en seguida y no despues de
+  // esperar un reporte de otra cosa.
+  audio_entendido: {
+    es: "🎤 Entendí:",
+    en: "🎤 I heard:",
+    zh: "🎤 我听到的是：",
+  },
+  audio_no_entendido: {
+    es: "No alcancé a entender el audio. ¿Me lo repites o me lo escribes?",
+    en: "I couldn't make out the audio. Could you say it again or type it?",
+    zh: "我没听清这段语音。可以再说一遍或者打字发给我吗？",
+  },
+  audio_largo: {
+    es: "El audio es muy largo para mí. Mándame uno más corto o escríbeme la pregunta.",
+    en: "That audio is too long for me. Send a shorter one or type your question.",
+    zh: "这段语音太长了。请发一段更短的，或者直接打字提问。",
+  },
+  audio_fallo: {
+    es: "No pude procesar el audio en este momento. Escríbeme la pregunta, por favor.",
+    en: "I couldn't process the audio right now. Please type your question.",
+    zh: "我暂时无法处理这段语音，请打字提问。",
+  },
 };
 
 // Lleva el tamano maximo, asi que se arma en vez de buscarse.
