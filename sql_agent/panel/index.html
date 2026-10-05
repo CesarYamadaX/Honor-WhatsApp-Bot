@@ -207,14 +207,42 @@
   .buscador input:focus-visible { outline: 2px solid var(--acento); }
   .buscador svg { position: absolute; left: 14px; top: 11px; fill: var(--tinta-3); }
 
-  .solapas { display: flex; gap: 8px; flex-wrap: wrap; }
-  .solapas button {
-    border: none; background: var(--barra); color: var(--tinta-2);
-    border-radius: 16px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  /* Cuatro solapas en UNA fila, del mismo ancho: icono arriba, nombre
+     abajo. Antes eran pastillas de texto y "Calificaciones" caia sola a un
+     segundo renglon. El numero va en un circulo sobre el icono, y solo
+     cuando hay algo que mirar: su color dice que tan urgente es. */
+  .solapas {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px;
+    background: var(--barra); border-radius: 12px; padding: 4px;
   }
-  .solapas button[aria-selected="true"] { background: var(--ok-suave); color: var(--acento-fuerte); font-weight: 600; }
+  .solapas button {
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    border: none; background: transparent; color: var(--tinta-2); min-width: 0;
+    border-radius: 9px; padding: 7px 2px 6px; font: inherit; cursor: pointer;
+    transition: background-color .15s, color .15s;
+  }
+  .solapas button:hover { color: var(--tinta); }
+  .solapas button[aria-selected="true"] {
+    background: var(--panel); color: var(--acento-fuerte); box-shadow: var(--sombra);
+  }
   .solapas button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
-  .solapas .cuenta { font-variant-numeric: tabular-nums; opacity: .85; }
+  .solapas .icono { position: relative; display: block; width: 22px; height: 22px; }
+  .solapas .icono svg { width: 22px; height: 22px; fill: currentColor; display: block; }
+  .solapas .etiqueta {
+    font-size: 11.5px; line-height: 1.2; max-width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .solapas button[aria-selected="true"] .etiqueta { font-weight: 600; }
+  .solapas .cuenta {
+    position: absolute; top: -6px; left: 14px; min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 9px; font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+    font-variant-numeric: tabular-nums; color: #fff; background: var(--acento);
+    box-shadow: 0 0 0 2px var(--barra);
+  }
+  .solapas .cuenta:empty { display: none; }
+  .solapas .cuenta.alto { background: var(--alto); }
+  .solapas .cuenta.aviso { background: var(--aviso); }
+  .solapas button[aria-selected="true"] .cuenta { box-shadow: 0 0 0 2px var(--panel); }
 
   /* --- lista lateral --- */
   .lista { overflow-y: auto; flex: 1; }
@@ -526,15 +554,21 @@
         <input id="buscar" type="search" placeholder="Buscar un número" aria-label="Buscar un número" data-t-ph="buscar_numero">
       </div>
       <div class="solapas" role="tablist">
-        <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista" data-t="tab_chats">Conversaciones</button>
+        <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista">
+          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.3 1.1 4.4 2.9 5.9L4 21l4.2-2.1c1.2.4 2.5.6 3.8.6 5.5 0 10-3.8 10-8.5S17.5 3 12 3z"/></svg><span class="cuenta" id="cuenta-chats"></span></span>
+          <span class="etiqueta" data-t="tab_chats">Chats</span>
+        </button>
         <button role="tab" id="tab-usuarios" aria-selected="false" aria-controls="lista">
-          <span data-t="tab_usuarios">Usuarios</span> <span class="cuenta" id="cuenta-usuarios"></span>
+          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg><span class="cuenta aviso" id="cuenta-usuarios"></span></span>
+          <span class="etiqueta" data-t="tab_usuarios">Usuarios</span>
         </button>
         <button role="tab" id="tab-logs" aria-selected="false" aria-controls="lista">
-          <span data-t="tab_logs">Logs</span> <span class="cuenta" id="cuenta-logs"></span>
+          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h14V6H5zm2 2.5 3.5 3.5L7 15.5l-1.4-1.4L7.7 12 5.6 9.9 7 8.5zM12 14h6v1.8h-6V14z"/></svg><span class="cuenta alto" id="cuenta-logs"></span></span>
+          <span class="etiqueta" data-t="tab_logs">Logs</span>
         </button>
         <button role="tab" id="tab-calificaciones" aria-selected="false" aria-controls="lista">
-          <span data-t="tab_calificaciones">Calificaciones</span> <span class="cuenta" id="cuenta-calificaciones"></span>
+          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2 20h3V10H2v10zm20-9c0-1.1-.9-2-2-2h-5.6l.9-4.3v-.3c0-.4-.2-.8-.4-1.1L13.8 2 7.6 8.2c-.4.4-.6.8-.6 1.4V18c0 1.1.9 2 2 2h8.2c.8 0 1.5-.5 1.8-1.2l2.9-6.8c.1-.2.1-.5.1-.7V11z"/></svg><span class="cuenta aviso" id="cuenta-calificaciones"></span></span>
+          <span class="etiqueta" data-t="tab_calificaciones">Calificaciones</span>
         </button>
       </div>
     </div>
@@ -624,8 +658,12 @@ const $ = (id) => document.getElementById(id);
 const TEXTOS = {
   es: {
     marca: "Panel del bot",
-    tab_chats: "Conversaciones",
+    tab_chats: "Chats",
     tab_usuarios: "Usuarios",
+    cuenta_chats: (n) => `${n} pregunta${n === 1 ? "" : "s"} en curso`,
+    cuenta_usuarios: (n) => `${n} usuario${n === 1 ? "" : "s"} suspendido${n === 1 ? "" : "s"}`,
+    cuenta_logs: (n) => `${n} error${n === 1 ? "" : "es"} hoy`,
+    cuenta_calificaciones: (n) => `${n} respuesta${n === 1 ? "" : "s"} con 👎`,
     buscar_numero: "Buscar un número",
     buscar_usuario: "Buscar un usuario",
     volver: "Volver a la lista",
@@ -637,7 +675,8 @@ const TEXTOS = {
       "Elige una conversación para ver qué le preguntaron al bot, qué contestó " +
       "y qué hizo para contestarlo. En Usuarios se da de alta, se suspende o se " +
       "elimina a quien puede escribirle. En Logs está lo técnico: la conexión con " +
-      "WhatsApp y los errores.",
+      "WhatsApp y los errores. En Calificaciones, las respuestas que los usuarios " +
+      "marcaron con 👍 o 👎.",
     resumen: (chats, usuarios) =>
       `${chats} conversación${chats === 1 ? "" : "es"} registrada${chats === 1 ? "" : "s"} · ` +
       `${usuarios} usuario${usuarios === 1 ? "" : "s"} en la lista`,
@@ -726,8 +765,12 @@ const TEXTOS = {
   },
   en: {
     marca: "Bot panel",
-    tab_chats: "Conversations",
+    tab_chats: "Chats",
     tab_usuarios: "Users",
+    cuenta_chats: (n) => `${n} question${n === 1 ? "" : "s"} running`,
+    cuenta_usuarios: (n) => `${n} suspended user${n === 1 ? "" : "s"}`,
+    cuenta_logs: (n) => `${n} error${n === 1 ? "" : "s"} today`,
+    cuenta_calificaciones: (n) => `${n} answer${n === 1 ? "" : "s"} rated 👎`,
     buscar_numero: "Search a number",
     buscar_usuario: "Search a user",
     volver: "Back to the list",
@@ -739,7 +782,7 @@ const TEXTOS = {
       "Pick a conversation to see what the bot was asked, what it answered and " +
       "what it did to answer it. Under Users you add, suspend or remove whoever " +
       "can message it. Logs has the technical side: the WhatsApp connection and " +
-      "the errors.",
+      "the errors. Ratings lists the answers users marked with 👍 or 👎.",
     resumen: (chats, usuarios) =>
       `${chats} conversation${chats === 1 ? "" : "s"} recorded · ` +
       `${usuarios} user${usuarios === 1 ? "" : "s"} on the list`,
@@ -1240,6 +1283,20 @@ async function cargarAnteriores(boton) {
   }
 }
 
+// El texto de la respuesta con sus **negritas**, como se ve en WhatsApp (ahi
+// el sidecar las convierte; aqui salian con los asteriscos). Se arma nodo por
+// nodo y nunca con innerHTML: la respuesta la escribio un modelo y no debe
+// poder meter HTML en el panel.
+function conNegritas(texto) {
+  const trozo = document.createDocumentFragment();
+  const partes = String(texto).split(/\*\*(.+?)\*\*/gs);
+  partes.forEach((parte, i) => {
+    if (!parte) return;
+    trozo.append(i % 2 ? elemento("strong", null, parte) : document.createTextNode(parte));
+  });
+  return trozo;
+}
+
 function burbujaDeTurno(turno) {
   const grupo = elemento("div", "turno");
 
@@ -1254,7 +1311,7 @@ function burbujaDeTurno(turno) {
   const respuesta = elemento("div", `burbuja sale${fallo ? " fallo" : ""}`);
   respuesta.style.marginTop = "7px";
   respuesta.append(
-    document.createTextNode(
+    conNegritas(
       turno.respuesta ||
         (turno.estado === "cancelado" ? t("cancelada") : t("sin_respuesta")),
     ),
@@ -1675,12 +1732,24 @@ function pintarFiltros() {
 
 /* ---------------------------------------------------- calificaciones 👍/👎 */
 
+// Pone el numero en el circulo de una solapa (vacio = no se ve) y su
+// explicacion como tooltip, para que un "2" rojo diga de que es.
+const cuentas = {};
+function ponerCuenta(cual, n) {
+  cuentas[cual] = n;
+  const circulo = $(`cuenta-${cual}`);
+  circulo.textContent = n ? String(n > 99 ? "99+" : n) : "";
+  const boton = $(`tab-${cual}`);
+  if (n) boton.title = t(`cuenta_${cual}`, n);
+  else boton.removeAttribute("title");
+}
+
 async function cargarCalificaciones() {
   const consulta = filtroCalif ? `?valor=${filtroCalif}` : "";
   const datos = await pedir(`/panel/calificaciones${consulta}`);
   cacheCalif = datos.calificaciones;
   // En la pestaña, las malas: son las que piden revisar algo.
-  $("cuenta-calificaciones").textContent = datos.malas ? `· ${datos.malas}` : "";
+  ponerCuenta("calificaciones", datos.malas);
   if (solapa === "calificaciones") pintarLista();
 }
 
@@ -1765,7 +1834,7 @@ async function cargarDias() {
   // En la pestaña, los errores de HOY: lo que pide atencion ahora.
   const hoy = cacheDias[0];
   const errores = hoy && hoy.dia === new Date().toLocaleDateString("en-CA") ? hoy.errores : 0;
-  $("cuenta-logs").textContent = errores ? `· ${errores}` : "";
+  ponerCuenta("logs", errores);
   if (solapa === "logs") pintarLista();
   if (vista === "logs") $("subtitulo-principal").textContent = subtituloLog();
 }
@@ -1821,8 +1890,9 @@ function pintarLog(alFinal = false) {
 async function cargarUsuarios() {
   const datos = await pedir("/panel/usuarios");
   cacheUsuarios = datos.usuarios;
-  const activos = cacheUsuarios.filter((u) => u.estado === "activo").length;
-  $("cuenta-usuarios").textContent = `${activos}/${cacheUsuarios.length}`;
+  // En la pestaña, los suspendidos: los activos ya se ven en la lista y
+  // no piden nada. Antes decia "3/3", que no se entendia de que era.
+  ponerCuenta("usuarios", cacheUsuarios.filter((u) => u.estado !== "activo").length);
   if (vista === "usuarios") pintarPersonas();
   if (solapa === "usuarios") pintarLista();
   pintarResumen();
@@ -1915,6 +1985,8 @@ function aplicarIdioma() {
   for (const nodo of document.querySelectorAll("[data-t]")) {
     nodo.textContent = t(nodo.dataset.t);
   }
+  // Los tooltips de los numeros de las solapas, en el idioma nuevo.
+  for (const [cual, n] of Object.entries(cuentas)) ponerCuenta(cual, n);
   for (const nodo of document.querySelectorAll("[data-t-ph]")) {
     nodo.placeholder = t(nodo.dataset.tPh);
   }
@@ -2010,6 +2082,7 @@ async function latido() {
 
     const antes = enCursoPorChat.size;
     enCursoPorChat = new Map(datos.en_curso.map((turno) => [turno.chat_id, turno]));
+    ponerCuenta("chats", enCursoPorChat.size);
     if (vista === "actividad") pintarActividad(datos.en_curso);
     // El log de hoy se va escribiendo: se relee en cada latido mientras esta
     // abierto. La lista de dias y el contador de errores, cada 30 segundos.
