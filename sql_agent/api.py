@@ -22,6 +22,7 @@ import binascii
 import idioma as idiomas
 import registro_de_logs
 import resumen_local
+import traduccion
 import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
@@ -198,6 +199,17 @@ class Enviados(BaseModel):
     chat_id: str
     turno: str
     mensajes: list[str]
+
+
+class ParaTraducir(BaseModel):
+    textos: list[str]
+    destino: str = "es"
+
+
+# Un turno son dos textos (pregunta y respuesta), y la bitacora ya recorta
+# cada uno a 4000 caracteres. Esto es solo para que nadie mande un libro.
+MAX_TEXTOS_A_TRADUCIR = 10
+MAX_CARACTERES_A_TRADUCIR = 20_000
 
 
 class Reaccion(BaseModel):
@@ -730,6 +742,29 @@ def crear_app(
             "hay_mas": hay_mas,
             "total": diario.cuantos(chat_id),
         }
+
+    @app.post("/panel/traducir")
+    async def traducir_para_el_panel(peticion: ParaTraducir) -> dict:
+        """Traduce al idioma del panel una pregunta y su respuesta.
+
+        Solo para quien revisa: lo que recibio el usuario no cambia.
+        """
+        _solo_local()
+        if peticion.destino not in traduccion.DESTINOS:
+            raise HTTPException(status_code=400, detail="Idioma de destino no soportado")
+        if (
+            len(peticion.textos) > MAX_TEXTOS_A_TRADUCIR
+            or sum(len(x) for x in peticion.textos) > MAX_CARACTERES_A_TRADUCIR
+        ):
+            raise HTTPException(status_code=413, detail="Demasiado texto para traducir")
+        try:
+            traducidos = await run_in_threadpool(
+                traduccion.traducir, peticion.textos, peticion.destino
+            )
+        except traduccion.TraduccionFallida as error:
+            logger.warning("No se pudo traducir para el panel: %s", error)
+            raise HTTPException(status_code=502, detail="No se pudo traducir")
+        return {"traducciones": traducidos}
 
     @app.get("/panel/calificaciones")
     async def ver_calificaciones(valor: int | None = None, limite: int = 200) -> dict:

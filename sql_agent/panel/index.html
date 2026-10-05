@@ -127,6 +127,11 @@
     height: 100vh;
     display: grid;
     grid-template-columns: minmax(300px, 31%) 1fr;
+    /* La fila mide la ventana y nada mas. Sin esto la fila (y con ella el
+       panel de la derecha) crecia con la conversacion: una de 100 turnos
+       media 14 000 px, se desplazaba la pagina entera y la barra de arriba
+       y la lista se iban con ella, en vez de desplazarse solo el chat. */
+    grid-template-rows: minmax(0, 1fr);
     background: var(--panel);
   }
   .lateral {
@@ -134,12 +139,15 @@
     border-right: 1px solid var(--borde);
     background: var(--panel);
     min-width: 0;
+    min-height: 0;
   }
   .principal {
     display: flex; flex-direction: column;
     background: var(--fondo);
     min-width: 0;
+    min-height: 0;
   }
+  .principal > .doodle, .principal > .hoja, .principal > .logs { min-height: 0; }
 
   /* --- barra superior, igual en los dos paneles --- */
   .barra {
@@ -326,6 +334,15 @@
   .palomas.rojas { fill: var(--alto); }
 
   details.tramoya { clear: both; margin-top: 7px; }
+  .traducir {
+    display: inline-flex; align-items: center; gap: 5px; margin-top: 6px;
+    border: none; background: none; color: var(--acento-fuerte); font: inherit;
+    font-size: 12.5px; cursor: pointer; padding: 2px 0;
+  }
+  .traducir:hover { text-decoration: underline; }
+  .traducir:disabled { color: var(--tinta-2); cursor: default; text-decoration: none; }
+  .traducir:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 4px; }
+  .traducido { display: block; font-size: 11.5px; color: var(--tinta-en-burbuja); margin-bottom: 3px; }
   details.tramoya summary {
     cursor: pointer; font-size: 12.5px; color: var(--tinta-2);
     list-style: none; padding: 3px 0; user-select: none;
@@ -756,6 +773,12 @@ const TEXTOS = {
       desconocido: () => "Sin datos de la conexión con WhatsApp",
     },
     tab_calificaciones: "Calificaciones",
+    traducir: "🌐 Traducir al español",
+    traduciendo: "Traduciendo…",
+    ver_original: (lengua) => `Ver el original en ${lengua}`,
+    traducido_de: (lengua) => `Traducido del ${lengua}`,
+    lenguas: { es: "español", en: "inglés", zh: "chino" },
+    no_se_tradujo: "No se pudo traducir. Intenta de nuevo.",
     filtro_calif: { "-1": "👎 Malas", "1": "👍 Buenas", "": "Todas" },
     sin_calificaciones:
       "Todavía nadie ha calificado. Cuando un usuario reacciona con 👍 o 👎 a una respuesta del bot, aparece aquí.",
@@ -862,6 +885,12 @@ const TEXTOS = {
       desconocido: () => "No data about the WhatsApp connection",
     },
     tab_calificaciones: "Ratings",
+    traducir: "🌐 Translate to English",
+    traduciendo: "Translating…",
+    ver_original: (lengua) => `Show the original in ${lengua}`,
+    traducido_de: (lengua) => `Translated from ${lengua}`,
+    lenguas: { es: "Spanish", en: "English", zh: "Chinese" },
+    no_se_tradujo: "Couldn't translate. Try again.",
     filtro_calif: { "-1": "👎 Bad", "1": "👍 Good", "": "All" },
     sin_calificaciones:
       "Nobody has rated anything yet. When a user reacts with 👍 or 👎 to a bot answer, it shows up here.",
@@ -1297,11 +1326,62 @@ function conNegritas(texto) {
   return trozo;
 }
 
+function botonDeTraduccion(turno, textoPregunta, textoRespuesta) {
+  const boton = elemento("button", "traducir", t("traducir"));
+  boton.type = "button";
+  const lengua = t("lenguas")[turno.idioma] || turno.idioma;
+  let traducido = null;
+  let mostrandoTraduccion = false;
+  const pintar = (preguntaTexto, respuestaTexto, etiqueta) => {
+    textoPregunta.replaceChildren();
+    textoRespuesta.replaceChildren();
+    if (etiqueta) {
+      textoPregunta.append(elemento("span", "traducido", etiqueta));
+      textoRespuesta.append(elemento("span", "traducido", etiqueta));
+    }
+    textoPregunta.append(document.createTextNode(preguntaTexto));
+    textoRespuesta.append(conNegritas(respuestaTexto));
+  };
+  const original = [turno.pregunta || "", turno.respuesta || ""];
+  boton.addEventListener("click", async () => {
+    if (mostrandoTraduccion) {
+      pintar(original[0], original[1], null);
+      boton.textContent = t("traducir");
+      mostrandoTraduccion = false;
+      return;
+    }
+    if (!traducido) {
+      boton.disabled = true;
+      boton.textContent = t("traduciendo");
+      try {
+        const datos = await pedir("/panel/traducir", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ textos: original, destino: idioma }),
+        });
+        traducido = datos.traducciones;
+      } catch (error) {
+        boton.disabled = false;
+        boton.textContent = t("traducir");
+        mostrarError(t("no_se_tradujo"));
+        return;
+      }
+      boton.disabled = false;
+    }
+    pintar(traducido[0] || original[0], traducido[1] || original[1], t("traducido_de", lengua));
+    boton.textContent = t("ver_original", lengua);
+    mostrandoTraduccion = true;
+  });
+  return boton;
+}
+
 function burbujaDeTurno(turno) {
   const grupo = elemento("div", "turno");
 
   const pregunta = elemento("div", "burbuja entra");
-  pregunta.append(document.createTextNode(turno.pregunta));
+  const textoPregunta = elemento("span", "texto-burbuja");
+  textoPregunta.append(document.createTextNode(turno.pregunta));
+  pregunta.append(textoPregunta);
   const pie = elemento("div", "pie-burbuja");
   pie.append(elemento("span", null, horaCorta(turno.inicio)));
   pregunta.append(pie);
@@ -1310,12 +1390,14 @@ function burbujaDeTurno(turno) {
   const fallo = turno.estado !== "listo";
   const respuesta = elemento("div", `burbuja sale${fallo ? " fallo" : ""}`);
   respuesta.style.marginTop = "7px";
-  respuesta.append(
+  const textoRespuesta = elemento("span", "texto-burbuja");
+  textoRespuesta.append(
     conNegritas(
       turno.respuesta ||
         (turno.estado === "cancelado" ? t("cancelada") : t("sin_respuesta")),
     ),
   );
+  respuesta.append(textoRespuesta);
 
   const pieBot = elemento("div", "pie-burbuja");
   if (turno.calificacion) pieBot.append(elemento("span", null, turno.calificacion.emoji));
@@ -1326,6 +1408,13 @@ function burbujaDeTurno(turno) {
   pieBot.append(palomas(fallo));
   respuesta.append(pieBot);
   grupo.append(respuesta);
+
+  // Un turno en otro idioma (el bot contesta en el de quien pregunta) se
+  // puede traducir al del panel, solo para revisarlo: lo que recibio el
+  // usuario no cambia.
+  if (turno.idioma && turno.idioma !== idioma && (turno.pregunta || turno.respuesta)) {
+    grupo.append(botonDeTraduccion(turno, textoPregunta, textoRespuesta));
+  }
 
   if (turno.pasos.length) {
     const detalle = elemento("details", "tramoya");
