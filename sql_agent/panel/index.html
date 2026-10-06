@@ -330,7 +330,7 @@
     font-size: 11px; color: var(--tinta-2);
     display: flex; align-items: center; gap: 5px; white-space: nowrap;
   }
-  /* La reaccion del usuario (👍/👎), como en WhatsApp: un globito colgando
+  /* La reaccion del usuario, como en WhatsApp: un globito colgando
      de la esquina de la respuesta. */
   .burbuja.con-reaccion { margin-bottom: 14px; }
   .reaccion {
@@ -590,6 +590,10 @@
   .buscando { padding: 10px 16px; font-size: 13px; color: var(--tinta-2); }
 
   /* --- calificaciones --- */
+  .leyenda-calif {
+    padding: 8px 14px; font-size: 12px; line-height: 1.5; color: var(--tinta-2);
+    border-bottom: 1px solid var(--borde);
+  }
   .filtros-calif { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--borde); }
   .filtros-calif button {
     border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
@@ -792,7 +796,7 @@ const TEXTOS = {
     cuenta_chats: (n) => `${n} pregunta${n === 1 ? "" : "s"} en curso`,
     cuenta_usuarios: (n) => `${n} usuario${n === 1 ? "" : "s"} suspendido${n === 1 ? "" : "s"}`,
     cuenta_logs: (n) => `${n} error${n === 1 ? "" : "es"} hoy`,
-    cuenta_calificaciones: (n) => `${n} respuesta${n === 1 ? "" : "s"} con 👎`,
+    cuenta_calificaciones: (n) => `${n} respuesta${n === 1 ? "" : "s"} mal calificada${n === 1 ? "" : "s"}`,
     buscar_numero: "Buscar un número",
     buscar_chats: "Buscar nombre, número o palabras",
     por_nombre: "Nombre o número",
@@ -810,7 +814,7 @@ const TEXTOS = {
       "y qué hizo para contestarlo. En Usuarios se da de alta, se suspende o se " +
       "elimina a quien puede escribirle. En Logs está lo técnico: la conexión con " +
       "WhatsApp y los errores. En Calificaciones, las respuestas que los usuarios " +
-      "marcaron con 👍 o 👎.",
+      "calificaron reaccionando en WhatsApp.",
     resumen: (chats, usuarios) =>
       `${chats} conversación${chats === 1 ? "" : "es"} registrada${chats === 1 ? "" : "s"} · ` +
       `${usuarios} usuario${usuarios === 1 ? "" : "s"} en la lista`,
@@ -913,8 +917,9 @@ const TEXTOS = {
     lenguas: { es: "español", en: "inglés", zh: "chino" },
     no_se_tradujo: "No se pudo traducir. Intenta de nuevo.",
     filtro_calif: { "-1": "👎 Malas", "1": "👍 Buenas", "": "Todas" },
+    leyenda_calif: (buenas, malas) => `Cuentan como buena: ${buenas}. Como mala: ${malas}.`,
     sin_calificaciones:
-      "Todavía nadie ha calificado. Cuando un usuario reacciona con 👍 o 👎 a una respuesta del bot, aparece aquí.",
+      "Todavía nadie ha calificado. Cuando un usuario reacciona a una respuesta del bot, aparece aquí.",
     calificada: (emoji, fecha) => `${emoji} calificada el ${fecha}`,
     actualizando: "Actualizando…",
     turno_perdido: "No encontré esa respuesta en la bitácora.",
@@ -927,7 +932,7 @@ const TEXTOS = {
     cuenta_chats: (n) => `${n} question${n === 1 ? "" : "s"} running`,
     cuenta_usuarios: (n) => `${n} suspended user${n === 1 ? "" : "s"}`,
     cuenta_logs: (n) => `${n} error${n === 1 ? "" : "s"} today`,
-    cuenta_calificaciones: (n) => `${n} answer${n === 1 ? "" : "s"} rated 👎`,
+    cuenta_calificaciones: (n) => `${n} answer${n === 1 ? "" : "s"} rated bad`,
     buscar_numero: "Search a number",
     buscar_chats: "Search name, number or words",
     por_nombre: "Name or number",
@@ -944,7 +949,7 @@ const TEXTOS = {
       "Pick a conversation to see what the bot was asked, what it answered and " +
       "what it did to answer it. Under Users you add, suspend or remove whoever " +
       "can message it. Logs has the technical side: the WhatsApp connection and " +
-      "the errors. Ratings lists the answers users marked with 👍 or 👎.",
+      "the errors. Ratings lists the answers users rated by reacting on WhatsApp.",
     resumen: (chats, usuarios) =>
       `${chats} conversation${chats === 1 ? "" : "s"} recorded · ` +
       `${usuarios} user${usuarios === 1 ? "" : "s"} on the list`,
@@ -1047,8 +1052,9 @@ const TEXTOS = {
     lenguas: { es: "Spanish", en: "English", zh: "Chinese" },
     no_se_tradujo: "Couldn't translate. Try again.",
     filtro_calif: { "-1": "👎 Bad", "1": "👍 Good", "": "All" },
+    leyenda_calif: (buenas, malas) => `Count as good: ${buenas}. As bad: ${malas}.`,
     sin_calificaciones:
-      "Nobody has rated anything yet. When a user reacts with 👍 or 👎 to a bot answer, it shows up here.",
+      "Nobody has rated anything yet. When a user reacts to a bot answer, it shows up here.",
     calificada: (emoji, fecha) => `${emoji} rated on ${fecha}`,
     actualizando: "Refreshing…",
     turno_perdido: "I couldn't find that answer in the log.",
@@ -2288,7 +2294,7 @@ function pintarFiltros() {
   $("solo-problemas").checked = soloProblemas;
 }
 
-/* ---------------------------------------------------- calificaciones 👍/👎 */
+/* ------------------------------------------------------ calificaciones */
 
 // Pone el numero en el circulo de una solapa (vacio = no se ve) y su
 // explicacion como tooltip, para que un "2" rojo diga de que es.
@@ -2302,6 +2308,9 @@ function ponerCuenta(cual, n) {
   else boton.removeAttribute("title");
 }
 
+// Que reacciones cuentan como buena y como mala; las manda el servicio.
+let reaccionesQueCuentan = { buenas: [], malas: [] };
+
 // Que calificaciones habia la ultima vez, para notar cuando llega una.
 let firmaCalif = null;
 
@@ -2309,6 +2318,7 @@ async function cargarCalificaciones() {
   const consulta = filtroCalif ? `?valor=${filtroCalif}` : "";
   const datos = await pedir(`/panel/calificaciones${consulta}`);
   cacheCalif = datos.calificaciones;
+  reaccionesQueCuentan = datos.reacciones || reaccionesQueCuentan;
   // Llego (o se quito) una reaccion: el chat abierto la muestra sin tener
   // que salir y volver a entrar.
   const firma = cacheCalif.map((c) => `${c.turno_id}${c.emoji}${c.fecha}`).join("|");
@@ -2335,6 +2345,11 @@ function pintarListaCalif(caja) {
     filtros.append(boton);
   }
   caja.append(filtros);
+  // Que reacciones cuentan: ya no son solo los pulgares.
+  const { buenas, malas } = reaccionesQueCuentan;
+  if (buenas.length) {
+    caja.append(elemento("div", "leyenda-calif", t("leyenda_calif", buenas.join(" "), malas.join(" "))));
+  }
 
   const visibles = cacheCalif.filter((c) => soloNumero(c.chat_id).includes(filtro));
   if (!visibles.length) {

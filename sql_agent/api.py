@@ -26,7 +26,7 @@ import traduccion
 import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
-from calificaciones import Calificaciones, valor_de
+from calificaciones import REACCIONES_BUENAS, REACCIONES_MALAS, Calificaciones, valor_de
 from fotos import AlmacenDeFotos, ErrorDeFoto
 from config import Config
 from session import RegistroSesiones
@@ -427,9 +427,10 @@ def crear_app(
 
     @app.post("/reaccion")
     async def reaccion(peticion: Reaccion) -> dict:
-        """Un 👍 o 👎 del usuario a un mensaje del bot.
+        """Una reaccion del usuario a un mensaje del bot.
 
-        Otras reacciones (❤️, 😂) no califican y se ignoran. Una reaccion a
+        Cuentan las de calificaciones.REACCIONES_BUENAS y _MALAS; las demas
+        (😂, 😮) no califican y se ignoran. Una reaccion a
         un mensaje que no es una respuesta del bot (un aviso de espera, un
         mensaje de antes de que esto existiera) tampoco.
         """
@@ -446,7 +447,7 @@ def crear_app(
             return {"calificado": False, "turno": turno_id, "motivo": "quitada"}
         valor = valor_de(peticion.emoji)
         if valor is None:
-            return {"calificado": False, "turno": turno_id, "motivo": "no es 👍 ni 👎"}
+            return {"calificado": False, "turno": turno_id, "motivo": "esa reaccion no califica"}
         await run_in_threadpool(
             notas.calificar, turno_id, peticion.chat_id, valor, peticion.emoji
         )
@@ -803,7 +804,12 @@ def crear_app(
         filas = notas.lista(valor=valor, limite=max(1, min(limite, 500)))
         for fila in filas:
             fila["turno"] = diario.buscar(fila["turno_id"])
-        return {"calificaciones": filas, **notas.cuantas()}
+        return {
+            "calificaciones": filas,
+            **notas.cuantas(),
+            # Para que el panel diga cuales cuentan sin tener su propia lista.
+            "reacciones": {"buenas": REACCIONES_BUENAS, "malas": REACCIONES_MALAS},
+        }
 
     _FUENTES_DE_LOG = {"whatsapp", "api", "iniciar"}
 

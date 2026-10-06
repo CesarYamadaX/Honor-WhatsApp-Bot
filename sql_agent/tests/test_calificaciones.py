@@ -18,8 +18,20 @@ class TestQueCuentaComoCalificacion:
         assert valor_de("👍") == BUENA and valor_de("👎") == MALA
         assert valor_de("👍🏽") == BUENA and valor_de("👎🏿") == MALA
 
-    def test_otras_reacciones_no_califican(self):
-        assert valor_de("❤️") is None and valor_de("😂") is None and valor_de("") is None
+    def test_no_solo_los_pulgares(self):
+        # Pedido el 6/10/2026. ❤️ y 🙏 vienen en la barra rapida de WhatsApp.
+        for buena in ("❤️", "🙏🏻", "🔥", "👏🏽", "💯", "✅", "😍"):
+            assert valor_de(buena) == BUENA, buena
+        for mala in ("😡", "😢", "😭", "❌", "🤔", "☹️", "🤦🏽‍♀️"):
+            assert valor_de(mala) == MALA, mala
+
+    def test_las_ambiguas_no_califican(self):
+        # 😂 lo mismo es "que buena" que "que mal salio esto".
+        assert valor_de("😂") is None and valor_de("😮") is None and valor_de("") is None
+
+    def test_ninguna_cuenta_dos_veces(self):
+        from calificaciones import REACCIONES_BUENAS, REACCIONES_MALAS
+        assert not set(REACCIONES_BUENAS) & set(REACCIONES_MALAS)
 
 
 class TestElAlmacen:
@@ -96,7 +108,7 @@ class TestDeWhatsAppAlPanel:
     def test_otras_reacciones_y_mensajes_ajenos_no_califican(self, todo):
         cliente, _, notas = todo
         _preguntar_y_mandar(cliente)
-        assert _reaccionar(cliente, "wamid-1", "❤️").json()["calificado"] is False
+        assert _reaccionar(cliente, "wamid-1", "😂").json()["calificado"] is False
         assert _reaccionar(cliente, "no-es-del-bot", "👎").json()["calificado"] is False
         assert notas.cuantas() == {"buenas": 0, "malas": 0}
 

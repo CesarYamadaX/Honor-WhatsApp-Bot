@@ -1,9 +1,11 @@
-"""Las respuestas que los usuarios califican con 👍 o 👎 en WhatsApp.
+"""Las respuestas que los usuarios califican reaccionando en WhatsApp.
 
 Antes la unica forma de saber que el bot contesto mal era que alguien lo
 reportara a mano (asi se encontro lo de la promotoria). Ahora una reaccion
-al mensaje del bot queda guardada junto al turno, y el panel muestra las 👎
-con su pregunta, su respuesta y lo que hizo el bot por dentro.
+al mensaje del bot (👍, ❤️, 🙏... buena; 👎, 😡, 😢... mala, ver
+REACCIONES_BUENAS y REACCIONES_MALAS) queda guardada junto al turno, y el
+panel muestra las malas con su pregunta, su respuesta y lo que hizo el bot
+por dentro.
 
 Dos tablas:
 - enviados: que mensajes de WhatsApp pertenecen a que turno. Una respuesta
@@ -25,12 +27,37 @@ BUENA = 1
 MALA = -1
 
 _TONOS_Y_VARIANTES = {chr(c) for c in range(0x1F3FB, 0x1F400)} | {"️"}
+_UNION = "‍"  # une emojis: 🤦‍♂️ es 🤦 + ZWJ + ♂
+
+# Que reacciones cuentan como buena y como mala. Pedido el 6/10/2026: no
+# solo los pulgares, porque la gente reacciona con lo que tiene a la mano
+# (❤️ y 🙏 vienen en la barra rapida de WhatsApp). Van sin tono de piel ni
+# selector de variante: `valor_de` los quita antes de buscar.
+#
+# Fuera a proposito 😂 y 😮, los otros dos de la barra rapida: 😂 lo mismo
+# es "que buena" que "que mal salio esto", y 😮 lo mismo sorpresa que susto.
+# Contarlos llenaria la pestaña de calificaciones de ruido.
+REACCIONES_BUENAS = (
+    "👍", "❤", "♥", "🙏", "👏", "🙌", "🔥", "💯", "✅", "👌", "💪", "🎉",
+    "⭐", "🌟", "🏆", "😍", "🥰", "😊", "😀", "😃", "😄", "😁", "🤩", "😎",
+    "🫶", "💙", "💚", "🤝",
+)
+REACCIONES_MALAS = (
+    "👎", "😡", "😠", "🤬", "😤", "😞", "😔", "😢", "😭", "😩", "😕", "🙁",
+    "☹", "😒", "🤦", "🤨", "🤔", "❌", "🚫", "⚠", "💩",
+)
+_VALOR = {e: BUENA for e in REACCIONES_BUENAS} | {e: MALA for e in REACCIONES_MALAS}
 
 
 def valor_de(emoji: str) -> int | None:
-    """+1 para 👍, -1 para 👎 (con cualquier tono de piel), None para el resto."""
-    base = "".join(c for c in (emoji or "") if c not in _TONOS_Y_VARIANTES)
-    return {"\U0001F44D": BUENA, "\U0001F44E": MALA}.get(base)
+    """+1 si es una reaccion buena, -1 si es mala, None si no cuenta.
+
+    Con cualquier tono de piel o variante: 👍🏽, ❤️ (que es ❤ + FE0F) y 🤦‍♀️
+    (🤦 unido a ♀) valen lo mismo que su emoji base.
+    """
+    base = (emoji or "").split(_UNION)[0]
+    base = "".join(c for c in base if c not in _TONOS_Y_VARIANTES)
+    return _VALOR.get(base)
 
 
 def _ahora() -> str:
