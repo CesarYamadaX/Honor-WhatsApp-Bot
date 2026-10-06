@@ -79,3 +79,10 @@ test("sin servicio, falla con aviso", async () => {
     { falla: "audio_fallo" },
   );
 });
+
+test("cada documento sale con su tipo: el ZIP del detalle no es un Excel", async () => {
+  const { tipoDeDocumento } = await import("../notasDeVoz.js");
+  assert.equal(tipoDeDocumento("C:/x/reporte.xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.equal(tipoDeDocumento("C:/x/detalle_coppel_b2b.ZIP"), "application/zip");
+  assert.equal(tipoDeDocumento("algo.raro"), "application/octet-stream");
+});

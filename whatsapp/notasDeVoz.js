@@ -40,6 +40,20 @@ export function formatoDelAudio(mimetype) {
   return formatos[tipo] ?? "ogg";
 }
 
+/**
+ * El mimetype de un documento por su extension. Antes todo salia como Excel;
+ * desde el 5/10/2026 el detalle que no cabe en un Excel va en un ZIP de CSV,
+ * y un ZIP anunciado como hoja de calculo el telefono no lo sabe abrir.
+ */
+export function tipoDeDocumento(ruta) {
+  const extension = String(ruta).toLowerCase().split(".").pop();
+  return {
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    zip: "application/zip",
+    csv: "text/csv",
+  }[extension] ?? "application/octet-stream";
+}
+
 /** true si el audio dura mas de lo que se atiende. Sin duracion, se atiende. */
 export function esDemasiadoLargo(audio, maximo = SEGUNDOS_MAXIMOS_DE_AUDIO) {
   const segundos = Number(audio?.seconds);

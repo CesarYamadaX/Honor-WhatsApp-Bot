@@ -38,6 +38,7 @@ usuario.
 """
 
 import logging
+import os
 import re
 from datetime import timedelta
 from contextlib import contextmanager
@@ -853,23 +854,11 @@ def _df_de(conexion, sql: str, parametros=()) -> pd.DataFrame:
     return pd.DataFrame.from_records(cursor.fetchall(), columns=list(cursor.keys()))
 
 
-def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
-    """Las filas de la tabla cruda del periodo, con todas sus columnas.
-
-    Las mismas filas que cuenta el bot: unidades >= 1 (las vistas descartan
-    devoluciones y ajustes, y sin eso el total del Excel no seria el del
-    mensaje: en Elektra, enero de 2026, 181 362 contra 181 628) y, en AT&T,
-    solo postpago de Dealers y Stores (ver Cruda.filtro). Coppel y Liverpool
-    llevan ademas su mitad IOT, acomodada en las columnas equivalentes y
-    marcada en [Fuente].
-
-    None si no cabe ni en un archivo que WhatsApp acepte (ver
-    LIMITE_DE_CELDAS_SOLO_CRUDOS): quien llama usa entonces la version
-    agrupada. Entre los dos topes va marcado attrs["solo_crudos"].
-    """
+def _tamano_del_crudo(conexion, cruda: Cruda, desde: str, hasta: str) -> tuple[list[str], int]:
+    """Las columnas de la cruda y cuantas filas trae el periodo (con IOT)."""
     columnas = _columnas_de(conexion, cruda.tabla)
     if not columnas:
-        return None
+        return [], 0
     filas = conexion.exec_driver_sql(
         f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v "
         f"WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ? "
@@ -882,40 +871,73 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
             "WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1",
             (desde, hasta),
         ).scalar() or 0
-    extras = 3 if cruda.vista_iot else 2
-    celdas = filas * (len(columnas) + extras)
-    if celdas > LIMITE_DE_CELDAS_SOLO_CRUDOS:
-        logger.info(
-            "Raw_Data completo de %s no cabe (%d filas x %d columnas); va agrupado",
-            cruda.tabla, filas, len(columnas) + extras,
-        )
-        return None
-    solo_crudos = celdas > LIMITE_DE_CELDAS_CRUDAS
+    return columnas, filas
 
+
+def _celdas(cruda: Cruda, columnas: list[str], filas: int) -> int:
+    return filas * (len(columnas) + (3 if cruda.vista_iot else 2))
+
+
+TROZO_DE_FILAS = 100_000
+
+
+def _trozos_del_crudo(conexion, cruda: Cruda, desde: str, hasta: str,
+                      columnas: list[str], tamano: int = TROZO_DE_FILAS):
+    """Las filas del crudo en trozos, ya con region, mes y fuente.
+
+    En trozos para que un reporte de millones de filas no tenga que caber
+    entero en memoria (el ZIP, ver crudo_en_zip). La region y la tienda IOT
+    se ponen aqui con el catalogo en memoria (ver _Catalogo).
+    """
     catalogo = _Catalogo(conexion, cruda)
     lista = ", ".join(f"v.[{c}]" for c in columnas)
-    principal = _df_de(conexion, f"""
+
+    def con_mes(df: pd.DataFrame) -> pd.DataFrame:
+        df.insert(
+            len(columnas) + 1, COLUMNA_MES,
+            pd.to_datetime(df[cruda.fecha], errors="coerce").dt.month,
+        )
+        return df
+
+    nombre_por_prefijo = dict(catalogo.nombre_por_prefijo)
+    cursor = conexion.exec_driver_sql(f"""
         SELECT {lista} FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
           AND v.[{cruda.unidades}] >= 1{_filtro_de(cruda)}""", (desde, hasta))
-    if cruda.enlace_con_catalogo == _POR_NOMBRE:
-        principal[COLUMNA_REGION] = catalogo.region_por_nombre(principal[cruda.etiqueta])
-    else:
-        principal[COLUMNA_REGION] = catalogo.region_por_numero(principal[cruda.clave])
-    partes = [principal]
+    nombres = list(cursor.keys())
+    while True:
+        lote = cursor.fetchmany(tamano)
+        if not lote:
+            break
+        trozo = pd.DataFrame.from_records(lote, columns=nombres)
+        if cruda.enlace_con_catalogo == _POR_NOMBRE:
+            trozo[COLUMNA_REGION] = catalogo.region_por_nombre(trozo[cruda.etiqueta])
+        else:
+            trozo[COLUMNA_REGION] = catalogo.region_por_numero(trozo[cruda.clave])
+        if cruda.vista_iot:
+            # De paso, el numero con que empieza cada tienda: con eso se
+            # traduce la tienda IOT si el catalogo no la tiene.
+            for tienda in trozo[cruda.etiqueta].dropna().unique():
+                prefijo = _numero_al_inicio(tienda)
+                if prefijo is not None:
+                    nombre_por_prefijo.setdefault(prefijo, str(tienda))
+            trozo[COLUMNA_FUENTE] = cruda.tabla
+        yield con_mes(trozo)
 
-    if cruda.vista_iot:
-        iot = _df_de(conexion, f"""
-            SELECT [Store], [Brand], [Material_Description], [Carrier], [Date], [QTY]
-            FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}]
-            WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1""", (desde, hasta))
+    if not cruda.vista_iot:
+        return
+    cursor = conexion.exec_driver_sql(f"""
+        SELECT [Store], [Brand], [Material_Description], [Carrier], [Date], [QTY]
+        FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}]
+        WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1""", (desde, hasta))
+    nombres = list(cursor.keys())
+    while True:
+        lote = cursor.fetchmany(tamano)
+        if not lote:
+            break
+        iot = pd.DataFrame.from_records(lote, columns=nombres)
         # La tienda IOT llega como numero ("100"): se traduce al nombre del
         # catalogo, o al de la cruda si el catalogo no la tiene.
-        nombre_por_prefijo = dict(catalogo.nombre_por_prefijo)
-        for tienda in principal[cruda.etiqueta].dropna().unique():
-            prefijo = _numero_al_inicio(tienda)
-            if prefijo is not None:
-                nombre_por_prefijo.setdefault(prefijo, str(tienda))
         tienda_iot = iot["Store"].map(
             lambda s: nombre_por_prefijo.get(_numero_al_inicio(s), s)
             if str(s).strip().isdigit() else s
@@ -933,15 +955,11 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
         mitad[COLUMNA_REGION] = region.where(
             region.notna(), catalogo.region_por_numero(iot["Store"])
         )
-        principal[COLUMNA_FUENTE] = cruda.tabla
         mitad[COLUMNA_FUENTE] = cruda.vista_iot
-        partes.append(mitad)
+        yield con_mes(mitad)
 
-    df = pd.concat(partes, ignore_index=True) if len(partes) > 1 else principal
-    df.insert(
-        len(columnas) + 1, COLUMNA_MES,
-        pd.to_datetime(df[cruda.fecha], errors="coerce").dt.month,
-    )
+
+def _con_atributos(df: pd.DataFrame, cruda: Cruda, solo_crudos: bool) -> pd.DataFrame:
     # Con que columnas se arma el pivot (excel_pivot.config_ventas_por_tienda):
     # cada cruda nombra distinto la tienda, la marca y las unidades.
     df.attrs["pivot"] = {
@@ -955,6 +973,141 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
     return df
 
 
+def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
+    """Las filas de la tabla cruda del periodo, con todas sus columnas.
+
+    Las mismas filas que cuenta el bot: unidades >= 1 (las vistas descartan
+    devoluciones y ajustes, y sin eso el total del Excel no seria el del
+    mensaje: en Elektra, enero de 2026, 181 362 contra 181 628) y, en AT&T,
+    solo postpago de Dealers y Stores (ver Cruda.filtro). Coppel y Liverpool
+    llevan ademas su mitad IOT, acomodada en las columnas equivalentes y
+    marcada en [Fuente].
+
+    None si no cabe en un Excel que WhatsApp acepte (ver
+    LIMITE_DE_CELDAS_SOLO_CRUDOS): quien llama decide entonces si va en ZIP
+    (crudo_en_zip) o agrupado. Entre los dos topes va marcado
+    attrs["solo_crudos"].
+    """
+    columnas, filas = _tamano_del_crudo(conexion, cruda, desde, hasta)
+    if not columnas:
+        return None
+    celdas = _celdas(cruda, columnas, filas)
+    if celdas > LIMITE_DE_CELDAS_SOLO_CRUDOS:
+        logger.info(
+            "Raw_Data completo de %s no cabe en Excel (%d filas); va en ZIP o agrupado",
+            cruda.tabla, filas,
+        )
+        return None
+    trozos = list(_trozos_del_crudo(conexion, cruda, desde, hasta, columnas))
+    if not trozos:
+        return _con_atributos(pd.DataFrame(columns=columnas), cruda, False)
+    df = pd.concat(trozos, ignore_index=True) if len(trozos) > 1 else trozos[0]
+    return _con_atributos(df, cruda, celdas > LIMITE_DE_CELDAS_CRUDAS)
+
+
+# Lo que no cabe en un Excel que WhatsApp acepte va en un ZIP con CSV: el
+# CSV comprime seis veces mejor que el xlsx (que ya es un ZIP por dentro).
+# Medido con Coppel enero-marzo de 2026, 1 473 521 filas: xlsx 52.8 MB, ese
+# xlsx zipeado 40.8 MB, el CSV zipeado 8.4 MB en 4 s. Este tope son ~57 MB de
+# ZIP, mas o menos un ano de Coppel; por encima, solo agrupado.
+LIMITE_DE_CELDAS_ZIP = 100_000_000
+# Un CSV por cada tanto, porque es lo que Excel abre de un CSV.
+FILAS_POR_CSV = 1_048_575
+
+
+def crudo_en_zip(conexion, cruda: Cruda, desde: str, hasta: str,
+                 carpeta: str | None = None) -> tuple[str, pd.DataFrame] | None:
+    """Escribe el crudo completo en un ZIP de CSV y devuelve (ruta, agrupado).
+
+    Va por trozos: nunca tiene en memoria mas de TROZO_DE_FILAS filas del
+    crudo. De paso arma lo agrupado (la hoja Datos), sumando trozo a trozo.
+    None si no cabe ni asi (LIMITE_DE_CELDAS_ZIP).
+    """
+    import uuid
+    import zipfile
+    from datetime import datetime as _dt
+
+    columnas, filas = _tamano_del_crudo(conexion, cruda, desde, hasta)
+    if not columnas or _celdas(cruda, columnas, filas) > LIMITE_DE_CELDAS_ZIP:
+        return None
+    carpeta = carpeta or os.environ.get("EXPORT_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "exports"
+    )
+    os.makedirs(carpeta, exist_ok=True)
+    nombre = f"detalle_{cruda.tabla.strip('$').lower()}_{desde}_{hasta}_{_dt.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
+    ruta = os.path.abspath(os.path.join(carpeta, f"{nombre}.zip"))
+
+    parciales = []
+    numero_csv, en_este_csv, archivo, escritor = 0, 0, None, None
+    with zipfile.ZipFile(ruta, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_:
+        try:
+            for trozo in _trozos_del_crudo(conexion, cruda, desde, hasta, columnas):
+                parciales.append(_agrupado_parcial(_con_atributos(trozo, cruda, True), cruda))
+                inicio = 0
+                while inicio < len(trozo):
+                    if escritor is None or en_este_csv >= FILAS_POR_CSV:
+                        if escritor is not None:
+                            escritor.close()
+                        numero_csv += 1
+                        en_este_csv = 0
+                        escritor = zip_.open(f"Raw_Data_{numero_csv}.csv", "w")
+                        # BOM: sin el, Excel abre el CSV como ANSI y los
+                        # acentos ("Día", "Organización") salen rotos.
+                        escritor.write("\ufeff".encode("utf-8"))
+                        escritor.write((",".join(_csv_campo(c) for c in trozo.columns) + "\n").encode("utf-8"))
+                    cabe = min(FILAS_POR_CSV - en_este_csv, len(trozo) - inicio)
+                    pedazo = trozo.iloc[inicio:inicio + cabe]
+                    escritor.write(pedazo.to_csv(index=False, header=False).encode("utf-8"))
+                    en_este_csv += cabe
+                    inicio += cabe
+        finally:
+            if escritor is not None:
+                escritor.close()
+
+    agrupado = _juntar_agrupados(parciales)
+    agrupado.attrs["agrupado"] = True
+    agrupado.attrs["zip"] = ruta
+    logger.info("Crudo de %s en ZIP: %d filas, %.1f MB", cruda.tabla, filas, os.path.getsize(ruta) / 1e6)
+    return ruta, agrupado
+
+
+def _csv_campo(valor) -> str:
+    texto = str(valor)
+    return f'"{texto}"' if any(c in texto for c in ',"\n') else texto
+
+
+def _agrupado_parcial(trozo: pd.DataFrame, cruda: Cruda) -> pd.DataFrame:
+    """Lo agrupado de un trozo, con la clave para seguir sumando."""
+    unidades = cruda.unidades
+    clave = trozo[cruda.clave] if cruda.clave in trozo else trozo[cruda.etiqueta]
+    trabajo = pd.DataFrame({
+        "Region": trozo[COLUMNA_REGION],
+        "Tienda": trozo[cruda.etiqueta].astype(str),
+        "Clave": clave.where(clave.notna(), trozo[cruda.etiqueta]).astype(str),
+        "Marca": trozo[cruda.marca],
+        "Mes": trozo[COLUMNA_MES],
+        "Unidades": pd.to_numeric(trozo[unidades], errors="coerce"),
+    })
+    return (
+        trabajo.groupby(["Region", "Clave", "Marca", "Mes"], dropna=False, sort=False)
+        .agg(Tienda=("Tienda", "max"), Unidades=("Unidades", "sum"))
+        .reset_index()
+    )
+
+
+def _juntar_agrupados(parciales: list[pd.DataFrame]) -> pd.DataFrame:
+    if not parciales:
+        return pd.DataFrame(columns=["Region", "Tienda", "Marca", "Mes", "Unidades"])
+    todo = pd.concat(parciales, ignore_index=True)
+    return (
+        todo.groupby(["Region", "Clave", "Marca", "Mes"], dropna=False, sort=False)
+        .agg(Tienda=("Tienda", "max"), Unidades=("Unidades", "sum"))
+        .reset_index()[["Region", "Tienda", "Marca", "Mes", "Unidades"]]
+        .sort_values("Unidades", ascending=False, kind="stable")
+        .reset_index(drop=True)
+    )
+
+
 def agrupar_completo(completo: pd.DataFrame, cruda: Cruda) -> pd.DataFrame:
     """La hoja Datos: el Raw_Data completo agrupado por region, tienda, marca
     y mes, igual que ventas_crudas pero sin volver a consultar la base.
@@ -962,27 +1115,9 @@ def agrupar_completo(completo: pd.DataFrame, cruda: Cruda) -> pd.DataFrame:
     Se agrupa por la CLAVE de la tienda (el numero, estable) y se muestra su
     nombre, como en ventas_crudas: en Elektra la 6169 aparece como "EKT MEGA
     ZUMPANGO" y como "MEGA ZUMPANGO". Las filas IOT no traen clave; ahi la
-    clave es el nombre.
+    clave es el nombre. Es la misma cuenta que arma el ZIP por trozos.
     """
-    nombres = completo.attrs.get("pivot", {})
-    tienda, unidades = nombres.get("tienda", cruda.etiqueta), nombres.get("unidades", cruda.unidades)
-    trabajo = pd.DataFrame({
-        "Region": completo[COLUMNA_REGION],
-        "Tienda": completo[tienda].astype(str),
-        "Clave": (completo[cruda.clave] if cruda.clave in completo else completo[tienda])
-        .where(lambda s: s.notna(), completo[tienda]).astype(str),
-        "Marca": completo[cruda.marca],
-        "Mes": completo[COLUMNA_MES],
-        "Unidades": pd.to_numeric(completo[unidades], errors="coerce"),
-    })
-    agrupado = (
-        trabajo.groupby(["Region", "Clave", "Marca", "Mes"], dropna=False, sort=False)
-        .agg(Tienda=("Tienda", "max"), Unidades=("Unidades", "sum"))
-        .reset_index()[["Region", "Tienda", "Marca", "Mes", "Unidades"]]
-        .sort_values("Unidades", ascending=False, kind="stable")
-        .reset_index(drop=True)
-    )
-    return agrupado
+    return _juntar_agrupados([_agrupado_parcial(completo, cruda)])
 
 
 def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
@@ -1110,6 +1245,17 @@ def _datos_y_raw(engine, cruda: Cruda, rango, plazo) -> dict[str, pd.DataFrame]:
         if completo.attrs.get("solo_crudos"):
             return {"Raw_Data": completo}
         return {"Datos": agrupar_completo(completo, cruda), "Raw_Data": completo}
+    if completo is None:
+        # No cabe en un Excel que WhatsApp acepte: el detalle va en un ZIP de
+        # CSV (pedido el 5/10/2026) y el Excel lleva PIVOT y Datos. Sin plazo
+        # de consulta: se lee en trozos y el tiempo se va en bajar filas.
+        try:
+            with engine.connect() as conexion:
+                en_zip = crudo_en_zip(conexion, cruda, *rango)
+            if en_zip:
+                return {"Datos": en_zip[1]}
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo armar el ZIP del crudo; va agrupado")
     try:
         with engine.connect() as conexion, _con_plazo(conexion, plazo):
             agrupado = ventas_crudas(conexion, cruda, *rango)

@@ -27,6 +27,10 @@ class _Cursor:
     def fetchall(self):
         return self._filas
 
+    def fetchmany(self, n):
+        lote, self._filas = self._filas[:n], self._filas[n:]
+        return lote
+
     def scalar(self):
         return self._escalar
 
@@ -264,3 +268,34 @@ def test_att_dealers_y_cacs_son_una_sola_cadena():
     assert contexto.retailer_del_resultado(df, "") == "AT&T"
     varias = pd.DataFrame({"Retail": ["Coppel", "ELEKTRA"], "QTY": [1, 2]})
     assert contexto.retailer_del_resultado(varias, "") is None
+
+
+class TestLoQueNoCabeVaEnZip:
+    """El CSV zipeado pesa seis veces menos que el xlsx (Coppel enero-marzo:
+    8.4 MB contra 52.8): lo que no cabe en un Excel para WhatsApp va asi."""
+
+    def test_csv_repartidos_con_bom_y_datos_que_suman_igual(self, tmp_path, monkeypatch):
+        import zipfile
+
+        monkeypatch.setattr(contexto, "FILAS_POR_CSV", 2)
+        monkeypatch.setattr(contexto, "TROZO_DE_FILAS", 2)
+        filas = [
+            ("TELCEL SAMSUNG A17", 6169, 1, 2.0, "2026-01-05", "6169 MEGA ZUMPANGO", "Samsung", "R9"),
+            ("TELCEL SAMSUNG A17", 6169, 1, 3.0, "2026-01-06", "6169 MEGA ZUMPANGO", "Samsung", "R9"),
+            ("OPPO, A6 \"PRO\"", 9797, 2, 5.0, "2026-02-01", "9797 ELEKTRA.MX", "Oppo", "R9"),
+        ]
+        conexion = _Conexion(3, crudas=filas)
+        ruta, datos = contexto.crudo_en_zip(conexion, contexto.CRUDAS["ELEKTRA"], "a", "b", carpeta=str(tmp_path))
+
+        with zipfile.ZipFile(ruta) as z:
+            assert z.namelist() == ["Raw_Data_1.csv", "Raw_Data_2.csv"]
+            primero = z.read("Raw_Data_1.csv").decode("utf-8")
+            segundo = z.read("Raw_Data_2.csv").decode("utf-8")
+        assert primero.startswith("﻿Desc Sku,")  # BOM, para los acentos en Excel
+        assert segundo.count("\n") == 2  # encabezado + la tercera fila
+        assert '"OPPO, A6 ""PRO"""' in segundo  # comas y comillas escapadas
+        assert datos["Unidades"].sum() == 10 and datos.attrs["zip"] == ruta
+
+    def test_lo_que_no_cabe_ni_en_zip_regresa_none(self, tmp_path):
+        conexion = _Conexion(filas_en_periodo=20_000_000)  # x 10 col = 200 M
+        assert contexto.crudo_en_zip(conexion, contexto.CRUDAS["ELEKTRA"], "a", "b", carpeta=str(tmp_path)) is None

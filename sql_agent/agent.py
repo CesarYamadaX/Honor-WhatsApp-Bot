@@ -1522,6 +1522,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     crudo_partido = False
     crudos_agrupados = False
     solo_crudos = False
+    zip_del_crudo = None
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -1594,6 +1595,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             and "Datos" in contexto
             and bool(contexto["Datos"].attrs.get("agrupado"))
         )
+        # No cupo en Excel: el detalle completo va aparte, en un ZIP de CSV.
+        if crudos_agrupados:
+            zip_del_crudo = contexto["Datos"].attrs.get("zip")
         # Un pivot solo puede mirar UNA hoja. Si el crudo no cupo en una, la
         # hoja "Raw_Data" es apenas el primer trozo y el pivot estaria
         # resumiendo una parte sin decirlo -- justo lo que se viene
@@ -1623,7 +1627,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
 
     # La grafica va primero: en el chat se ve de un vistazo, y el Excel queda
     # debajo para quien quiera el detalle.
-    ctx.registrar_reporte(imagen, excel)
+    ctx.registrar_reporte(imagen, excel, zip_del_crudo)
 
     # Que mas se puede preguntar sobre esto. Se queda con las de la PRIMERA
     # consulta, que es la que responde la pregunta: las de despues salen de
@@ -1673,7 +1677,15 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "una linea, y que el archivo puede tardar en abrir."
         )
 
-    if crudos_agrupados:
+    if zip_del_crudo:
+        partes.append(
+            "OJO: el detalle completo es demasiado grande para un Excel que "
+            "WhatsApp acepte, asi que va aparte en un ZIP con archivos CSV "
+            "(uno por cada millon de filas, se abren con Excel), y el Excel "
+            "lleva el PIVOT y la hoja 'Datos' agrupada. Diselo al usuario en "
+            "una linea."
+        )
+    elif crudos_agrupados:
         partes.append(
             "OJO: el detalle crudo de este periodo es demasiado grande para "
             "mandarse por WhatsApp, asi que el Excel lleva el PIVOT y la hoja "

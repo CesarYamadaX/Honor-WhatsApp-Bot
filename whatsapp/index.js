@@ -26,7 +26,7 @@ import { trocear } from "./chunk.js";
 import { RegistroDeVistos } from "./dedupe.js";
 import { atenderPorChat } from "./repartir.js";
 import { aFormatoWhatsApp } from "./markdown.js";
-import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio } from "./notasDeVoz.js";
+import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio, tipoDeDocumento } from "./notasDeVoz.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://127.0.0.1:8000";
@@ -237,7 +237,7 @@ async function enviarArchivo(jid, ruta, idioma) {
     : await socketActual.sendMessage(jid, {
         document: contenido,
         fileName: path.basename(ruta),
-        mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mimetype: tipoDeDocumento(ruta),
       });
   return enviado?.key?.id ? [enviado.key.id] : [];
 }
