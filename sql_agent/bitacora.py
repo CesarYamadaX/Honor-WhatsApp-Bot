@@ -20,6 +20,7 @@ las pruebas) no hace nada.
 import json
 import secrets
 import threading
+import unicodedata
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,6 +53,20 @@ def _nuevo_id() -> str:
     """'20261005-143012-a1b2c3': el dia va adelante para saber en que
     archivo buscarlo sin leer toda la historia."""
     return f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
+
+
+def _sin_acentos(texto: str) -> str:
+    """Minusculas y sin acentos, caracter por caracter: el resultado mide lo
+    mismo que el original, asi que una posicion en uno vale en el otro."""
+    return "".join(unicodedata.normalize("NFKD", c)[:1] or c for c in texto).casefold()
+
+
+def _fragmento(original: str, posicion: int, largo: int, alrededor: int = 60) -> str:
+    """El pedazo de texto alrededor de una coincidencia, en una sola linea."""
+    inicio = max(0, posicion - alrededor)
+    fin = min(len(original), posicion + largo + alrededor)
+    pedazo = " ".join(original[inicio:fin].split())
+    return ("…" if inicio > 0 else "") + pedazo + ("…" if fin < len(original) else "")
 
 
 def _recortar(texto: str, tope: int) -> str:
@@ -194,6 +209,38 @@ class Bitacora:
             except json.JSONDecodeError:
                 continue
         return turnos
+
+    def buscar_texto(self, texto: str, limite: int = 100) -> list[dict]:
+        """Que conversaciones dicen `texto`, en la pregunta o en la respuesta.
+
+        Sin distinguir mayusculas ni acentos: "telefono" encuentra
+        "Teléfono". Un renglon por chat, el de la coincidencia mas reciente
+        primero, con cuantas tiene y un pedazo del texto alrededor de la
+        ultima, para que el panel muestre por que salio.
+        """
+        buscado = _sin_acentos(" ".join((texto or "").split()))
+        if len(buscado) < 2:
+            return []
+        por_chat: dict[str, dict] = {}
+        for archivo in self._archivos():
+            for turno in self._leer(archivo):
+                for campo in ("pregunta", "respuesta"):
+                    original = turno.get(campo) or ""
+                    plano = _sin_acentos(original)
+                    if buscado not in plano:
+                        continue
+                    chat = turno.get("chat_id", "")
+                    fila = por_chat.setdefault(
+                        chat, {"chat_id": chat, "coincidencias": 0, "ultimo": ""}
+                    )
+                    fila["coincidencias"] += plano.count(buscado)
+                    if turno.get("inicio", "") >= fila["ultimo"]:
+                        fila["ultimo"] = turno.get("inicio", "")
+                        fila["turno"] = turno.get("id", "")
+                        fila["campo"] = campo
+                        fila["fragmento"] = _fragmento(original, plano.index(buscado), len(buscado))
+        filas = sorted(por_chat.values(), key=lambda f: f["ultimo"], reverse=True)
+        return filas[:limite]
 
     def buscar(self, turno_id: str) -> dict | None:
         """Un turno ya terminado por su id, o None.

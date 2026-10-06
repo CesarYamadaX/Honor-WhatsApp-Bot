@@ -743,6 +743,17 @@ def crear_app(
             "total": diario.cuantos(chat_id),
         }
 
+    @app.get("/panel/buscar")
+    async def buscar_en_conversaciones(texto: str = "", limite: int = 100) -> dict:
+        """Que conversaciones dicen una palabra u oracion (pregunta o respuesta)."""
+        _solo_local()
+        if len(texto) > 200:
+            raise HTTPException(status_code=413, detail="Busqueda demasiado larga")
+        chats = await run_in_threadpool(
+            diario.buscar_texto, texto, max(1, min(limite, 500))
+        )
+        return {"chats": chats}
+
     @app.post("/panel/traducir")
     async def traducir_para_el_panel(peticion: ParaTraducir) -> dict:
         """Traduce al idioma del panel una pregunta y su respuesta.

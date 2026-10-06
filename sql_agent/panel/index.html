@@ -493,6 +493,15 @@
 
   .vacio { color: var(--tinta-2); text-align: center; padding: 46px 20px; font-size: 14px; }
 
+  /* --- busqueda en las conversaciones --- */
+  mark.hallazgo { background: var(--aviso-suave); color: inherit; border-radius: 3px; padding: 0 1px; }
+  .burbuja mark.hallazgo { background: #ffd54f; color: #111b21; }
+  .seccion-busqueda {
+    padding: 10px 16px 4px; font-size: 12px; font-weight: 600; color: var(--tinta-2);
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .buscando { padding: 10px 16px; font-size: 13px; color: var(--tinta-2); }
+
   /* --- calificaciones --- */
   .filtros-calif { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--borde); }
   .filtros-calif button {
@@ -568,7 +577,7 @@
     <div class="herramientas">
       <div class="buscador">
         <svg width="17" height="17" viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
-        <input id="buscar" type="search" placeholder="Buscar un número" aria-label="Buscar un número" data-t-ph="buscar_numero">
+        <input id="buscar" type="search" placeholder="Buscar nombre, número o palabras" aria-label="Buscar" data-t-ph="buscar_chats">
       </div>
       <div class="solapas" role="tablist">
         <button role="tab" id="tab-chats" aria-selected="true" aria-controls="lista">
@@ -682,6 +691,11 @@ const TEXTOS = {
     cuenta_logs: (n) => `${n} error${n === 1 ? "" : "es"} hoy`,
     cuenta_calificaciones: (n) => `${n} respuesta${n === 1 ? "" : "s"} con 👎`,
     buscar_numero: "Buscar un número",
+    buscar_chats: "Buscar nombre, número o palabras",
+    por_nombre: "Nombre o número",
+    en_conversaciones: "En las conversaciones",
+    buscando: "Buscando en las conversaciones…",
+    nada_coincide: (q) => `Nada coincide con «${q}».`,
     buscar_usuario: "Buscar un usuario",
     volver: "Volver a la lista",
     elige: "Elige una conversación",
@@ -795,6 +809,11 @@ const TEXTOS = {
     cuenta_logs: (n) => `${n} error${n === 1 ? "" : "s"} today`,
     cuenta_calificaciones: (n) => `${n} answer${n === 1 ? "" : "s"} rated 👎`,
     buscar_numero: "Search a number",
+    buscar_chats: "Search name, number or words",
+    por_nombre: "Name or number",
+    en_conversaciones: "In the conversations",
+    buscando: "Searching the conversations…",
+    nada_coincide: (q) => `Nothing matches “${q}”.`,
     buscar_usuario: "Search a user",
     volver: "Back to the list",
     elige: "Pick a conversation",
@@ -969,6 +988,12 @@ let chatElegido = null;
 let turnosCargados = 0;
 let quedanAnteriores = false;
 let filtro = "";
+// Busqueda en la solapa de chats: por nombre guardado, por numero y por lo
+// que se dijo en la conversacion (pedido el 6/10/2026; antes solo numero).
+let busqueda = "";
+let resultadosTexto = null;   // null = todavia no contesta el servicio
+let temporizadorBusqueda = null;
+let resaltar = "";            // lo que se resalta al abrir un chat desde la busqueda
 let cacheChats = [];
 let cacheUsuarios = [];
 let enCursoPorChat = new Map();
@@ -1128,11 +1153,14 @@ function pintarListaChats(caja) {
     caja.append(fijado);
   }
 
-  const visibles = cacheChats.filter((c) => soloNumero(c.chat_id).includes(filtro));
+  if (busqueda) {
+    pintarResultadosDeBusqueda(caja);
+    return;
+  }
+
+  const visibles = cacheChats;
   if (!visibles.length) {
-    caja.append(
-      elemento("div", "vacio", filtro ? t("sin_coincidencias") : t("sin_conversaciones")),
-    );
+    caja.append(elemento("div", "vacio", t("sin_conversaciones")));
     return;
   }
 
@@ -1161,6 +1189,130 @@ function pintarListaChats(caja) {
     fila.addEventListener("click", () => abrirChat(chat.chat_id).catch((e) => mostrarError(e.message)));
     caja.append(fila);
   }
+}
+
+// Minusculas y sin acentos, letra por letra: mide lo mismo que el original,
+// asi que una posicion en uno vale en el otro (para resaltar).
+function sinAcentos(texto) {
+  let plano = "";
+  for (const letra of String(texto ?? "")) {
+    const base = letra.normalize("NFD")[0] || letra;
+    plano += base.length === letra.length ? base.toLowerCase() : letra.toLowerCase();
+  }
+  return plano;
+}
+
+// El texto con cada aparicion de `buscado` envuelta en <mark>, nodo por nodo.
+function conHallazgos(texto, buscado) {
+  const trozo = document.createDocumentFragment();
+  const original = String(texto ?? "");
+  const plano = sinAcentos(original);
+  const aguja = sinAcentos(buscado);
+  let desde = 0;
+  let donde = aguja ? plano.indexOf(aguja) : -1;
+  while (donde >= 0) {
+    if (donde > desde) trozo.append(document.createTextNode(original.slice(desde, donde)));
+    trozo.append(elemento("mark", "hallazgo", original.slice(donde, donde + aguja.length)));
+    desde = donde + aguja.length;
+    donde = plano.indexOf(aguja, desde);
+  }
+  if (desde < original.length) trozo.append(document.createTextNode(original.slice(desde)));
+  return trozo;
+}
+
+function filaDeChat(chat, { fragmento, coincidencias, cuando } = {}) {
+  const fila = elemento("button", "renglon");
+  fila.type = "button";
+  if (chat.chat_id === chatElegido && vista === "chat") fila.setAttribute("aria-current", "true");
+  const ficha = fichaDe(chat.chat_id);
+  const titulo = elemento("span", "titulo");
+  titulo.append(conHallazgos(ficha?.nombre || soloNumero(chat.chat_id), busqueda));
+  const arriba = elemento("div", "arriba");
+  arriba.append(titulo, elemento("span", "hora", cuandoEnLista(cuando || chat.ultimo)));
+  const previa = elemento("span", "vista-previa");
+  // Sin los ** de las negritas: en una linea de vista previa estorban.
+  previa.append(conHallazgos(String(fragmento ?? chat.ultima_pregunta ?? "").replaceAll("**", ""), busqueda));
+  const abajo = elemento("div", "abajo");
+  abajo.append(previa, elemento("span", "globo", String(coincidencias ?? chat.turnos ?? "")));
+  const centro = elemento("div", "centro");
+  centro.append(arriba, abajo);
+  fila.append(avatar(chat.chat_id, "", ficha?.foto), centro);
+  fila.addEventListener("click", () => {
+    resaltar = fragmento ? busqueda : "";
+    abrirChat(chat.chat_id).catch((e) => mostrarError(e.message));
+  });
+  return fila;
+}
+
+function pintarResultadosDeBusqueda(caja) {
+  const plano = sinAcentos(busqueda);
+  const digitos = busqueda.replace(/\D/g, "");
+  const soloDigitos = digitos && digitos === busqueda.replace(/[\s+()-]/g, "");
+  const porTexto = new Map((resultadosTexto || []).map((r) => [r.chat_id, r]));
+
+  // Primero por nombre guardado o por numero; si ademas lo dijo, con el pedazo.
+  const porNombre = cacheChats.filter((c) => {
+    const nombre = sinAcentos(fichaDe(c.chat_id)?.nombre || "");
+    return (nombre && nombre.includes(plano)) || (soloDigitos && soloNumero(c.chat_id).includes(digitos));
+  });
+  const yaListados = new Set(porNombre.map((c) => c.chat_id));
+  if (porNombre.length) {
+    caja.append(elemento("div", "seccion-busqueda", t("por_nombre")));
+    for (const chat of porNombre) {
+      const hallazgo = porTexto.get(chat.chat_id);
+      caja.append(filaDeChat(chat, hallazgo ? {
+        fragmento: hallazgo.fragmento, coincidencias: hallazgo.coincidencias, cuando: hallazgo.ultimo,
+      } : {}));
+    }
+  }
+
+  const soloTexto = (resultadosTexto || []).filter((r) => !yaListados.has(r.chat_id));
+  if (soloTexto.length) {
+    caja.append(elemento("div", "seccion-busqueda", t("en_conversaciones")));
+    for (const hallazgo of soloTexto) {
+      const chat = cacheChats.find((c) => c.chat_id === hallazgo.chat_id) || { chat_id: hallazgo.chat_id };
+      caja.append(filaDeChat(chat, {
+        fragmento: hallazgo.fragmento, coincidencias: hallazgo.coincidencias, cuando: hallazgo.ultimo,
+      }));
+    }
+  }
+
+  if (resultadosTexto === null && busqueda.length >= 2) {
+    caja.append(elemento("div", "buscando", t("buscando")));
+  } else if (!porNombre.length && !soloTexto.length) {
+    caja.append(elemento("div", "vacio", t("nada_coincide", busqueda)));
+  }
+}
+
+// En el chat abierto desde la busqueda: resalta lo buscado y lleva al primero.
+function resaltarEnChat(caja) {
+  if (!resaltar) return;
+  for (const texto of caja.querySelectorAll(".texto-burbuja")) {
+    if (!sinAcentos(texto.textContent).includes(sinAcentos(resaltar))) continue;
+    for (const nodo of [...texto.childNodes]) {
+      if (nodo.nodeType === Node.TEXT_NODE) {
+        nodo.replaceWith(conHallazgos(nodo.textContent, resaltar));
+      } else if (nodo.nodeName === "STRONG") {
+        const contenido = nodo.textContent;
+        nodo.replaceChildren(conHallazgos(contenido, resaltar));
+      }
+    }
+  }
+  const marcas = caja.querySelectorAll("mark.hallazgo");
+  if (marcas.length) marcas[marcas.length - 1].scrollIntoView({ block: "center" });
+}
+
+async function buscarEnConversaciones(texto) {
+  try {
+    const datos = await pedir(`/panel/buscar?texto=${encodeURIComponent(texto)}`);
+    if (texto !== busqueda) return;  // ya escribieron otra cosa
+    resultadosTexto = datos.chats;
+  } catch (error) {
+    if (texto !== busqueda) return;
+    resultadosTexto = [];
+    mostrarError(error.message);
+  }
+  if (solapa === "chats") pintarLista();
 }
 
 function pintarListaUsuarios(caja) {
@@ -1254,6 +1406,7 @@ async function abrirChat(chatId) {
   pintarTurnos(caja, datos.turnos, null);
   pintarBotonDeAnteriores(caja);
   caja.scrollTop = caja.scrollHeight;
+  resaltarEnChat(caja);
 }
 
 // Del mas viejo al mas nuevo, como se lee una conversacion. Devuelve el dia
@@ -2107,7 +2260,10 @@ function aplicarIdioma() {
 /* -------------------------------------------------------- solapas y latido */
 
 function placeholderDeSolapa() {
-  return solapa === "usuarios" ? "buscar_usuario" : solapa === "logs" ? "buscar_log" : "buscar_numero";
+  if (solapa === "usuarios") return "buscar_usuario";
+  if (solapa === "logs") return "buscar_log";
+  if (solapa === "chats") return "buscar_chats";
+  return "buscar_numero";
 }
 
 function elegirSolapa(cual) {
@@ -2120,8 +2276,12 @@ function elegirSolapa(cual) {
   // escrito en una no tiene sentido en la otra.
   $("buscar").value = "";
   filtro = "";
+  busqueda = "";
+  resultadosTexto = null;
+  resaltar = "";
   filtroLog = "";
   $("buscar").placeholder = t(placeholderDeSolapa());
+  $("buscar").dataset.tPh = placeholderDeSolapa();
   pintarLista();
   if (cual === "usuarios") abrirUsuarios();
   if (cual === "calificaciones") cargarCalificaciones().catch((e) => mostrarError(e.message));
@@ -2147,6 +2307,22 @@ $("buscar").addEventListener("input", (evento) => {
   if (solapa === "logs") {
     filtroLog = evento.target.value.trim().toLowerCase();
     if (vista === "logs") pintarLog();
+    return;
+  }
+  if (solapa === "chats") {
+    busqueda = evento.target.value.trim();
+    resultadosTexto = null;
+    if (!busqueda) resaltar = "";
+    clearTimeout(temporizadorBusqueda);
+    if (busqueda.length >= 2) {
+      // Se espera a que deje de escribir: una busqueda por tecla seria
+      // releer la bitacora entera cada 100 ms.
+      const pedido = busqueda;
+      temporizadorBusqueda = setTimeout(() => buscarEnConversaciones(pedido), 300);
+    } else {
+      resultadosTexto = [];
+    }
+    pintarLista();
     return;
   }
   filtro = evento.target.value.replace(/\D/g, "");
