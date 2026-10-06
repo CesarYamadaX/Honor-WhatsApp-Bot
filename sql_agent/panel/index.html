@@ -405,18 +405,64 @@
   button.principal:hover { filter: brightness(1.08); }
   button.principal:focus-visible { outline: 2px solid var(--tinta); outline-offset: 2px; }
 
+  /* Resumen de arriba: cuatro numeros que tambien filtran la lista. */
+  .resumen-usuarios {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 22px;
+  }
+  button.cifra {
+    font: inherit; text-align: left; cursor: pointer; color: var(--tinta);
+    background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: 10px;
+    padding: 11px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  }
+  button.cifra .numero { font-size: 22px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  button.cifra .que { font-size: 12.5px; color: var(--tinta-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  button.cifra:hover { border-color: var(--acento); }
+  button.cifra[aria-pressed="true"] { border-color: var(--acento); background: var(--ok-suave); }
+  button.cifra[aria-pressed="true"] .que { color: var(--acento-fuerte); }
+  button.cifra:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  button.cifra.suspendidos .numero { color: var(--aviso); }
+
+  .cabeza-lista { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .cabeza-lista .cuenta { font-size: 12.5px; color: var(--tinta-2); }
+
+  .tarjeta-alta {
+    margin-top: 30px; border: 1px dashed var(--borde-fuerte); border-radius: 12px; padding: 16px 18px 14px;
+  }
+  .tarjeta-alta .acceso { margin-top: 12px; }
+  .tarjeta-alta p.nota { margin: 12px 0 0; font-size: 12.5px; }
+
   .persona {
     display: flex; align-items: center; gap: 13px;
-    padding: 12px 2px; border-bottom: 1px solid var(--borde);
+    padding: 13px 4px; border-bottom: 1px solid var(--borde);
   }
+  .persona:last-child { border-bottom: none; }
+  .persona.suspendida .avatar, .persona.suspendida .nombre-persona { opacity: .55; }
   .persona .datos { flex: 1; min-width: 0; }
   .persona .quien { font-size: 15px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-  .persona .cuando { color: var(--tinta-2); font-size: 12.5px; }
+  .persona .nombre-persona { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .persona .cuando { color: var(--tinta-2); font-size: 12.5px; margin-top: 1px; }
+  .persona .cuando .reciente { color: var(--acento-fuerte); }
+  .persona .rotulo-campo { display: block; font-size: 12px; color: var(--tinta-2); margin: 12px 0 4px; }
+  .persona .rotulo-campo:first-child { margin-top: 0; }
+  .persona .pie-edicion {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--borde-fuerte);
+  }
+  .persona .pie-edicion .hueco { flex: 1; }
+  .persona .pie-edicion button.accion.peligro { color: var(--alto); border-color: transparent; padding-left: 4px; }
+  .persona .pie-edicion button.accion.peligro:hover { border-color: var(--alto); padding-left: 10px; }
+  button.avatar-boton { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
+  button.avatar-boton:focus-visible { outline: 2px solid var(--acento); outline-offset: 3px; border-radius: 8px; }
+  .persona.editando .avatar-boton { display: flex; flex-direction: column; align-items: center; gap: 5px; align-self: flex-start; }
+  .persona.editando .avatar-boton span { font-size: 11.5px; color: var(--acento-fuerte); }
   .pastilla { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 11px; white-space: nowrap; }
   .pastilla.activo { background: var(--ok-suave); color: var(--acento-fuerte); }
   .pastilla.suspendido { background: var(--aviso-suave); color: var(--aviso); }
   .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  .persona.editando { background: var(--barra); border-radius: 8px; padding: 12px; }
+  .persona.editando {
+    background: var(--barra); border-radius: 12px; padding: 16px; margin: 6px 0;
+    border-bottom: none; align-items: flex-start;
+  }
   .persona input.nombre {
     font: inherit; font-size: 15px; width: 100%;
     border: none; border-bottom: 2px solid var(--acento);
@@ -425,8 +471,8 @@
   .persona input.nombre:focus-visible { outline: none; }
   .persona .pista { color: var(--tinta-2); font-size: 12.5px; margin-top: 3px; }
   /* Que cadenas ve cada quien: en la ficha, y para elegirlas al editar. */
-  .persona .acceso { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
-  .persona .acceso .rotulo { color: var(--tinta-2); font-size: 12px; margin-right: 2px; }
+  .acceso { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+  .acceso .rotulo { color: var(--tinta-2); font-size: 12px; margin-right: 2px; }
   .pastilla.cadena { background: none; border: 1px solid var(--borde-fuerte); color: var(--tinta-2); font-weight: 500; }
   .pastilla.cadena.limitada { border-color: var(--acento); color: var(--acento-fuerte); }
   button.opcion-cadena {
@@ -564,6 +610,9 @@
     .persona { flex-wrap: wrap; }
     .persona .datos { flex-basis: calc(100% - 60px); }
     .persona .acciones { width: 100%; }
+    .resumen-usuarios { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    button.cifra { padding: 9px 12px; }
+    button.cifra .numero { font-size: 19px; }
   }
 </style>
 </head>
@@ -654,22 +703,30 @@
 
     <div class="hoja" id="vista-usuarios" hidden>
       <div class="hoja-interior">
-        <h2 data-t="dar_de_alta">Dar de alta</h2>
-        <p class="nota" data-t="nota_usuarios"></p>
-        <form class="alta" id="form-alta">
-          <label class="campo">
-            <span data-t="campo_numero">Número con lada de país</span>
-            <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
-          </label>
-          <label class="campo">
-            <span data-t="campo_nombre">Nombre (opcional)</span>
-            <input id="alta-nombre" placeholder="Laura, ventas">
-          </label>
-          <button class="principal" type="submit" data-t="agregar">Agregar</button>
-        </form>
+        <div class="resumen-usuarios" id="resumen-usuarios" role="group"></div>
 
-        <h2 class="separada" data-t="quien_puede">Quién puede usar el bot</h2>
+        <div class="cabeza-lista">
+          <h2 data-t="quien_puede">Quién puede usar el bot</h2>
+          <span class="cuenta" id="cuenta-personas"></span>
+        </div>
         <div id="personas"></div>
+
+        <section class="tarjeta-alta">
+          <h2 data-t="dar_de_alta">Dar de alta</h2>
+          <form class="alta" id="form-alta">
+            <label class="campo">
+              <span data-t="campo_numero">Número con lada de país</span>
+              <input id="alta-numero" inputmode="numeric" placeholder="5215512345678" required>
+            </label>
+            <label class="campo">
+              <span data-t="campo_nombre">Nombre (opcional)</span>
+              <input id="alta-nombre" placeholder="Laura, ventas">
+            </label>
+            <button class="principal" type="submit" data-t="agregar">Agregar</button>
+          </form>
+          <div id="alta-cadenas"></div>
+          <p class="nota" data-t="nota_usuarios"></p>
+        </section>
       </div>
     </div>
 
@@ -776,6 +833,17 @@ const TEXTOS = {
       "Vale desde su siguiente mensaje.",
     alta: (fecha) => `alta ${fecha}`,
     estado: { activo: "activo", suspendido: "suspendido" },
+    cifra_todos: "Usuarios",
+    cifra_activos: "Activos",
+    cifra_suspendidos: "Suspendidos",
+    cifra_limitados: "Con acceso limitado",
+    cuenta_filtro: (n, total) => (n === total ? "" : `${n} de ${total}`),
+    nadie_en_filtro: "Nadie en este grupo.",
+    ultimo_mensaje: (cuando) => `último mensaje ${cuando}`,
+    sin_mensajes: "sin mensajes todavía",
+    hoy_corto: "hoy",
+    rotulo_nombre: "Nombre",
+    foto: "Foto",
     confirmar_suspender: (quien) =>
       `Suspender a ${quien}.\n\nDeja de recibir respuestas del bot, en silencio: ` +
       "no se entera de que fue suspendido. Puedes devolverle el acceso cuando quieras.",
@@ -898,6 +966,17 @@ const TEXTOS = {
       "Applies from their next message.",
     alta: (fecha) => `added ${fecha}`,
     estado: { activo: "active", suspendido: "suspended" },
+    cifra_todos: "Users",
+    cifra_activos: "Active",
+    cifra_suspendidos: "Suspended",
+    cifra_limitados: "Limited access",
+    cuenta_filtro: (n, total) => (n === total ? "" : `${n} of ${total}`),
+    nadie_en_filtro: "Nobody in this group.",
+    ultimo_mensaje: (cuando) => `last message ${cuando}`,
+    sin_mensajes: "no messages yet",
+    hoy_corto: "today",
+    rotulo_nombre: "Name",
+    foto: "Photo",
     confirmar_suspender: (quien) =>
       `Suspend ${quien}.\n\nThey stop getting answers from the bot, silently: ` +
       "they are not told they were suspended. You can give the access back whenever you want.",
@@ -1359,7 +1438,7 @@ function pintarListaUsuarios(caja) {
     fila.type = "button";
     const centro = elemento("div", "centro");
     const arriba = elemento("div", "arriba");
-    arriba.append(elemento("span", "titulo", usuario.nombre || usuario.numero));
+    arriba.append(elemento("span", "titulo", quienEs(usuario)));
     const abajo = elemento("div", "abajo");
     // Sin nombre, el numero ya es el titulo: repetirlo o poner "sin nombre"
     // no dice nada. Se muestra cuando entro a la lista.
@@ -1367,7 +1446,7 @@ function pintarListaUsuarios(caja) {
       elemento(
         "span",
         "vista-previa",
-        usuario.nombre ? usuario.numero : t("alta", (usuario.creado || "").slice(0, 10)),
+        usuario.nombre ? numeroLegible(usuario.numero) : t("alta", fechaCorta(usuario.creado)),
       ),
       elemento("span", `pastilla ${usuario.estado}`, t("estado")[usuario.estado] || usuario.estado),
     );
@@ -1718,82 +1797,175 @@ function abrirUsuarios() {
 
 // El numero del usuario que se esta editando, o null.
 let editando = null;
+// Que grupo muestra la lista: todos, activo, suspendido o limitado. Lo
+// cambian las cifras de arriba.
+let grupoDePersonas = "todos";
+// Las cadenas elegidas en el formulario de alta. Vacio = todas.
+const cadenasDeAlta = new Set();
+
+// 5215564532268 -> +52 1 55 6453 2268. Solo da formato a los de Mexico,
+// que son todos los de hoy; cualquier otro se muestra con su + y nada mas.
+function numeroLegible(numero) {
+  const n = soloNumero(numero);
+  const m = n.match(/^52(1?)(\d{2})(\d{4})(\d{4})$/);
+  if (!m) return n ? `+${n}` : "";
+  return `+52 ${m[1] ? "1 " : ""}${m[2]} ${m[3]} ${m[4]}`;
+}
+
+function fechaCorta(iso) {
+  const f = fecha(iso);
+  return f ? f.toLocaleDateString(localeDeFecha(), { day: "numeric", month: "short", year: "numeric" }) : "";
+}
+
+// Cuando escribio por ultima vez, de la lista de conversaciones.
+function ultimoMensajeDe(numero) {
+  const chat = cacheChats.find((c) => soloNumero(c.chat_id) === numero);
+  return chat?.ultimo || null;
+}
+
+function quienEs(usuario) {
+  return usuario.nombre || numeroLegible(usuario.numero);
+}
+
+function enGrupo(usuario, grupo) {
+  if (grupo === "activo" || grupo === "suspendido") return usuario.estado === grupo;
+  if (grupo === "limitado") return (usuario.cadenas || []).length > 0;
+  return true;
+}
 
 function pintarPersonas() {
+  pintarCifras();
   const caja = $("personas");
   caja.replaceChildren();
+  const alta = $("alta-cadenas");
+  alta.replaceChildren(selectorDeCadenas(cadenasDeAlta));
+
+  // Activos primero y, dentro, por nombre: es el orden en que se buscan.
+  const ordenados = [...cacheUsuarios].sort((a, b) =>
+    (a.estado === "activo" ? 0 : 1) - (b.estado === "activo" ? 0 : 1)
+    || quienEs(a).localeCompare(quienEs(b), localeDeFecha()));
+  const visibles = ordenados.filter((u) => enGrupo(u, grupoDePersonas));
+  $("cuenta-personas").textContent = t("cuenta_filtro", visibles.length, cacheUsuarios.length);
   if (!cacheUsuarios.length) {
     caja.append(elemento("div", "vacio", t("sin_usuarios")));
     return;
   }
-  for (const usuario of cacheUsuarios) {
+  if (!visibles.length) {
+    caja.append(elemento("div", "vacio", t("nadie_en_filtro")));
+    return;
+  }
+  for (const usuario of visibles) {
     caja.append(usuario.numero === editando ? fichaEditable(usuario) : fichaDeUsuario(usuario));
+  }
+}
+
+function pintarCifras() {
+  const caja = $("resumen-usuarios");
+  caja.replaceChildren();
+  const cifras = [
+    ["todos", "cifra_todos", cacheUsuarios.length],
+    ["activo", "cifra_activos", cacheUsuarios.filter((u) => enGrupo(u, "activo")).length],
+    ["suspendido", "cifra_suspendidos", cacheUsuarios.filter((u) => enGrupo(u, "suspendido")).length],
+    ["limitado", "cifra_limitados", cacheUsuarios.filter((u) => enGrupo(u, "limitado")).length],
+  ];
+  for (const [grupo, clave, n] of cifras) {
+    const b = elemento("button", `cifra ${grupo === "suspendido" && n ? "suspendidos" : ""}`.trim());
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(grupoDePersonas === grupo));
+    b.append(elemento("span", "numero", String(n)), elemento("span", "que", t(clave)));
+    b.addEventListener("click", () => {
+      // Volver a tocar el grupo elegido regresa a todos.
+      grupoDePersonas = grupoDePersonas === grupo ? "todos" : grupo;
+      pintarPersonas();
+    });
+    caja.append(b);
   }
 }
 
 function fichaEditable(usuario) {
   const fila = elemento("div", "persona editando");
 
-  const retrato = elemento("button", "avatar");
+  const retrato = elemento("button", "avatar-boton");
   retrato.type = "button";
   retrato.title = t("cambiar_foto");
-  retrato.append(avatar(usuario.numero, "", usuario.foto));
+  retrato.setAttribute("aria-label", t("cambiar_foto"));
+  retrato.append(avatar(usuario.numero, "", usuario.foto), elemento("span", null, t("foto")));
   retrato.addEventListener("click", () => elegirFoto(usuario));
 
   const datos = elemento("div", "datos");
   // Vacio = todas, igual que en el servicio.
   const elegidas = new Set(usuario.cadenas || []);
   const guardar = () => guardarFicha(usuario, campo.value, elegidas);
+  const cerrar = () => { editando = null; pintarPersonas(); };
+
+  const rotulo = elemento("label", "rotulo-campo", t("rotulo_nombre"));
+  rotulo.htmlFor = `nombre-${usuario.numero}`;
   const campo = document.createElement("input");
   campo.className = "nombre";
   campo.id = `nombre-${usuario.numero}`;
   campo.value = usuario.nombre || "";
   campo.placeholder = t("ph_nombre");
-  campo.setAttribute("aria-label", `Nombre de ${usuario.numero}`);
   campo.addEventListener("keydown", (evento) => {
     if (evento.key === "Enter") guardar();
-    if (evento.key === "Escape") { editando = null; pintarPersonas(); }
+    if (evento.key === "Escape") cerrar();
   });
+
+  const pie = elemento("div", "pie-edicion");
+  pie.append(boton(t("eliminar"), "tache", () => eliminar(usuario), "peligro"));
+  pie.append(elemento("span", "hueco"));
+  if (usuario.foto) {
+    pie.append(boton(t("quitar_foto"), "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
+  }
+  pie.append(
+    boton(t("cancelar"), "tache", cerrar),
+    boton(t("guardar"), "palomita", guardar, "buena"),
+  );
+
   datos.append(
+    rotulo,
     campo,
-    elemento("div", "pista", t("pista_foto", usuario.numero)),
+    elemento("div", "pista", numeroLegible(usuario.numero)),
     selectorDeCadenas(elegidas),
     elemento("div", "pista", t("pista_cadenas")),
+    pie,
   );
 
-  const acciones = elemento("div", "acciones");
-  acciones.append(boton(t("guardar"), "palomita", guardar, "buena"));
-  if (usuario.foto) {
-    acciones.append(boton(t("quitar_foto"), "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
-  }
-  acciones.append(
-    boton(t("cancelar"), "tache", () => { editando = null; pintarPersonas(); }),
-  );
-
-  fila.append(retrato, datos, acciones);
+  fila.append(retrato, datos);
   // Enfocar despues de montar: sobre un nodo suelto no hace nada.
   queueMicrotask(() => campo.focus());
   return fila;
 }
 
 function fichaDeUsuario(usuario) {
-  const fila = elemento("div", "persona");
+  const fila = elemento("div", `persona ${usuario.estado === "activo" ? "" : "suspendida"}`.trim());
   const datos = elemento("div", "datos");
   const quien = elemento("div", "quien");
   quien.append(
-    elemento("span", null, usuario.nombre || usuario.numero),
+    elemento("span", "nombre-persona", quienEs(usuario)),
     elemento("span", `pastilla ${usuario.estado}`, t("estado")[usuario.estado] || usuario.estado),
   );
-  const cuando =
-    usuario.estado === "suspendido" && usuario.suspendido_hasta
-      ? `suspendido hasta el ${usuario.suspendido_hasta}`
-      : usuario.nombre
-        ? `${usuario.numero} · ${t("alta", (usuario.creado || "").slice(0, 10))}`
-        : t("alta", (usuario.creado || "").slice(0, 10));
-  datos.append(quien, elemento("div", "cuando", cuando), lineaDeAcceso(usuario));
 
-  // Dos acciones y no tres: suspender y bloquear hacian casi lo mismo y en
-  // la fila no se distinguian de un vistazo.
+  // Numero (si el titulo ya es el nombre) · ultimo mensaje · alta.
+  const cuando = elemento("div", "cuando");
+  const partes = [];
+  if (usuario.nombre) partes.push(document.createTextNode(numeroLegible(usuario.numero)));
+  const ultimo = ultimoMensajeDe(usuario.numero);
+  if (ultimo) {
+    const hoy = fecha(ultimo)?.toDateString() === new Date().toDateString();
+    const cuandoFue = hoy ? `${t("hoy_corto")} ${horaCorta(ultimo)}` : fechaCorta(ultimo);
+    partes.push(elemento("span", hoy ? "reciente" : null, t("ultimo_mensaje", cuandoFue)));
+  } else {
+    partes.push(document.createTextNode(t("sin_mensajes")));
+  }
+  partes.push(document.createTextNode(t("alta", fechaCorta(usuario.creado))));
+  partes.forEach((parte, i) => {
+    if (i) cuando.append(document.createTextNode(" · "));
+    cuando.append(parte);
+  });
+  datos.append(quien, cuando, lineaDeAcceso(usuario));
+
+  // Eliminar vive dentro de Editar: es lo unico que no tiene vuelta atras,
+  // y en la fila quedaba a un clic, al lado de lo de todos los dias.
   const acciones = elemento("div", "acciones");
   acciones.append(
     boton(t("editar"), "lapiz", () => { editando = usuario.numero; pintarPersonas(); }),
@@ -1802,15 +1974,9 @@ function fichaDeUsuario(usuario) {
     acciones.append(boton(t("suspender"), "alto", () => suspender(usuario)));
   } else {
     acciones.append(
-      boton(
-        t("reactivar"),
-        "palomita",
-        () => cambiar("reactivar", { numero: usuario.numero }),
-        "buena",
-      ),
+      boton(t("reactivar"), "palomita", () => cambiar("reactivar", { numero: usuario.numero }), "buena"),
     );
   }
-  acciones.append(boton(t("eliminar"), "tache", () => eliminar(usuario), "peligro"));
 
   fila.append(avatar(usuario.numero, "", usuario.foto), datos, acciones);
   return fila;
@@ -1994,11 +2160,19 @@ $("form-alta").addEventListener("submit", async (evento) => {
   evento.preventDefault();
   try {
     mostrarError("");
-    await pedir("/panel/usuarios", {
+    const alta = await pedir("/panel/usuarios", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ numero: $("alta-numero").value, nombre: $("alta-nombre").value }),
     });
+    if (cadenasDeAlta.size) {
+      await pedir("/panel/usuarios/cadenas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ numero: alta.usuario.numero, cadenas: [...cadenasDeAlta] }),
+      });
+      cadenasDeAlta.clear();
+    }
     $("alta-numero").value = "";
     $("alta-nombre").value = "";
     await cargarUsuarios();
