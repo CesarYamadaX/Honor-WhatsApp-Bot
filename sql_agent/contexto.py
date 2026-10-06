@@ -213,6 +213,17 @@ class Cruda:
     # La columna de la cruda donde va la descripcion del producto. Solo la
     # usan Coppel y Liverpool, para acomodar su mitad IOT en Raw_Data.
     descripcion: str = ""
+    # Condicion extra (con alias v) para contar lo MISMO que la vista del
+    # bot. Solo AT&T la necesita: ATT_B2B trae ademas prepago y la venta en
+    # linea (EBS-B2C), y vw_ETL_ATT_Postpaid no. Medido, enero de 2026: la
+    # cruda entera 445 237 unidades; con este filtro 137 538, igual que la
+    # vista (y en agosto, 118 758 = 118 758). Las otras cinco cadenas ya
+    # cuadran exactas con unidades >= 1.
+    filtro: str = ""
+
+
+def _filtro_de(cruda: "Cruda") -> str:
+    return f" AND ({cruda.filtro})" if cruda.filtro else ""
 
 
 # Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
@@ -252,7 +263,8 @@ CRUDAS = {
     "AT&T": Cruda("ATT_B2B", ("AT&T DEALERS", "AT&T CACS"), "v.[Model]",
                   _DESCRIPCION, "Codigo de Organización",
                   "Nombre de la Organización", "Fecha de Transacción",
-                  "Cantidad", "AT&T", _POR_NOMBRE, marca="BRAND"),
+                  "Cantidad", "AT&T", _POR_NOMBRE, marca="BRAND",
+                  filtro="v.[Type] = 'Postpago' AND v.[Channel 2] IN ('Dealers', 'Stores')"),
     "SEARS": Cruda("SEARS_B2B", ("SEARS",), "CONCAT('Sears ', v.[Model])",
                    _FINAL, "#POS", "POS", "Fecha", "Total", "SEARS",
                    _POR_NUMERO, marca="Brand"),
@@ -281,6 +293,10 @@ def _join_region(cruda: Cruda) -> tuple[str, str, tuple]:
     """El SQL para llegar a la region de una cruda: los JOIN, la expresion
     de la columna, y los parametros que le faltan.
 
+    El catalogo se agrupa a UNA fila por tienda antes de unir: hay tiendas de
+    AT&T dadas de alta dos veces, y unir contra el catalogo tal cual repetia
+    sus ventas (visto el 5/10/2026: 303 filas de mas en enero de 2026).
+
     Las cadenas que se identifican por NOMBRE (Coppel, Telcel, AT&T,
     Liverpool) llevan ademas un SEGUNDO intento con los nombres
     normalizados -- sin el NBSP que a veces se cuela ni espacios de mas --,
@@ -299,23 +315,24 @@ def _join_region(cruda: Cruda) -> tuple[str, str, tuple]:
     )
     if cruda.enlace_con_catalogo != _POR_NOMBRE:
         sql = f"""
-            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre],
+            LEFT JOIN (SELECT MIN([Region]) AS [Region], MIN([Coppel Name]) AS [nombre],
                               {_NUMERO_DEL_CATALOGO} AS [numero]
                        FROM {GTM}.[CustomerStores]
-                       WHERE [RetailName] = ?) cs
+                       WHERE [RetailName] = ?
+                       GROUP BY {_NUMERO_DEL_CATALOGO}) cs
               ON {enlace}
         """
         return sql, "cs.[Region]", (cruda.retail_en_catalogo,)
 
     normalizado_venta = _NORMALIZAR.format(expr=f"v.[{cruda.etiqueta}]")
-    normalizado_catalogo = _NORMALIZAR.format(expr="cs2.[nombre]")
+    nombre_normalizado = _NORMALIZAR.format(expr="[Coppel Name]")
     sql = f"""
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                   FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?) cs
+        LEFT JOIN (SELECT MIN([Region]) AS [Region], [Coppel Name] AS [nombre] FROM {GTM}.[CustomerStores] WHERE [RetailName] = ? GROUP BY [Coppel Name]) cs
           ON {enlace}
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                   FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?) cs2
-          ON {normalizado_catalogo} = {normalizado_venta}
+        LEFT JOIN (SELECT MIN([Region]) AS [Region], {nombre_normalizado} AS [nombre]
+                   FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?
+                   GROUP BY {nombre_normalizado}) cs2
+          ON cs2.[nombre] = {normalizado_venta}
     """
     return (
         sql,
@@ -468,9 +485,12 @@ def retailer_del_resultado(df: pd.DataFrame, query: str) -> str | None:
     columna = tiempo.columna(df, _ES_RETAIL)
     if columna is not None:
         valores = df[columna].dropna().astype(str).unique()
-        if len(valores) == 1:
-            return _cual_retailer(valores[0])
-        return None
+        # Varios valores pueden ser la MISMA cadena: AT&T llega como "AT&T
+        # Dealers" y "AT&T Cacs" (y alguna fila "Unknown", que no es cadena).
+        # Visto el 5/10/2026: "las ventas de AT&T de enero" se tomo como un
+        # reporte de varias cadenas y salio sin PIVOT ni Raw_Data.
+        cadenas = {_cual_retailer(v) for v in valores} - {None}
+        return cadenas.pop() if len(cadenas) == 1 else None
     return _cual_retailer(query or "")
 
 
@@ -669,7 +689,7 @@ Cada cadena tiene SU llave, y no es siempre la misma columna:
           ON u.[texto] = {cruda.llave}
         {join_region}
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
-          AND v.[{cruda.unidades}] >= 1
+          AND v.[{cruda.unidades}] >= 1{_filtro_de(cruda)}
           AND u.[modelo] IN ({huecos_modelo})
         GROUP BY {region}, v.[{cruda.clave}], u.[modelo]
         ORDER BY SUM(v.[{cruda.unidades}]) DESC
@@ -711,14 +731,12 @@ _MITAD_IOT = """
                MONTH(i.[Date]) AS [Mes],
                i.[QTY] AS [Unidades]
         FROM [RAW_DATA_B2B].dbo.[{iot}] i
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                   FROM [GTM BI Database].dbo.[CustomerStores]
-                   WHERE [RetailName] = ?) csi
+        LEFT JOIN (SELECT MIN([Region]) AS [Region], [Coppel Name] AS [nombre] FROM [GTM BI Database].dbo.[CustomerStores] WHERE [RetailName] = ? GROUP BY [Coppel Name]) csi
           ON csi.[nombre] = i.[Store]
-        LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                   FROM [GTM BI Database].dbo.[CustomerStores]
-                   WHERE [RetailName] = ?) csi2
-          ON {normalizado_catalogo} = {normalizado_iot}
+        LEFT JOIN (SELECT MIN([Region]) AS [Region], {normalizado_catalogo} AS [nombre]
+                   FROM [GTM BI Database].dbo.[CustomerStores] WHERE [RetailName] = ?
+                   GROUP BY {normalizado_catalogo}) csi2
+          ON csi2.[nombre] = {normalizado_iot}
         LEFT JOIN (
             SELECT TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1)) AS [numero],
                    MIN(cs.[Region]) AS [Region],
@@ -743,6 +761,15 @@ _MITAD_IOT = """
 # Un mes de AT&T (445 mil filas x 24) ya no cabe; uno de Elektra o Liverpool si.
 LIMITE_DE_CELDAS_CRUDAS = 8_000_000
 
+# Por encima del limite de arriba, el reporte es SOLO Raw_Data, repartido en
+# varias hojas si pasa del millon de filas, sin pivot ni Datos (pedido el
+# 5/10/2026: "cuando se piden muchos datos, solo los datos"). Lo escribe
+# xlsxwriter, que tarda la mitad: un mes de AT&T, 11.6 millones de celdas,
+# 54 s y 42 MB (openpyxl: 97 s y 49 MB). Este tope es lo que cabe holgado en
+# los 100 MB que WhatsApp acepta para un documento: ~75 MB, ~2 minutos.
+# Por encima, ni asi se puede mandar, y va agrupado (PIVOT + Datos).
+LIMITE_DE_CELDAS_SOLO_CRUDOS = 20_000_000
+
 # Columnas que se agregan al final, para el pivot y para ubicar la tienda. No
 # chocan con las de ninguna cruda (Elektra y Sears ya traen [Region] y
 # [Month], por eso estas llevan otro nombre).
@@ -760,24 +787,93 @@ def _columnas_de(conexion, tabla: str) -> list[str]:
     return [f[0] for f in filas]
 
 
+def _normalizado(texto) -> str | None:
+    """Lo mismo que _NORMALIZAR en SQL: sin NBSP, sin espacios de mas."""
+    if texto is None or (isinstance(texto, float) and pd.isna(texto)):
+        return None
+    return " ".join(str(texto).replace("\u00a0", " ").split())
+
+
+_NUMERO_AL_INICIO = re.compile(r"^\s*(\d+)\b")
+
+
+def _numero_al_inicio(texto) -> int | None:
+    m = _NUMERO_AL_INICIO.match(str(texto)) if texto is not None else None
+    return int(m.group(1)) if m else None
+
+
+class _Catalogo:
+    """CustomerStores de una cadena, para buscar en memoria.
+
+    Antes la region salia de dos LEFT JOIN en el SQL de la cruda (por nombre
+    y por nombre normalizado) y la tienda IOT de un puente que recorria la
+    vista principal entera: en Coppel, un mes tardaba 100-200 s, y de eso la
+    cruda sola eran 6 s (medido el 5/10/2026). El catalogo son ~2 000
+    tiendas: se trae una vez y se busca aqui, con las mismas reglas. Una
+    tienda dada de alta dos veces se queda con la region menor (como el MIN
+    del SQL), asi que ninguna venta se duplica.
+    """
+
+    def __init__(self, conexion, cruda: Cruda):
+        filas = conexion.exec_driver_sql(
+            f"SELECT [Coppel Name], [Region], {_NUMERO_DEL_CATALOGO} "
+            f"FROM {GTM}.[CustomerStores] WHERE [RetailName] = ?",
+            (cruda.retail_en_catalogo,),
+        ).fetchall()
+        self.por_nombre: dict[str, str] = {}
+        self.por_normalizado: dict[str, str] = {}
+        self.por_numero: dict[int, str] = {}
+        # El numero con que empieza el nombre ("100 • CENTRO-MAX"): asi se
+        # traduce la tienda de la mitad IOT, que llega solo como "100".
+        self.nombre_por_prefijo: dict[int, str] = {}
+        for nombre, region, numero in sorted(filas, key=lambda f: (str(f[1]), str(f[0]))):
+            if nombre is None:
+                continue
+            self.por_nombre.setdefault(str(nombre), region)
+            self.por_normalizado.setdefault(_normalizado(nombre), region)
+            if numero is not None:
+                self.por_numero.setdefault(int(numero), region)
+            prefijo = _numero_al_inicio(nombre)
+            if prefijo is not None:
+                self.nombre_por_prefijo.setdefault(prefijo, str(nombre))
+
+    def region_por_nombre(self, nombres: pd.Series) -> pd.Series:
+        exacta = nombres.map(lambda n: self.por_nombre.get(str(n)) if pd.notna(n) else None)
+        normalizada = nombres.map(lambda n: self.por_normalizado.get(_normalizado(n)))
+        return exacta.where(exacta.notna(), normalizada)
+
+    def region_por_numero(self, numeros: pd.Series) -> pd.Series:
+        return pd.to_numeric(numeros, errors="coerce").map(
+            lambda n: self.por_numero.get(int(n)) if pd.notna(n) else None
+        )
+
+
+def _df_de(conexion, sql: str, parametros=()) -> pd.DataFrame:
+    cursor = conexion.exec_driver_sql(sql, tuple(parametros))
+    return pd.DataFrame.from_records(cursor.fetchall(), columns=list(cursor.keys()))
+
+
 def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
     """Las filas de la tabla cruda del periodo, con todas sus columnas.
 
     Las mismas filas que cuenta el bot: unidades >= 1 (las vistas descartan
     devoluciones y ajustes, y sin eso el total del Excel no seria el del
-    mensaje: en Elektra, enero de 2026, 181 362 contra 181 628). Coppel y
-    Liverpool llevan ademas su mitad IOT, acomodada en las columnas
-    equivalentes y marcada en [Fuente].
+    mensaje: en Elektra, enero de 2026, 181 362 contra 181 628) y, en AT&T,
+    solo postpago de Dealers y Stores (ver Cruda.filtro). Coppel y Liverpool
+    llevan ademas su mitad IOT, acomodada en las columnas equivalentes y
+    marcada en [Fuente].
 
-    None si no cabe (ver LIMITE_DE_CELDAS_CRUDAS): quien llama usa entonces
-    la version agrupada.
+    None si no cabe ni en un archivo que WhatsApp acepte (ver
+    LIMITE_DE_CELDAS_SOLO_CRUDOS): quien llama usa entonces la version
+    agrupada. Entre los dos topes va marcado attrs["solo_crudos"].
     """
     columnas = _columnas_de(conexion, cruda.tabla)
     if not columnas:
         return None
     filas = conexion.exec_driver_sql(
-        f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] "
-        f"WHERE [{cruda.fecha}] >= ? AND [{cruda.fecha}] < ? AND [{cruda.unidades}] >= 1",
+        f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v "
+        f"WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ? "
+        f"AND v.[{cruda.unidades}] >= 1{_filtro_de(cruda)}",
         (desde, hasta),
     ).scalar() or 0
     if cruda.vista_iot:
@@ -787,74 +883,65 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
             (desde, hasta),
         ).scalar() or 0
     extras = 3 if cruda.vista_iot else 2
-    if filas * (len(columnas) + extras) > LIMITE_DE_CELDAS_CRUDAS:
+    celdas = filas * (len(columnas) + extras)
+    if celdas > LIMITE_DE_CELDAS_SOLO_CRUDOS:
         logger.info(
             "Raw_Data completo de %s no cabe (%d filas x %d columnas); va agrupado",
             cruda.tabla, filas, len(columnas) + extras,
         )
         return None
+    solo_crudos = celdas > LIMITE_DE_CELDAS_CRUDAS
 
-    join_region, region, parametros_region = _join_region(cruda)
+    catalogo = _Catalogo(conexion, cruda)
     lista = ", ".join(f"v.[{c}]" for c in columnas)
-    fuente = f", '{cruda.tabla}' AS [{COLUMNA_FUENTE}]" if cruda.vista_iot else ""
-    partes = [f"""
-        SELECT {lista},
-               {region} AS [{COLUMNA_REGION}],
-               MONTH(v.[{cruda.fecha}]) AS [{COLUMNA_MES}]{fuente}
-        FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
-        {join_region}
+    principal = _df_de(conexion, f"""
+        SELECT {lista} FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
-          AND v.[{cruda.unidades}] >= 1
-    """]
-    parametros = [*parametros_region, desde, hasta]
+          AND v.[{cruda.unidades}] >= 1{_filtro_de(cruda)}""", (desde, hasta))
+    if cruda.enlace_con_catalogo == _POR_NOMBRE:
+        principal[COLUMNA_REGION] = catalogo.region_por_nombre(principal[cruda.etiqueta])
+    else:
+        principal[COLUMNA_REGION] = catalogo.region_por_numero(principal[cruda.clave])
+    partes = [principal]
 
     if cruda.vista_iot:
-        # La vista IOT trae otras columnas: cada una va a su equivalente de
-        # la cruda, y lo que la cruda tiene y la vista no, va vacio.
-        # La tienda IOT viene como numero ("1"): con el puente `p` (el mismo
-        # de _MITAD_IOT) se convierte en el nombre de la vista principal, y
-        # de ahi sale la region. Sin esto, en Coppel el 17% de las filas
-        # (todas las IOT) quedaban sin region y con la tienda "1".
-        equivalentes = {
-            cruda.etiqueta: "COALESCE(p.[nombre], i.[Store])",
-            cruda.marca: "i.[Brand]",
-            cruda.fecha: "i.[Date]",
-            cruda.unidades: "i.[QTY]",
-            cruda.descripcion: "i.[Material_Description]",
-            "Carrier": "i.[Carrier]",
-        }
-        lista_iot = ", ".join(
-            f"{equivalentes.get(c, 'NULL')} AS [{c}]" for c in columnas
+        iot = _df_de(conexion, f"""
+            SELECT [Store], [Brand], [Material_Description], [Carrier], [Date], [QTY]
+            FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}]
+            WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1""", (desde, hasta))
+        # La tienda IOT llega como numero ("100"): se traduce al nombre del
+        # catalogo, o al de la cruda si el catalogo no la tiene.
+        nombre_por_prefijo = dict(catalogo.nombre_por_prefijo)
+        for tienda in principal[cruda.etiqueta].dropna().unique():
+            prefijo = _numero_al_inicio(tienda)
+            if prefijo is not None:
+                nombre_por_prefijo.setdefault(prefijo, str(tienda))
+        tienda_iot = iot["Store"].map(
+            lambda s: nombre_por_prefijo.get(_numero_al_inicio(s), s)
+            if str(s).strip().isdigit() else s
         )
-        partes.append(f"""
-            SELECT {lista_iot},
-                   COALESCE(csi.[Region], csi2.[Region], p.[Region]) AS [{COLUMNA_REGION}],
-                   MONTH(i.[Date]) AS [{COLUMNA_MES}],
-                   '{cruda.vista_iot}' AS [{COLUMNA_FUENTE}]
-            FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}] i
-            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                       FROM [GTM BI Database].dbo.[CustomerStores]
-                       WHERE [RetailName] = ?) csi
-              ON csi.[nombre] = i.[Store]
-            LEFT JOIN (SELECT [Region], [Coppel Name] AS [nombre]
-                       FROM [GTM BI Database].dbo.[CustomerStores]
-                       WHERE [RetailName] = ?) csi2
-              ON {_NORMALIZAR.format(expr="csi2.[nombre]")} = {_NORMALIZAR.format(expr="i.[Store]")}
-            LEFT JOIN (
-                SELECT TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1)) AS [numero],
-                       MIN(cs.[Region]) AS [Region],
-                       MIN(w.[Store]) AS [nombre]
-                FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot[: -len("_IOT")]}] w
-                JOIN [GTM BI Database].dbo.[CustomerStores] cs
-                  ON cs.[Coppel Name] = w.[Store] AND cs.[RetailName] = ?
-                GROUP BY TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1))
-            ) p ON p.[numero] = TRY_CONVERT(int, i.[Store])
-            WHERE i.[Date] >= ? AND i.[Date] < ? AND i.[QTY] >= 1
-        """)
-        parametros.extend([cruda.retail_en_catalogo] * 3 + [desde, hasta])
+        equivalentes = {
+            cruda.etiqueta: tienda_iot,
+            cruda.marca: iot["Brand"],
+            cruda.fecha: iot["Date"],
+            cruda.unidades: iot["QTY"],
+            cruda.descripcion: iot["Material_Description"],
+            "Carrier": iot["Carrier"],
+        }
+        mitad = pd.DataFrame({c: equivalentes.get(c) for c in columnas}, index=iot.index)
+        region = catalogo.region_por_nombre(tienda_iot)
+        mitad[COLUMNA_REGION] = region.where(
+            region.notna(), catalogo.region_por_numero(iot["Store"])
+        )
+        principal[COLUMNA_FUENTE] = cruda.tabla
+        mitad[COLUMNA_FUENTE] = cruda.vista_iot
+        partes.append(mitad)
 
-    cursor = conexion.exec_driver_sql(" UNION ALL ".join(partes), tuple(parametros))
-    df = pd.DataFrame.from_records(cursor.fetchall(), columns=list(cursor.keys()))
+    df = pd.concat(partes, ignore_index=True) if len(partes) > 1 else principal
+    df.insert(
+        len(columnas) + 1, COLUMNA_MES,
+        pd.to_datetime(df[cruda.fecha], errors="coerce").dt.month,
+    )
     # Con que columnas se arma el pivot (excel_pivot.config_ventas_por_tienda):
     # cada cruda nombra distinto la tienda, la marca y las unidades.
     df.attrs["pivot"] = {
@@ -863,6 +950,8 @@ def ventas_crudas_completas(conexion, cruda: Cruda, desde: str, hasta: str):
         "mes": COLUMNA_MES,
         "unidades": cruda.unidades,
     }
+    # Grande: el reporte va solo con esta hoja (ver LIMITE_DE_CELDAS_SOLO_CRUDOS).
+    df.attrs["solo_crudos"] = solo_crudos
     return df
 
 
@@ -921,7 +1010,7 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
         FROM [RAW_DATA_B2B].dbo.[{cruda.tabla}] v
         {join_region}
         WHERE v.[{cruda.fecha}] >= ? AND v.[{cruda.fecha}] < ?
-          AND v.[{cruda.unidades}] >= 1
+          AND v.[{cruda.unidades}] >= 1{_filtro_de(cruda)}
     """
     partes, parametros = [mitad_cruda], [*parametros_region, desde, hasta]
 
@@ -929,7 +1018,7 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
         partes.append(_MITAD_IOT.format(
             iot=cruda.vista_iot,
             principal=cruda.vista_iot[: -len("_IOT")],
-            normalizado_catalogo=_NORMALIZAR.format(expr="csi2.[nombre]"),
+            normalizado_catalogo=_NORMALIZAR.format(expr="[Coppel Name]"),
             normalizado_iot=_NORMALIZAR.format(expr="i.[Store]"),
         ))
         parametros.extend(
@@ -1018,6 +1107,8 @@ def _datos_y_raw(engine, cruda: Cruda, rango, plazo) -> dict[str, pd.DataFrame]:
         # agrupado que nada.
         logger.exception("No se pudo traer Raw_Data completo; va agrupado")
     if completo is not None and not completo.empty:
+        if completo.attrs.get("solo_crudos"):
+            return {"Raw_Data": completo}
         return {"Datos": agrupar_completo(completo, cruda), "Raw_Data": completo}
     try:
         with engine.connect() as conexion, _con_plazo(conexion, plazo):

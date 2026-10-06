@@ -79,6 +79,28 @@ def _formatear_columnas_de_fecha(hoja, df: pd.DataFrame) -> None:
             celda.number_format = FORMATO_FECHA
 
 
+def _escribir_rapido(ruta: str, por_hoja: list[tuple[str, pd.DataFrame]]) -> None:
+    """Las hojas con xlsxwriter: fechas como dia y anchos medidos sobre una
+    muestra (medir medio millon de filas tardaria mas que escribirlas)."""
+    with pd.ExcelWriter(
+        ruta, engine="xlsxwriter",
+        datetime_format=FORMATO_FECHA, date_format=FORMATO_FECHA,
+    ) as escritor:
+        for nombre, trozo in por_hoja:
+            trozo.to_excel(escritor, index=False, sheet_name=nombre)
+            hoja = escritor.sheets[nombre]
+            muestra = trozo.head(2000)
+            for indice, columna in enumerate(trozo.columns):
+                if pd.api.types.is_datetime64_any_dtype(muestra[columna]):
+                    ancho_del_dato = len(FORMATO_FECHA)
+                else:
+                    textos = muestra[columna].dropna().astype(str)
+                    ancho_del_dato = int(textos.str.len().max()) if not textos.empty else 0
+                ancho = max(len(str(columna)), ancho_del_dato) + MARGEN_COLUMNA
+                hoja.set_column(indice, indice, min(max(ancho, ANCHO_MINIMO), ANCHO_MAXIMO))
+            hoja.freeze_panes(1, 0)
+
+
 def _ajustar_ancho_de_columnas(hoja, df: pd.DataFrame) -> None:
     """Da a cada columna el ancho de su contenido, como el autoajuste de Excel.
 
@@ -122,6 +144,7 @@ class ExcelExporter:
         filename: str = None,
         contexto: dict[str, pd.DataFrame] | None = None,
         con_datos: bool = True,
+        rapido: bool = False,
     ) -> str:
         """
         Exporta un DataFrame de Pandas a un archivo Excel.
@@ -136,6 +159,12 @@ class ExcelExporter:
         consulta) cuando hay otras hojas: si el resultado es un numero que ya
         llego entero en el mensaje, esa hoja no aporta nada (pedido el
         5/10/2026). Sin otras hojas se pone igual: un Excel no puede ir vacio.
+
+        `rapido=True` escribe con xlsxwriter en vez de openpyxl: la mitad de
+        tiempo y ~15% menos de peso (un mes de AT&T, 11.6 millones de
+        celdas: 54 s y 42 MB contra 97 s y 49 MB). Es para los reportes de
+        muchos datos, que van solo con el crudo; los demas siguen con
+        openpyxl, porque el pivot por COM y el formato se probaron con el.
         """
         if df is None or df.empty:
             raise ValueError("No hay datos para exportar. El DataFrame está vacío.")
@@ -200,6 +229,10 @@ class ExcelExporter:
             por_hoja.extend(partir_en_hojas(nombre, ficha))
         if con_datos or not por_hoja:
             por_hoja = partir_en_hojas(HOJA_DATOS, df) + por_hoja
+
+        if rapido:
+            _escribir_rapido(filepath, por_hoja)
+            return os.path.abspath(filepath)
 
         with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
             for nombre, trozo in por_hoja:

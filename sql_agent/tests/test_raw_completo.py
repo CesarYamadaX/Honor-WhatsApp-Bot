@@ -32,8 +32,15 @@ class _Cursor:
 
 
 class _Conexion:
-    def __init__(self, filas_en_periodo, columnas=_COLUMNAS_EKT):
+    """Contesta como el servidor: columnas, conteo, catalogo, cruda e IOT."""
+
+    def __init__(self, filas_en_periodo, columnas=_COLUMNAS_EKT, crudas=None, iot=None, catalogo=None):
         self.filas_en_periodo, self.columnas, self.consultas = filas_en_periodo, columnas, []
+        self.crudas = crudas if crudas is not None else [
+            ("TELCEL SAMSUNG A17", 6169, 31063113, 2.0, "2026-01-05", "6169 MEGA ZUMPANGO", "Samsung", "R9")
+        ]
+        self.iot = iot or []
+        self.catalogo = catalogo or [("MEGA ZUMPANGO (6169)", "R9", 6169)]
 
     def exec_driver_sql(self, sql, parametros=()):
         self.consultas.append(sql)
@@ -41,11 +48,11 @@ class _Conexion:
             return _Cursor(filas=[(c,) for c in self.columnas])
         if "COUNT(*)" in sql:
             return _Cursor(escalar=self.filas_en_periodo)
-        fila = ("TELCEL SAMSUNG A17", 6169, 31063113, 2.0, "2026-01-05", "6169 MEGA ZUMPANGO",
-                "Samsung", "R9", "R9", 1)
-        extras = [contexto.COLUMNA_REGION, contexto.COLUMNA_MES]
-        fila = fila[: len(self.columnas)] + ("R9", 1)
-        return _Cursor(columnas=[*self.columnas, *extras], filas=[fila])
+        if "CustomerStores" in sql:
+            return _Cursor(filas=self.catalogo)
+        if "_IOT" in sql:
+            return _Cursor(columnas=["Store", "Brand", "Material_Description", "Carrier", "Date", "QTY"], filas=self.iot)
+        return _Cursor(columnas=list(self.columnas), filas=[f[: len(self.columnas)] for f in self.crudas])
 
 
 class TestRawDataCompleto:
@@ -53,25 +60,58 @@ class TestRawDataCompleto:
         conexion = _Conexion(filas_en_periodo=163_034)
         df = contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["ELEKTRA"], "2026-01-01", "2026-02-01")
         assert list(df.columns) == [*_COLUMNAS_EKT, "Region (catalogo)", "Mes"]
-        sql = conexion.consultas[-1]
-        assert "[QTY] >= 1" in sql  # las mismas filas que cuenta el bot
+        # La region sale del catalogo por el numero de tienda, en memoria.
+        assert df["Region (catalogo)"].tolist() == ["R9"] and df["Mes"].tolist() == [1]
+        cruda = next(s for s in conexion.consultas if "EKT_B2B" in s and "COUNT" not in s)
+        assert "[QTY] >= 1" in cruda  # las mismas filas que cuenta el bot
+        assert "JOIN" not in cruda  # ya no se cruza en SQL: tardaba minutos
         assert df.attrs["pivot"] == {"tienda": "POS", "marca": "Marca", "mes": "Mes", "unidades": "QTY"}
 
-    def test_si_no_cabe_regresa_none_para_ir_agrupado(self):
-        # 445 mil filas x 24 columnas (un mes de AT&T) pasa del tope.
-        conexion = _Conexion(filas_en_periodo=445_237, columnas=[f"c{i}" for i in range(24)])
+    def test_si_no_cabe_ni_en_whatsapp_regresa_none_para_ir_agrupado(self):
+        # Un trimestre de AT&T: ~1.3 millones de filas x 26 pasa de 20 M.
+        conexion = _Conexion(filas_en_periodo=1_300_000, columnas=[f"c{i}" for i in range(24)])
         assert contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["AT&T"], "a", "b") is None
-        assert not any("UNION" in s or "SELECT v." in s for s in conexion.consultas)
+        assert not any("CustomerStores" in s for s in conexion.consultas)
 
-    def test_coppel_lleva_su_mitad_iot_en_las_columnas_equivalentes(self):
+    def test_mucho_pero_cabe_va_solo_el_crudo(self):
+        # Entre los dos topes (8 y 20 M celdas), como un mes de AT&T (11.6 M).
+        conexion = _Conexion(filas_en_periodo=1_000_000)  # x 10 columnas = 10 M
+        df = contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["ELEKTRA"], "a", "b")
+        assert df is not None and df.attrs["solo_crudos"] is True
+
+    def test_poco_va_el_reporte_completo(self):
+        df = contexto.ventas_crudas_completas(_Conexion(1000), contexto.CRUDAS["ELEKTRA"], "a", "b")
+        assert df.attrs["solo_crudos"] is False
+
+    def test_att_solo_cuenta_postpago_de_dealers_y_stores(self):
+        conexion = _Conexion(1000, columnas=["Codigo de Organización", "Nombre de la Organización", "Fecha de Transacción", "Cantidad", "BRAND"],
+                             crudas=[("O33", "O33 - TDA COACALCO", "2026-01-05", 1, "HONOR")])
+        contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["AT&T"], "a", "b")
+        assert all("Postpago" in s for s in conexion.consultas if "ATT_B2B" in s and "INFORMATION" not in s)
+
+    def test_coppel_lleva_su_mitad_iot_con_la_tienda_traducida(self):
         columnas = ["Tienda", "Clase", "Familia", "Marca", "Modelo", "Día", "Unidades"]
-        conexion = _Conexion(filas_en_periodo=1000, columnas=columnas)
-        contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["COPPEL"], "a", "b")
-        sql = conexion.consultas[-1]
-        assert "UNION ALL" in sql and "vw_ETL_COPPEL_IOT" in sql
-        assert "i.[Material_Description] AS [Modelo]" in sql
-        assert "NULL AS [Clase]" in sql
-        assert "[Fuente]" in sql
+        conexion = _Conexion(
+            filas_en_periodo=1000, columnas=columnas,
+            crudas=[("100 • CENTRO-MAX", "24", "49", "OPPO", "A5", "2026-01-02", 1)],
+            iot=[("100", "HONOR", "BAND 9", "Open Market", "2026-01-03", 4)],
+            catalogo=[("100 • CENTRO-MAX", "R6", None)],
+        )
+        df = contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["COPPEL"], "a", "b")
+        iot = df[df["Fuente"] == "vw_ETL_COPPEL_IOT"].iloc[0]
+        assert iot["Tienda"] == "100 • CENTRO-MAX" and iot["Region (catalogo)"] == "R6"
+        assert iot["Modelo"] == "BAND 9" and pd.isna(iot["Clase"])
+        assert df["Unidades"].sum() == 5
+
+    def test_una_tienda_dos_veces_en_el_catalogo_no_duplica(self):
+        # AT&T, enero de 2026: 303 filas de mas cuando se cruzaba en SQL.
+        conexion = _Conexion(
+            1000, columnas=["Codigo de Organización", "Nombre de la Organización", "Fecha de Transacción", "Cantidad", "BRAND"],
+            crudas=[("O33", "O33 - TDA COACALCO", "2026-01-05", 1, "HONOR")],
+            catalogo=[("O33 - TDA COACALCO", "R9", None), ("O33 -  TDA COACALCO", "R1", None)],
+        )
+        df = contexto.ventas_crudas_completas(conexion, contexto.CRUDAS["AT&T"], "a", "b")
+        assert len(df) == 1
 
 
 class TestElPivotUsaLosNombresDeCadaCruda:
@@ -176,3 +216,51 @@ class TestElPeriodoSaleDeLaConsulta:
     def test_si_no_esta_claro_no_adivina(self):
         assert contexto.periodo_de_la_consulta("WHERE [Year] IN (2025, 2026)") is None
         assert contexto.periodo_de_la_consulta("SELECT * FROM x") is None
+
+
+
+class TestMuchosDatosSoloElCrudo:
+    def test_con_solo_crudos_no_hay_datos_agrupados(self, monkeypatch):
+        grande = pd.DataFrame({"POS": ["a"], "Marca": ["HONOR"], "Mes": [1], "QTY": [1]})
+        grande.attrs["solo_crudos"] = True
+        grande.attrs["pivot"] = {"tienda": "POS", "marca": "Marca", "mes": "Mes", "unidades": "QTY"}
+
+        class _Motor:
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            connection = type("C", (), {"dbapi_connection": type("D", (), {"timeout": 0})()})()
+
+        monkeypatch.setattr(contexto, "ventas_crudas_completas", lambda *a: grande)
+        hojas = contexto._datos_y_raw(_Motor(), contexto.CRUDAS["ELEKTRA"], ("a", "b"), 10)
+        assert list(hojas) == ["Raw_Data"]
+
+    def test_el_escritor_rapido_reparte_en_hojas_y_da_formato(self, tmp_path, monkeypatch):
+        import excel_exporter
+
+        monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+        monkeypatch.setattr(excel_exporter, "MAX_FILAS_POR_HOJA_DE_EXCEL", 3)
+        crudo = pd.DataFrame({
+            "Fecha": pd.to_datetime(["2026-01-0%d" % d for d in range(1, 8)]),
+            "Unidades": range(7),
+        })
+        ruta = ExcelExporter.export_to_excel(
+            pd.DataFrame({"x": [1]}), contexto={"Raw_Data": crudo}, con_datos=False, rapido=True
+        )
+        libro = load_workbook(ruta)
+        assert libro.sheetnames == ["Raw_Data", "Raw_Data (2)", "Raw_Data (3)"]
+        assert sum(h.max_row - 1 for h in libro.worksheets) == 7
+        assert libro["Raw_Data"]["A2"].number_format == "yyyy-mm-dd"
+
+
+def test_att_dealers_y_cacs_son_una_sola_cadena():
+    df = pd.DataFrame({"Retail": ["AT&T Dealers", "AT&T Cacs", "Unknown"], "QTY": [1, 2, 3]})
+    assert contexto.retailer_del_resultado(df, "") == "AT&T"
+    varias = pd.DataFrame({"Retail": ["Coppel", "ELEKTRA"], "QTY": [1, 2]})
+    assert contexto.retailer_del_resultado(varias, "") is None

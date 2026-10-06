@@ -12,6 +12,9 @@ pandas==2.2.2
 # instalacion nueva trae numpy 2.x, con el que pandas 2.2 ya avisa errores.
 numpy==1.26.4
 openpyxl==3.1.2
+# Escribe los reportes de muchos datos (solo el crudo): la mitad de tiempo que
+# openpyxl. Ver excel_exporter.py, `rapido`.
+XlsxWriter==3.2.9
 matplotlib==3.11.2
 python-dotenv==1.0.1
 fastapi==0.115.6

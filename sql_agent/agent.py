@@ -1521,6 +1521,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     contexto: dict = {}
     crudo_partido = False
     crudos_agrupados = False
+    solo_crudos = False
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -1543,14 +1544,23 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             # ("por tienda", "por modelo"...), y entonces va al final como
             # "Consulta". En cualquier otro reporte, la hoja "Datos" sobra
             # cuando el resultado ya llego entero en el mensaje.
-            reporte_de_cadena = "Datos" in contexto
-            if reporte_de_cadena and len(df) > 1 and pidio_desglose(ctx.pregunta):
+            crudo = contexto.get("Raw_Data")
+            solo_crudos = crudo is not None and bool(crudo.attrs.get("solo_crudos"))
+            reporte_de_cadena = "Datos" in contexto or solo_crudos
+            if (
+                reporte_de_cadena
+                and not solo_crudos
+                and len(df) > 1
+                and pidio_desglose(ctx.pregunta)
+            ):
                 contexto["Consulta"] = df
             excel = ExcelExporter.export_to_excel(
                 df,
                 contexto=contexto,
                 con_datos=not reporte_de_cadena
                 and not (contexto and len(df) <= MAX_ROWS_AS_TEXT),
+                # Muchos datos: solo el crudo, y con el escritor rapido.
+                rapido=solo_crudos,
             )
         except Exception as error:  # noqa: BLE001
             logger.exception("Fallo la exportacion a Excel")
@@ -1577,6 +1587,8 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         # agrupado, con las columnas Tienda/Marca/Mes/Unidades).
         hoja_del_pivot = "Raw_Data" if "Raw_Data" in contexto else "Datos"
         crudos = contexto.get(hoja_del_pivot) if "Datos" in contexto else None
+        if solo_crudos:
+            crudos = None  # muchos datos: sin pivot, solo el crudo
         crudos_agrupados = (
             "Raw_Data" not in contexto
             and "Datos" in contexto
@@ -1653,10 +1665,18 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
     # aclara que el mes va por la mitad: el numero es correcto y la lectura
     # es un desplome que no ocurrio.
+    if solo_crudos:
+        partes.append(
+            "OJO: el reporte es grande, asi que el Excel lleva SOLO el detalle "
+            "completo ('Raw_Data', repartido en varias hojas si no cabe en "
+            "una), sin tabla dinamica ni hoja agrupada. Diselo al usuario en "
+            "una linea, y que el archivo puede tardar en abrir."
+        )
+
     if crudos_agrupados:
         partes.append(
-            "OJO: el detalle crudo de este periodo es demasiado grande para ir "
-            "con todas sus columnas, asi que el Excel lleva el PIVOT y la hoja "
+            "OJO: el detalle crudo de este periodo es demasiado grande para "
+            "mandarse por WhatsApp, asi que el Excel lleva el PIVOT y la hoja "
             "'Datos' (agrupada por tienda, marca y mes) pero NO 'Raw_Data'. "
             "Diselo al usuario, y que si quiere el detalle completo acote el "
             "periodo (un mes, por ejemplo)."
