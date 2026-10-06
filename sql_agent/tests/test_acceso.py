@@ -254,12 +254,11 @@ class TestLasHerramientas:
 
 
 class TestElHistorial:
-    def test_si_le_cambian_las_cadenas_se_olvida_lo_anterior(self):
+    def _agente(self, vistos):
         agente = SQLAgent.__new__(SQLAgent)
         agente.engine = create_engine("sqlite://")
         agente.historial = []
         agente.idioma = "es"
-        vistos = []
 
         class _Ejecutor:
             def invoke(self, payload, config=None, **kwargs):
@@ -267,11 +266,36 @@ class TestElHistorial:
                 return {"output": "listo"}
 
         agente.agent_executor = _Ejecutor()
+        return agente
+
+    def test_si_le_quitan_cadenas_se_olvida_lo_anterior(self):
+        vistos = []
+        agente = self._agente(vistos)
         agente.responder("ventas de telcel")
         agente.responder("y de sears?")
         agente.responder("y de coppel?", cadenas=COPPEL)
         assert [n for n, _ in vistos] == [0, 2, 0]
         assert "ACCESO" not in vistos[0][1] and "SOLO puede ver datos de Coppel" in vistos[2][1]
+
+    def test_si_le_dan_mas_se_acuerda_y_puede_reintentar(self):
+        # Lo de produccion del 6/10/2026: se le nego Elektra, le dieron todas
+        # las cadenas y escribio "intentalo de nuevo".
+        vistos = []
+        agente = self._agente(vistos)
+        agente.responder("dame las ventas de elektra", cadenas=COPPEL)
+        agente.responder("intentalo de nuevo")
+        assert [n for n, _ in vistos] == [0, 2]
+        assert "ACCESO AMPLIADO" in vistos[1][1] and "todas las cadenas" in vistos[1][1]
+        # Y solo ese turno: despues ya no hace falta decirlo.
+        agente.responder("y de sears?")
+        assert "ACCESO AMPLIADO" not in vistos[2][1]
+
+    def test_de_una_cadena_a_dos_tambien_se_acuerda(self):
+        vistos = []
+        agente = self._agente(vistos)
+        agente.responder("ventas de coppel", cadenas=COPPEL)
+        agente.responder("y de elektra?", cadenas=["COPPEL", "ELEKTRA"])
+        assert [n for n, _ in vistos] == [0, 2]
 
 
 class TestElAvisoDePermiso:

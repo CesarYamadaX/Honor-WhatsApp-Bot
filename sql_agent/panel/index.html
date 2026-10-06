@@ -330,6 +330,33 @@
     font-size: 11px; color: var(--tinta-2);
     display: flex; align-items: center; gap: 5px; white-space: nowrap;
   }
+  /* La reaccion del usuario (👍/👎), como en WhatsApp: un globito colgando
+     de la esquina de la respuesta. */
+  .burbuja.con-reaccion { margin-bottom: 14px; }
+  .reaccion {
+    position: absolute; bottom: -14px; right: 12px;
+    background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: 12px;
+    padding: 0 6px; font-size: 14px; line-height: 22px; box-shadow: var(--sombra);
+  }
+  .reaccion.mala { border-color: var(--alto); }
+
+  /* Deslizar para actualizar: el circulo que baja con el dedo y gira al
+     soltar. Fijo y no dentro de cada lista, para no mover su contenido. */
+  .recarga {
+    position: fixed; z-index: 40; width: 38px; height: 38px; margin-left: -19px;
+    border-radius: 50%; background: var(--panel); box-shadow: 0 2px 10px rgba(11,20,26,.25);
+    display: grid; place-items: center; opacity: 0; pointer-events: none;
+  }
+  .recarga svg { width: 22px; height: 22px; }
+  .recarga circle { fill: none; stroke: var(--acento); stroke-width: 2.6; stroke-linecap: round; }
+  .recarga.volviendo { transition: transform .25s ease, opacity .25s ease; }
+  .recarga.girando svg { animation: girar .8s linear infinite; }
+  .recarga.listo circle { stroke: var(--acento-fuerte); }
+  @keyframes girar { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .recarga.girando svg { animation-duration: 2.4s; }
+  }
+
   .palomas { fill: var(--palomas); }
   .palomas.rojas { fill: var(--alto); }
 
@@ -889,6 +916,7 @@ const TEXTOS = {
     sin_calificaciones:
       "Todavía nadie ha calificado. Cuando un usuario reacciona con 👍 o 👎 a una respuesta del bot, aparece aquí.",
     calificada: (emoji, fecha) => `${emoji} calificada el ${fecha}`,
+    actualizando: "Actualizando…",
     turno_perdido: "No encontré esa respuesta en la bitácora.",
     ver_conversacion: "Ver la conversación completa",
   },
@@ -1022,6 +1050,7 @@ const TEXTOS = {
     sin_calificaciones:
       "Nobody has rated anything yet. When a user reacts with 👍 or 👎 to a bot answer, it shows up here.",
     calificada: (emoji, fecha) => `${emoji} rated on ${fecha}`,
+    actualizando: "Refreshing…",
     turno_perdido: "I couldn't find that answer in the log.",
     ver_conversacion: "See the whole conversation",
   },
@@ -1663,7 +1692,13 @@ function burbujaDeTurno(turno) {
   respuesta.append(textoRespuesta);
 
   const pieBot = elemento("div", "pie-burbuja");
-  if (turno.calificacion) pieBot.append(elemento("span", null, turno.calificacion.emoji));
+  if (turno.calificacion) {
+    const mala = Number(turno.calificacion.valor) < 0;
+    const globo = elemento("span", `reaccion${mala ? " mala" : ""}`, turno.calificacion.emoji);
+    globo.title = t("calificada", turno.calificacion.emoji, diaLargo(turno.calificacion.fecha));
+    respuesta.classList.add("con-reaccion");
+    respuesta.append(globo);
+  }
   if (turno.archivos.length) pieBot.append(elemento("span", null, `📎 ${turno.archivos.length}`));
   if (turno.idioma) pieBot.append(elemento("span", null, turno.idioma));
   pieBot.append(elemento("span", null, duracion(turno.segundos)));
@@ -2267,10 +2302,19 @@ function ponerCuenta(cual, n) {
   else boton.removeAttribute("title");
 }
 
+// Que calificaciones habia la ultima vez, para notar cuando llega una.
+let firmaCalif = null;
+
 async function cargarCalificaciones() {
   const consulta = filtroCalif ? `?valor=${filtroCalif}` : "";
   const datos = await pedir(`/panel/calificaciones${consulta}`);
   cacheCalif = datos.calificaciones;
+  // Llego (o se quito) una reaccion: el chat abierto la muestra sin tener
+  // que salir y volver a entrar.
+  const firma = cacheCalif.map((c) => `${c.turno_id}${c.emoji}${c.fecha}`).join("|");
+  const cambio = firmaCalif !== null && firma !== firmaCalif;
+  firmaCalif = firma;
+  if (cambio && vista === "chat" && chatElegido) await abrirChat(chatElegido);
   // En la pestaña, las malas: son las que piden revisar algo.
   ponerCuenta("calificaciones", datos.malas);
   if (solapa === "calificaciones") pintarLista();
@@ -2637,10 +2681,10 @@ async function latido() {
       await cargarLog();
     }
     latidosDesdeDias += 1;
+    if (latidosDesdeDias % 5 === 0) await cargarCalificaciones().catch(() => {});
     if (latidosDesdeDias >= 15) {
       latidosDesdeDias = 0;
       await cargarDias();
-      await cargarCalificaciones().catch(() => {});
     }
     if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
       $("subtitulo-principal").textContent = t("consultando");
@@ -2677,6 +2721,125 @@ $("boton-idioma").addEventListener("click", () => {
 // En automatico, el panel se oscurece solo al dar la hora: se comprueba en
 // cada latido, que ya corre cada dos segundos, en vez de montar otro reloj.
 let eraDeNoche = oscuroAhora();
+
+/* ------------------------------------------------ deslizar para actualizar */
+
+// Todo de nuevo: usuarios, conversaciones, calificaciones y dias, y lo que
+// este abierto a la derecha.
+async function refrescarPanel() {
+  const cargas = [cargarUsuarios(), cargarChats(), cargarCalificaciones(), cargarDias()];
+  const resultados = await Promise.allSettled(cargas);
+  const fallo = resultados.find((r) => r.status === "rejected");
+  mostrarError(fallo ? fallo.reason.message : "");
+  if (vista === "chat" && chatElegido) await abrirChat(chatElegido);
+  else if (vista === "calificacion" && califElegida) {
+    abrirCalificacion(cacheCalif.find((c) => c.turno_id === califElegida.turno_id) || califElegida);
+  } else if (vista === "logs" && diaElegido) await cargarLog();
+}
+
+const recarga = elemento("div", "recarga");
+recarga.setAttribute("role", "status");
+recarga.setAttribute("aria-live", "polite");
+recarga.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>';
+document.body.append(recarga);
+const ARCO = 2 * Math.PI * 9;
+const UMBRAL = 72;      // lo que hay que jalar para que actualice
+const TOPE = 112;       // hasta donde baja el circulo
+let actualizando = false;
+
+function ponerRecarga(caja, jalado) {
+  const marco = caja.getBoundingClientRect();
+  const bajada = Math.min(jalado, TOPE);
+  recarga.classList.remove("volviendo");
+  recarga.classList.toggle("listo", jalado >= UMBRAL);
+  recarga.style.left = `${marco.left + marco.width / 2}px`;
+  recarga.style.top = `${marco.top - 40}px`;
+  recarga.style.opacity = String(Math.min(1, jalado / UMBRAL));
+  recarga.style.transform = `translateY(${bajada}px) rotate(${jalado * 2.5}deg)`;
+  // El arco se completa conforme se jala: lleno = suelta y actualiza.
+  const circulo = recarga.querySelector("circle");
+  circulo.style.strokeDasharray = `${ARCO}`;
+  circulo.style.strokeDashoffset = `${ARCO * (1 - Math.min(1, jalado / UMBRAL) * 0.85)}`;
+}
+
+function esconderRecarga() {
+  recarga.classList.add("volviendo");
+  recarga.classList.remove("girando", "listo");
+  recarga.style.opacity = "0";
+  recarga.style.transform = "translateY(0)";
+  recarga.removeAttribute("aria-label");
+}
+
+async function soltarRecarga(caja, jalado) {
+  if (jalado < UMBRAL || actualizando) {
+    if (!actualizando) esconderRecarga();
+    return;
+  }
+  actualizando = true;
+  ponerRecarga(caja, UMBRAL);
+  recarga.classList.add("volviendo", "girando");
+  recarga.setAttribute("aria-label", t("actualizando"));
+  recarga.querySelector("circle").style.strokeDashoffset = `${ARCO * 0.7}`;
+  const desde = performance.now();
+  try {
+    await refrescarPanel();
+  } finally {
+    // Un minimo de giro: si contesta en 50 ms, el circulo ni se veria y no
+    // quedaria claro que actualizo.
+    const falta = 450 - (performance.now() - desde);
+    if (falta > 0) await new Promise((r) => setTimeout(r, falta));
+    actualizando = false;
+    esconderRecarga();
+  }
+}
+
+function deslizarParaActualizar(caja) {
+  // Con el dedo: jalar hacia abajo estando hasta arriba.
+  let inicio = null;
+  let jalado = 0;
+  caja.addEventListener("touchstart", (e) => {
+    inicio = caja.scrollTop <= 0 && !actualizando ? e.touches[0].clientY : null;
+    jalado = 0;
+  }, { passive: true });
+  caja.addEventListener("touchmove", (e) => {
+    if (inicio === null) return;
+    const recorrido = e.touches[0].clientY - inicio;
+    if (recorrido <= 0 || caja.scrollTop > 0) { jalado = 0; esconderRecarga(); return; }
+    jalado = recorrido * 0.55;  // con resistencia, como en el telefono
+    ponerRecarga(caja, jalado);
+    e.preventDefault();
+  }, { passive: false });
+  caja.addEventListener("touchend", () => {
+    if (inicio !== null) soltarRecarga(caja, jalado);
+    inicio = null;
+    jalado = 0;
+  });
+
+  // Con el trackpad o la rueda: seguir subiendo cuando ya se esta arriba.
+  // Solo cuenta si el gesto EMPEZO arriba: la inercia de subir rapido por
+  // un chat largo no debe disparar una actualizacion al tocar el tope.
+  let rueda = 0;
+  let empezoArriba = false;
+  let ultimoGiro = 0;
+  let pausa = null;
+  caja.addEventListener("wheel", (e) => {
+    const ahora = performance.now();
+    if (ahora - ultimoGiro > 250) {
+      empezoArriba = caja.scrollTop <= 0;
+      rueda = 0;
+    }
+    ultimoGiro = ahora;
+    if (!empezoArriba || actualizando || caja.scrollTop > 0 || e.deltaY >= 0) return;
+    rueda += Math.min(60, -e.deltaY) * 0.45;
+    ponerRecarga(caja, rueda);
+    clearTimeout(pausa);
+    pausa = setTimeout(() => { soltarRecarga(caja, rueda); rueda = 0; }, 220);
+  }, { passive: true });
+}
+
+for (const id of ["lista", "vista-chat", "vista-actividad", "vista-calificacion", "vista-usuarios", "lineas-log"]) {
+  deslizarParaActualizar($(id));
+}
 
 async function arranque() {
   aplicarTema();

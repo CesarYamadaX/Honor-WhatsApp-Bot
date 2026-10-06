@@ -500,6 +500,17 @@ def motivo(acotada: Acotada, cadenas: Iterable[str]) -> str:
     )
 
 
+def instruccion_ampliada(cadenas: Iterable[str] | None) -> str:
+    """La nota para el modelo cuando a alguien le acaban de dar mas acceso."""
+    ahora = nombres(cadenas) if cadenas else "todas las cadenas"
+    return (
+        f"ACCESO AMPLIADO: a este usuario le acaban de dar acceso a {ahora}. "
+        "Lo que antes en esta conversacion se le nego por permiso, ahora SI "
+        "lo puede ver. Si pide repetirlo o 'intentalo de nuevo', contesta "
+        "esa pregunta anterior con normalidad, consultando los datos."
+    )
+
+
 def instruccion(cadenas: Iterable[str]) -> str:
     """La nota que lee el modelo antes de cada pregunta de un usuario acotado."""
     permitidas = nombres(normalizar(cadenas) or ())

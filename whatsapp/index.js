@@ -67,6 +67,10 @@ let intentosReconexion = 0;
 // Evita procesar el mismo mensaje dos veces si WhatsApp lo reentrega (por
 // ejemplo, tras una reconexion a media respuesta).
 const registroVistos = new RegistroDeVistos();
+// El telefono real de cada chat "@lid", aprendido de sus mensajes (que traen
+// key.senderPn). Una reaccion puede llegar sin senderPn, y sin esto se
+// autorizaria con el @lid, que el servicio no reconoce.
+const telefonoDelLid = new Map();
 
 // sendPresenceUpdate esta referenciado por jid, no por mensaje: si llegan dos
 // mensajes casi simultaneos del mismo chat, comparten un solo intervalo de
@@ -334,7 +338,8 @@ async function atender(mensaje) {
     // la autorizacion/HTTP hacia Python, nunca para enviar: las respuestas
     // deben ir al jid original (jid), que es el que WhatsApp realmente usa
     // para enrutar el chat.
-    const idAutorizacion = mensaje.key?.senderPn ?? jid;
+    if (mensaje.key?.senderPn) telefonoDelLid.set(jid, mensaje.key.senderPn);
+    const idAutorizacion = mensaje.key?.senderPn ?? telefonoDelLid.get(jid) ?? jid;
 
     // Grupos y difusiones se descartan ANTES de tocar nada: ni dedupe, ni
     // presencia, ni HTTP. Si el chip llega a agregarse a un grupo, el bot no
@@ -357,13 +362,24 @@ async function atender(mensaje) {
 
     // Una reaccion (👍/👎) a un mensaje del bot es una calificacion de esa
     // respuesta. No se contesta nada: es una señal, no una pregunta. El
-    // servicio decide si cuenta (solo pulgares, solo respuestas del bot).
+    // servicio decide si cuenta (solo pulgares, y solo si el id es de un
+    // mensaje que mando el bot: los tiene registrados).
+    //
+    // Antes aqui se exigia reaccion.key.fromMe, y ninguna reaccion llego
+    // nunca (6/10/2026, tabla de calificaciones vacia en produccion): esa
+    // llave viene como la ve QUIEN REACCIONA, y para el el mensaje del bot no
+    // es suyo. El id basta: el servicio lo busca entre los enviados.
     const reaccion = mensaje.message?.reactionMessage;
     if (reaccion) {
-      if (reaccion.key?.fromMe && reaccion.key?.id && (await autorizado(AGENT_API_URL, idAutorizacion))) {
-        await reaccionar(AGENT_API_URL, idAutorizacion, reaccion.key.id, reaccion.text ?? "");
+      const reaccionado = reaccion.key?.id;
+      if (reaccionado && (await autorizado(AGENT_API_URL, idAutorizacion))) {
+        const resultado = await reaccionar(AGENT_API_URL, idAutorizacion, reaccionado, reaccion.text ?? "");
+        console.log(
+          `[whatsapp] reaccion ${reaccion.text || "(quitada)"} de ${jid} a ${reaccionado}: ` +
+            (resultado?.calificado ? "calificada" : resultado?.motivo ?? "sin respuesta del servicio"),
+        );
       } else {
-        descartado("reaccion que no califica", jid);
+        descartado("reaccion que no califica", jid, ` (id ${reaccionado ?? "?"})`);
       }
       return;
     }

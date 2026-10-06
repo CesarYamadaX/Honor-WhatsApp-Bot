@@ -1947,9 +1947,10 @@ class SQLAgent:
         # El idioma se sostiene entre turnos: los mensajes de WhatsApp son
         # cortos y muchos ("top 10", "y de Elektra?") no tienen idioma propio.
         self.idioma = idiomas.POR_DEFECTO
-        # Las cadenas con las que se contesto el turno anterior. Si cambian
-        # (en el panel, a media conversacion) el historial se olvida: traeria
-        # respuestas con datos que el usuario ya no puede ver.
+        # Las cadenas con las que se contesto el turno anterior. Si se le
+        # QUITA alguna (en el panel, a media conversacion) el historial se
+        # olvida: traeria respuestas con datos que ya no puede ver. Si se le
+        # dan mas, se conserva (ver `responder`).
         self.cadenas: frozenset[str] | None = None
         self.agent_executor = self._create_agent()
 
@@ -2217,13 +2218,27 @@ class SQLAgent:
         """
         self.idioma = idiomas.detectar(pregunta) or self.idioma
         cadenas = acceso.normalizar(cadenas)
-        if cadenas != getattr(self, "cadenas", None):
-            self.historial.clear()
+        antes = getattr(self, "cadenas", None)
+        ampliado = False
+        if cadenas != antes:
+            # Visto el 6/10/2026: le dieron todas las cadenas despues de que
+            # se le nego Elektra, escribio "intentalo de nuevo" y el bot ya no
+            # sabia de que hablaba: el historial se borraba con CUALQUIER
+            # cambio. Solo hace falta cuando pierde acceso a algo.
+            todas = frozenset(acceso.CADENAS)
+            if (antes or todas) - (cadenas or todas):
+                self.historial.clear()
+            else:
+                ampliado = bool(self.historial)
             self.cadenas = cadenas
         with contexto_peticion(
             self.engine, cancelacion, pregunta, self.idioma, cadenas
         ) as ctx:
             instruccion = idiomas.INSTRUCCION[self.idioma]
+            if ampliado:
+                # Sin esto el modelo ve en el historial que se le nego y lo
+                # vuelve a negar ("intentalo de nuevo" -> otra vez no).
+                instruccion = f"{instruccion}\n\n{acceso.instruccion_ampliada(cadenas)}"
             if ctx.cadenas:
                 # Junto a la del idioma: cambia por usuario, y lo ultimo que
                 # lee el modelo antes de la pregunta es lo que mas pesa.
