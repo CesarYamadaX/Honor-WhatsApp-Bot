@@ -455,6 +455,11 @@ class ContextoPeticion:
     cancelacion: threading.Event | None = None
     # Las cadenas que puede ver quien pregunta, o None si todas. Ver acceso.py.
     cadenas: frozenset[str] | None = None
+    # Las cadenas que pidio y no tiene, y si alguna herramienta si devolvio
+    # datos: con eso `responder` decide si el mensaje es solo el aviso de
+    # permiso o la respuesta con el aviso al final.
+    negadas: set[str] = field(default_factory=set)
+    hubo_datos: bool = False
 
     def registrar_reporte(self, *rutas: str | None) -> None:
         """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
@@ -652,6 +657,12 @@ def _objetos_a_evitar(query: str) -> str:
     if not motivos:
         return ""
     return "No la ejecute. " + " ".join(motivos)
+
+
+def _sin_permiso(ctx: "ContextoPeticion", acotada: "acceso.Acotada") -> str:
+    """Anota las cadenas negadas y devuelve lo que se le dice al modelo."""
+    ctx.negadas.update(acotada.fuera)
+    return acceso.motivo(acotada, ctx.cadenas)
 
 
 def _objetos_consultados(query: str) -> list[str]:
@@ -916,7 +927,7 @@ def valores_distintos(tabla: str, columna: str) -> str:
         # Marcas, carriers y periodos no son de nadie y salen de la foto.
         acotada = acceso.acotar(sql, ctx.cadenas)
         if acotada.bloqueada:
-            return acceso.motivo(acotada, ctx.cadenas)
+            return _sin_permiso(ctx, acotada)
         columna_cadena = acceso.columna_de_cadena(objeto["nombre"])
         if precalculados is not None and columna_cadena and (
             columna_cadena.casefold() == real.casefold()
@@ -1065,7 +1076,7 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
     if ctx.cadenas:
         pedida = acceso.cadena_de(retailer)
         if pedida is not None and pedida not in ctx.cadenas:
-            return acceso.motivo(acceso.Acotada("", fuera=[pedida]), ctx.cadenas)
+            return _sin_permiso(ctx, acceso.Acotada("", fuera=[pedida]))
         filtro_retail += " AND " + acceso.condicion("[retail]", ctx.cadenas)
 
     # De la fecha mas reciente que exista para ese modelo, el anuncio mas
@@ -1106,6 +1117,7 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
             + ". Prueba con menos palabras del modelo."
         )
 
+    ctx.hubo_datos = True
     fecha = filas[0][4]
     lineas = [f"Precios publicados en las tiendas en linea el {fecha}:"]
     for retail, carrier, nombre, precio, _, url in filas:
@@ -1252,7 +1264,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     if ctx.cadenas:
         acotada = acceso.acotar(sql_historico, ctx.cadenas)
         if acotada.bloqueada:
-            return acceso.motivo(acotada, ctx.cadenas)
+            return _sin_permiso(ctx, acotada)
         sql_historico = acotada.query
     try:
         with ctx.engine.connect() as conexion:
@@ -1284,6 +1296,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
         )
 
     _registrar_base(ctx, resultado)
+    ctx.hubo_datos = True
     return _texto_del_pronostico(resultado)
 
 
@@ -1325,7 +1338,7 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     )
     ctx = _contexto_actual()
     if ctx.cadenas and "TELCEL" not in ctx.cadenas:
-        return acceso.motivo(acceso.Acotada("", fuera=["TELCEL"]), ctx.cadenas)
+        return _sin_permiso(ctx, acceso.Acotada("", fuera=["TELCEL"]))
     try:
         resultado = inventario.calcular(ctx.engine, modelo, (marca or "").strip().upper())
     except Exception as error:  # noqa: BLE001
@@ -1336,6 +1349,7 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
             f"No hay stock ni venta en Telcel que coincida con {marca} {modelo!r}. "
             "Revisa el nombre con `buscar_modelos` o pregunta al usuario."
         )
+    ctx.hubo_datos = True
     texto = inventario.como_texto(resultado)
     if len(resultado.tabla) > 15:
         try:
@@ -1469,7 +1483,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 + ", ".join(acotada.fuera + acotada.desconocidos),
                 bitacora.NOTA,
             )
-            return acceso.motivo(acotada, ctx.cadenas)
+            return _sin_permiso(ctx, acotada)
         query = acotada.query
         local = acceso.acotar(pedida, ctx.cadenas, local=True)
         pedida = None if local.bloqueada else local.query
@@ -1574,6 +1588,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         " ".join(query.split())[:400],
     )
     bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s", bitacora.RESULTADO)
+    ctx.hubo_datos = True
     resultado = formatear_resultado(df)
 
     # La grafica ya NO depende de que haya Excel. Antes iba dentro del `if`
@@ -2236,6 +2251,21 @@ class SQLAgent:
                 # Ofrecer "tambien te puedo decir..." debajo de un "no pude"
                 # seria prometer lo que acaba de fallar.
                 ctx.sugerencias = []
+            # Pidio una cadena que no tiene: el aviso lo pone el servicio, en
+            # su idioma, y dice que el permiso es SUYO. Si no quedo nada que
+            # si pueda ver, el mensaje es solo el aviso.
+            if ctx.cadenas:
+                negadas = ctx.negadas | (acceso.cadenas_en(pregunta) - ctx.cadenas)
+                if negadas:
+                    aviso = acceso.aviso_sin_permiso(negadas, ctx.cadenas, self.idioma)
+                    propio = acceso.sin_negativa_propia(
+                        texto.replace(acceso.SIN_PERMISO, ""), negadas
+                    ).strip()
+                    if ctx.hubo_datos and propio:
+                        texto = f"{propio}\n\n{aviso}"
+                    else:
+                        texto = aviso
+                        ctx.sugerencias = []
             # El historial guarda lo que escribio el modelo; la ficha se pega
             # despues, para el usuario. Repetirsela al modelo en el siguiente
             # turno solo lo invitaria a copiarla.

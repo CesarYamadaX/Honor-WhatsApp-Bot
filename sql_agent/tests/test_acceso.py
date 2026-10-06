@@ -272,3 +272,51 @@ class TestElHistorial:
         agente.responder("y de coppel?", cadenas=COPPEL)
         assert [n for n, _ in vistos] == [0, 2, 0]
         assert "ACCESO" not in vistos[0][1] and "SOLO puede ver datos de Coppel" in vistos[2][1]
+
+
+class TestElAvisoDePermiso:
+    """Pedido el 6/10/2026: que el mensaje diga que el usuario NO TIENE
+    PERMISO, no que el bot no tenga la informacion."""
+
+    def _responder(self, pregunta, salida_del_modelo, query=None, cadenas=COPPEL):
+        agente = SQLAgent.__new__(SQLAgent)
+        agente.engine = _motor_de_precios()
+        agente.historial = []
+        agente.idioma = "es"
+
+        class _Ejecutor:
+            def invoke(self, payload, config=None, **kwargs):
+                if query:
+                    consultar_sql.invoke({"query": query})
+                return {"output": salida_del_modelo}
+
+        agente.agent_executor = _Ejecutor()
+        return agente.responder(pregunta, cadenas=cadenas)[0]
+
+    def test_sin_nada_que_si_pueda_ver_es_solo_el_aviso(self):
+        texto = self._responder("y cuanto vendio Telcel?", "No tengo acceso a las ventas de Telcel.")
+        assert texto.startswith("🔒 No tienes permiso para consultar información de Telcel")
+        assert "Tu usuario solo tiene acceso a Coppel" in texto
+        assert "No tengo acceso" not in texto
+
+    def test_la_marca_del_modelo_tambien_es_solo_el_aviso(self):
+        texto = self._responder("ventas de sears", "SIN_PERMISO")
+        assert texto.startswith("🔒") and "Sears" in texto and "SIN_PERMISO" not in texto
+
+    def test_con_datos_de_lo_suyo_va_la_respuesta_y_el_aviso_al_final(self):
+        texto = self._responder(
+            "precios de Coppel contra Telcel",
+            "Coppel tiene un precio de 100. No hay información de Telcel.",
+            query="SELECT [Retail], SUM([Precio]) AS p FROM Prices GROUP BY [Retail]",
+        )
+        assert texto.startswith("Coppel tiene un precio de 100.")
+        assert "No hay información de Telcel" not in texto
+        assert "🔒 No tienes permiso para consultar información de Telcel" in texto
+
+    def test_en_ingles(self):
+        agente_texto = self._responder("how much did Telcel sell?", "SIN_PERMISO")
+        assert agente_texto.startswith("🔒 You don't have permission to see Telcel")
+
+    def test_sin_limite_no_hay_aviso(self):
+        texto = self._responder("y Telcel?", "Telcel vendio 10.", cadenas=None)
+        assert texto == "Telcel vendio 10."

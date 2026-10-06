@@ -26,7 +26,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from catalogo import CADENA_DE_PROMOTORIA, _VISTAS_DE_LA_CONSOLIDADA, _union_de
+from catalogo import (
+    _CADENAS_EN_PREGUNTA,
+    CADENA_DE_PROMOTORIA,
+    _VISTAS_DE_LA_CONSOLIDADA,
+    _union_de,
+)
 
 # Las cadenas, como se guardan y como se ven en el panel.
 CADENAS = ("COPPEL", "ELEKTRA", "TELCEL", "LIVERPOOL", "AT&T", "SEARS", "MOVISTAR")
@@ -146,12 +151,86 @@ def normalizar(cadenas: Iterable[str] | None) -> frozenset[str] | None:
     return validas or None
 
 
-def nombres(cadenas: Iterable[str]) -> str:
+_Y = {"es": " y ", "en": " and ", "zh": "和"}
+
+
+def nombres(cadenas: Iterable[str], idioma: str = "es") -> str:
     """'Coppel y Elektra', para los textos."""
     lista = [NOMBRES[c] for c in CADENAS if c in set(cadenas)]
     if len(lista) <= 1:
         return "".join(lista)
-    return ", ".join(lista[:-1]) + " y " + lista[-1]
+    separador = "、" if idioma == "zh" else ", "
+    return separador.join(lista[:-1]) + _Y.get(idioma, " y ") + lista[-1]
+
+
+def cadenas_en(texto: str) -> set[str]:
+    """Las cadenas que nombra un texto ("y cuanto vendio Telcel?")."""
+    return {
+        cadena for cadena, patron in _CADENAS_EN_PREGUNTA
+        if re.search(patron, texto or "", re.IGNORECASE)
+    }
+
+
+# El aviso cuando se pide una cadena que no se tiene. Fijo y no del modelo:
+# pedido el 6/10/2026, porque el modelo escribia "no tengo acceso a Telcel",
+# que se lee como que al BOT le falta informacion. El permiso es del usuario,
+# y lo que sigue es pedirlo, no volver a intentar.
+_AVISO_SIN_PERMISO = {
+    "es": (
+        "🔒 No tienes permiso para consultar información de {fuera}. Tu usuario "
+        "solo tiene acceso a {suyas}. Si necesitas esos datos, pide acceso a "
+        "lauragabrielacastellanos o al equipo de GTM México."
+    ),
+    "en": (
+        "🔒 You don't have permission to see {fuera} information. Your user "
+        "only has access to {suyas}. If you need that data, ask "
+        "lauragabrielacastellanos or the GTM Mexico team for access."
+    ),
+    "zh": (
+        "🔒 你没有查看 {fuera} 信息的权限。你的账号只能查看 {suyas}。如需这些数据，"
+        "请向 lauragabrielacastellanos 或 GTM Mexico 团队申请权限。"
+    ),
+}
+
+
+def aviso_sin_permiso(fuera: Iterable[str], permitidas: Iterable[str], idioma: str) -> str:
+    plantilla = _AVISO_SIN_PERMISO.get(idioma, _AVISO_SIN_PERMISO["es"])
+    return plantilla.format(fuera=nombres(fuera, idioma), suyas=nombres(permitidas, idioma))
+
+
+# Lo que contesta el modelo cuando no queda nada que si pueda ver: el
+# servicio lo cambia por el aviso.
+SIN_PERMISO = "SIN_PERMISO"
+
+# Una frase del modelo que niega por su cuenta ("no tengo acceso a Telcel",
+# "no hay informacion de Telcel"). Se quita si nombra una cadena negada: el
+# aviso fijo ya lo dice, y bien.
+_NEGATIVA = re.compile(
+    r"no\s+(tengo|tienes|tiene|cuento\s+con)\s+(acceso|permiso)|sin\s+acceso|"
+    r"no\s+(puedo|es\s+posible)\s+(consultar|ver|acceder|darte|mostrar)|"
+    r"no\s+hay\s+(informaci[oó]n|datos)|no\s+dispongo|"
+    r"(don'?t|do\s+not|doesn'?t)\s+have\s+(access|permission)|no\s+access|"
+    r"can'?t\s+(access|see|query)|cannot\s+(access|see|query)|"
+    r"没有.{0,6}(权限|访问)|无法.{0,6}(查看|访问|查询)",
+    re.IGNORECASE,
+)
+
+
+def sin_negativa_propia(texto: str, negadas: Iterable[str]) -> str:
+    """Quita las frases donde el modelo niega por su cuenta una cadena negada."""
+    patrones = [p for c, p in _CADENAS_EN_PREGUNTA if c in set(negadas)]
+    if not patrones:
+        return texto
+    parrafos = []
+    for parrafo in texto.split("\n"):
+        frases = re.split(r"(?<=[.!?。！？])\s+", parrafo)
+        quedan = [
+            f for f in frases
+            if not (_NEGATIVA.search(f) and any(re.search(p, f, re.IGNORECASE) for p in patrones))
+        ]
+        if quedan or not parrafo.strip():
+            parrafos.append(" ".join(quedan))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(parrafos)).strip()
 
 
 def cadena_de(valor) -> str | None:
@@ -404,10 +483,13 @@ def motivo(acotada: Acotada, cadenas: Iterable[str]) -> str:
     permitidas = nombres(normalizar(cadenas) or ())
     if acotada.fuera:
         return (
-            f"No la ejecute: este usuario solo tiene acceso a {permitidas}, y la "
-            f"consulta lee datos de {nombres(acotada.fuera)}. No busques esos "
-            "datos por otro camino: dile al usuario, en una frase, que no tiene "
-            f"acceso a esa informacion y que puede consultar {permitidas}."
+            f"No la ejecute: este usuario NO TIENE PERMISO para ver "
+            f"{nombres(acotada.fuera)}; solo tiene acceso a {permitidas}. No "
+            "busques esos datos por otro camino. NO escribas tu el aviso de "
+            "permiso ni digas que no hay datos: se agrega solo al final del "
+            "mensaje. Si la pregunta tambien incluye alguna de sus cadenas, "
+            "consulta y contesta esa parte; responde exactamente "
+            f"{SIN_PERMISO} solo si no queda nada que si pueda ver."
         )
     return (
         f"No la ejecute: este usuario solo tiene acceso a {permitidas}, y "
@@ -427,6 +509,13 @@ def instruccion(cadenas: Iterable[str]) -> str:
         "esas cadenas: la consolidada y las tablas de varias cadenas le "
         "devuelven solo las suyas, y las de otras cadenas no se ejecutan. "
         "Si pregunta por otra cadena, o pide compararse con una que no "
-        "tiene, dile en una frase que no tiene acceso a esa informacion. Y "
-        f"cuando des un total o un 'mercado', aclara que es de {permitidas}."
+        "tiene: NO busques esos datos, y NO escribas tu el aviso ni digas "
+        "'no tengo acceso' o 'no hay informacion' (los datos SI existen; es "
+        "el usuario el que no tiene permiso). El aviso de permiso se agrega "
+        "solo al final del mensaje. Si la pregunta TAMBIEN incluye alguna de "
+        f"sus cadenas ({permitidas}) -- una comparacion, 'Coppel contra "
+        "Elektra' --, consulta y contesta esa parte con sus numeros como "
+        "siempre. Responde exactamente "
+        f"{SIN_PERMISO} solo si TODO lo que pidio es de cadenas que no tiene. "
+        f"Cuando des un total o un 'mercado', aclara que es de {permitidas}."
     )
