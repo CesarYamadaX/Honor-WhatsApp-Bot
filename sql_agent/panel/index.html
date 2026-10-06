@@ -424,6 +424,20 @@
   }
   .persona input.nombre:focus-visible { outline: none; }
   .persona .pista { color: var(--tinta-2); font-size: 12.5px; margin-top: 3px; }
+  /* Que cadenas ve cada quien: en la ficha, y para elegirlas al editar. */
+  .persona .acceso { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+  .persona .acceso .rotulo { color: var(--tinta-2); font-size: 12px; margin-right: 2px; }
+  .pastilla.cadena { background: none; border: 1px solid var(--borde-fuerte); color: var(--tinta-2); font-weight: 500; }
+  .pastilla.cadena.limitada { border-color: var(--acento); color: var(--acento-fuerte); }
+  button.opcion-cadena {
+    font: inherit; font-size: 12.5px; background: none; color: var(--tinta-2);
+    border: 1px solid var(--borde-fuerte); border-radius: 15px;
+    padding: 3px 11px; cursor: pointer; white-space: nowrap;
+  }
+  button.opcion-cadena[aria-pressed="true"] {
+    background: var(--ok-suave); color: var(--acento-fuerte); border-color: var(--acento);
+  }
+  button.opcion-cadena:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
   button.accion {
     font-size: 12.5px; background: none; color: var(--tinta-2);
     border: 1px solid var(--borde-fuerte); border-radius: 15px;
@@ -545,6 +559,11 @@
     .logs-barra { padding-inline: 12px; }
     .logs-lineas { font-size: 12px; }
     .logs-lineas .linea { grid-template-columns: 58px minmax(0, 1fr); gap: 8px; padding-inline: 12px; }
+    /* En el telefono los botones bajan a su propia linea: al lado se
+       comian el ancho y el nombre y las cadenas quedaban en una columna. */
+    .persona { flex-wrap: wrap; }
+    .persona .datos { flex-basis: calc(100% - 60px); }
+    .persona .acciones { width: 100%; }
   }
 </style>
 </head>
@@ -750,6 +769,11 @@ const TEXTOS = {
     cambiar_foto: "Cambiar la foto",
     ph_nombre: "Nombre y área, por ejemplo: Laura, ventas",
     pista_foto: (numero) => `${numero} · toca la foto para cambiarla`,
+    puede_ver: "Puede ver",
+    todas_las_cadenas: "Todas las cadenas",
+    pista_cadenas:
+      "Lo que no marques no lo verá: ni venta, ni inventario, ni promotoría, ni precios. " +
+      "Vale desde su siguiente mensaje.",
     alta: (fecha) => `alta ${fecha}`,
     estado: { activo: "activo", suspendido: "suspendido" },
     confirmar_suspender: (quien) =>
@@ -867,6 +891,11 @@ const TEXTOS = {
     cambiar_foto: "Change the photo",
     ph_nombre: "Name and team, for example: Laura, sales",
     pista_foto: (numero) => `${numero} · tap the photo to change it`,
+    puede_ver: "Can see",
+    todas_las_cadenas: "All retailers",
+    pista_cadenas:
+      "Whatever you leave unmarked they won't see: no sales, inventory, promoters or prices. " +
+      "Applies from their next message.",
     alta: (fecha) => `added ${fecha}`,
     estado: { activo: "active", suspendido: "suspended" },
     confirmar_suspender: (quien) =>
@@ -996,6 +1025,8 @@ let temporizadorBusqueda = null;
 let resaltar = "";            // lo que se resalta al abrir un chat desde la busqueda
 let cacheChats = [];
 let cacheUsuarios = [];
+// Las cadenas que se pueden asignar ({clave, nombre}), las manda el servicio.
+let cacheCadenas = [];
 let enCursoPorChat = new Map();
 
 // La pestaña de logs: los dias que hay, cual esta abierto y sus filtros.
@@ -1710,6 +1741,9 @@ function fichaEditable(usuario) {
   retrato.addEventListener("click", () => elegirFoto(usuario));
 
   const datos = elemento("div", "datos");
+  // Vacio = todas, igual que en el servicio.
+  const elegidas = new Set(usuario.cadenas || []);
+  const guardar = () => guardarFicha(usuario, campo.value, elegidas);
   const campo = document.createElement("input");
   campo.className = "nombre";
   campo.id = `nombre-${usuario.numero}`;
@@ -1717,16 +1751,18 @@ function fichaEditable(usuario) {
   campo.placeholder = t("ph_nombre");
   campo.setAttribute("aria-label", `Nombre de ${usuario.numero}`);
   campo.addEventListener("keydown", (evento) => {
-    if (evento.key === "Enter") guardarNombre(usuario, campo.value);
+    if (evento.key === "Enter") guardar();
     if (evento.key === "Escape") { editando = null; pintarPersonas(); }
   });
   datos.append(
     campo,
     elemento("div", "pista", t("pista_foto", usuario.numero)),
+    selectorDeCadenas(elegidas),
+    elemento("div", "pista", t("pista_cadenas")),
   );
 
   const acciones = elemento("div", "acciones");
-  acciones.append(boton(t("guardar"), "palomita", () => guardarNombre(usuario, campo.value), "buena"));
+  acciones.append(boton(t("guardar"), "palomita", guardar, "buena"));
   if (usuario.foto) {
     acciones.append(boton(t("quitar_foto"), "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
   }
@@ -1754,7 +1790,7 @@ function fichaDeUsuario(usuario) {
       : usuario.nombre
         ? `${usuario.numero} · ${t("alta", (usuario.creado || "").slice(0, 10))}`
         : t("alta", (usuario.creado || "").slice(0, 10));
-  datos.append(quien, elemento("div", "cuando", cuando));
+  datos.append(quien, elemento("div", "cuando", cuando), lineaDeAcceso(usuario));
 
   // Dos acciones y no tres: suspender y bloquear hacian casi lo mismo y en
   // la fila no se distinguian de un vistazo.
@@ -1780,10 +1816,81 @@ function fichaDeUsuario(usuario) {
   return fila;
 }
 
-async function guardarNombre(usuario, nombre) {
+function nombreDeCadena(clave) {
+  return cacheCadenas.find((c) => c.clave === clave)?.nombre || clave;
+}
+
+// "Puede ver: Coppel · Elektra", o "Todas las cadenas".
+function lineaDeAcceso(usuario) {
+  const linea = elemento("div", "acceso");
+  linea.append(elemento("span", "rotulo", t("puede_ver")));
+  const cadenas = usuario.cadenas || [];
+  if (!cadenas.length) {
+    linea.append(elemento("span", "pastilla cadena", t("todas_las_cadenas")));
+  } else {
+    for (const clave of cadenas) {
+      linea.append(elemento("span", "pastilla cadena limitada", nombreDeCadena(clave)));
+    }
+  }
+  return linea;
+}
+
+// Una opcion por cadena, mas "Todas". Marcar todas a mano es lo mismo que
+// "Todas": el servicio lo guarda como sin limite.
+function selectorDeCadenas(elegidas) {
+  const caja = elemento("div", "acceso");
+  caja.setAttribute("role", "group");
+  caja.setAttribute("aria-label", t("puede_ver"));
+  caja.append(elemento("span", "rotulo", t("puede_ver")));
+  const opciones = [];
+  const pintar = () => {
+    for (const { boton: b, clave } of opciones) {
+      b.setAttribute("aria-pressed", String(clave ? elegidas.has(clave) : !elegidas.size));
+    }
+  };
+  const opcion = (clave, etiqueta) => {
+    const b = elemento("button", "opcion-cadena", etiqueta);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      if (!clave) {
+        elegidas.clear();
+      } else if (elegidas.has(clave)) {
+        elegidas.delete(clave);
+      } else {
+        elegidas.add(clave);
+        if (elegidas.size === cacheCadenas.length) elegidas.clear();
+      }
+      pintar();
+    });
+    opciones.push({ boton: b, clave });
+    caja.append(b);
+  };
+  opcion(null, t("todas_las_cadenas"));
+  for (const cadena of cacheCadenas) opcion(cadena.clave, cadena.nombre);
+  pintar();
+  return caja;
+}
+
+async function guardarFicha(usuario, nombre, elegidas) {
   editando = null;
-  if ((nombre || "").trim() === (usuario.nombre || "")) return pintarPersonas();
-  await cambiar("renombrar", { numero: usuario.numero, nombre });
+  const cambioDeNombre = (nombre || "").trim() !== (usuario.nombre || "");
+  // En el orden del servicio, para comparar con lo que ya tenia.
+  const cadenas = cacheCadenas.map((c) => c.clave).filter((c) => elegidas.has(c));
+  const cambioDeCadenas = cadenas.join(",") !== (usuario.cadenas || []).join(",");
+  if (!cambioDeNombre && !cambioDeCadenas) return pintarPersonas();
+  try {
+    mostrarError("");
+    const enviar = (accion, cuerpo) => pedir(`/panel/usuarios/${accion}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+    if (cambioDeNombre) await enviar("renombrar", { numero: usuario.numero, nombre });
+    if (cambioDeCadenas) await enviar("cadenas", { numero: usuario.numero, cadenas });
+  } catch (error) {
+    mostrarError(error.message);
+  }
+  await cargarUsuarios();
 }
 
 // El selector de archivos vive fuera de la fila: si se recrea con cada
@@ -2132,6 +2239,7 @@ function pintarLog(alFinal = false) {
 async function cargarUsuarios() {
   const datos = await pedir("/panel/usuarios");
   cacheUsuarios = datos.usuarios;
+  cacheCadenas = datos.cadenas || [];
   // En la pestaña, los suspendidos: los activos ya se ven en la lista y
   // no piden nada. Antes decia "3/3", que no se entendia de que era.
   ponerCuenta("usuarios", cacheUsuarios.filter((u) => u.estado !== "activo").length);

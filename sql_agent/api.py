@@ -30,6 +30,7 @@ from calificaciones import Calificaciones, valor_de
 from fotos import AlmacenDeFotos, ErrorDeFoto
 from config import Config
 from session import RegistroSesiones
+import acceso
 from usuarios import ErrorDeUsuarios, RegistroUsuarios, Usuario
 from config import normalizar_chat_id
 
@@ -266,8 +267,13 @@ def crear_app(
         turno = diario.comenzar(chat_id, pregunta)
         comenzo = time.monotonic()
         try:
+            # Las cadenas se leen en cada pregunta, no al abrir la sesion:
+            # un cambio en el panel vale desde el siguiente mensaje.
+            numero = normalizar_chat_id(chat_id)
             texto, archivos = sesion.agente.responder(
-                pregunta, cancelacion=sesion.cancelacion
+                pregunta,
+                cancelacion=sesion.cancelacion,
+                cadenas=usuarios.cadenas_de(numero) if numero else None,
             )
             idioma_usado = getattr(sesion.agente, "idioma", idioma)
             diario.terminar(
@@ -580,6 +586,7 @@ def crear_app(
         return {
             "usuarios": [vars(u) for u in usuarios.listar()],
             "con_conversacion_viva": registro.chats(),
+            "cadenas": [{"clave": c, "nombre": acceso.NOMBRES[c]} for c in acceso.CADENAS],
         }
 
     class AltaUsuario(BaseModel):
@@ -594,6 +601,11 @@ def crear_app(
     class NuevoNombre(BaseModel):
         numero: str
         nombre: str = ""
+
+    class NuevasCadenas(BaseModel):
+        numero: str
+        # Vacio = todas.
+        cadenas: list[str] = []
 
     class NuevaFoto(BaseModel):
         numero: str
@@ -638,6 +650,13 @@ def crear_app(
         _solo_local()
         logger.info("Panel: %s ahora se llama %r", cambio.numero, cambio.nombre)
         return _respuesta_de_usuario(usuarios.renombrar, cambio.numero, cambio.nombre)
+
+    @app.post("/panel/usuarios/cadenas")
+    async def poner_cadenas(cambio: NuevasCadenas) -> dict:
+        """Que cadenas puede ver. Vale desde su siguiente mensaje."""
+        _solo_local()
+        logger.info("Panel: %s ahora ve %s", cambio.numero, cambio.cadenas or "todas las cadenas")
+        return _respuesta_de_usuario(usuarios.poner_cadenas, cambio.numero, cambio.cadenas)
 
     @app.post("/panel/usuarios/foto")
     async def poner_foto(cambio: NuevaFoto) -> dict:

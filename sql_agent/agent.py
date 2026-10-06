@@ -43,8 +43,10 @@ from catalogo import (
     describir_objeto,
     filtros_que_no_casan,
     indice,
+    motivo_para_evitar,
     valores_conocidos,
 )
+import acceso
 from contexto import contexto_del_resultado
 import excel_pivot
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
@@ -451,6 +453,8 @@ class ContextoPeticion:
     # forma de matar el hilo que corre el agente, asi que la cancelacion es
     # cooperativa: se revisa antes de cada herramienta y se aborta ahi.
     cancelacion: threading.Event | None = None
+    # Las cadenas que puede ver quien pregunta, o None si todas. Ver acceso.py.
+    cadenas: frozenset[str] | None = None
 
     def registrar_reporte(self, *rutas: str | None) -> None:
         """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
@@ -498,10 +502,12 @@ def contexto_peticion(
     cancelacion: threading.Event | None = None,
     pregunta: str = "",
     idioma: str = idiomas.POR_DEFECTO,
+    cadenas=None,
 ) -> Iterator[ContextoPeticion]:
     """Activa un contexto por petición, en lugar del viejo global _db_instance."""
     ctx = ContextoPeticion(
-        engine=engine, cancelacion=cancelacion, pregunta=pregunta, idioma=idioma
+        engine=engine, cancelacion=cancelacion, pregunta=pregunta, idioma=idioma,
+        cadenas=acceso.normalizar(cadenas),
     )
     testigo = _contexto.set(ctx)
     try:
@@ -629,6 +635,23 @@ _OBJETO_EN_FROM = re.compile(
     r"\b(?:FROM|JOIN)\s+((?:\[[^\]]+\]|[\w$]+)(?:\s*\.\s*(?:\[[^\]]+\]|[\w$]+))*)",
     re.IGNORECASE,
 )
+
+
+def _objetos_a_evitar(query: str) -> str:
+    """Si la consulta lee algo marcado como NO USAR, por que y que usar. "" si no.
+
+    Bloquea en vez de avisar, como los demas guardianes: un aviso pegado al
+    resultado llega cuando el numero ya salio, y B2BHonorGeneralReport da
+    una cuarta parte de la venta sin ningun error que lo delate.
+    """
+    motivos = []
+    for ref in acceso.referencias(query):
+        motivo = motivo_para_evitar(ref.objeto)
+        if motivo and f"{ref.objeto}: {motivo}" not in motivos:
+            motivos.append(f"{ref.objeto}: {motivo}")
+    if not motivos:
+        return ""
+    return "No la ejecute. " + " ".join(motivos)
 
 
 def _objetos_consultados(query: str) -> list[str]:
@@ -880,17 +903,31 @@ def valores_distintos(tabla: str, columna: str) -> str:
     # tarda minutos: en produccion se comia los 20s de timeout sin devolver
     # nada, tres veces, y agotaba los 90 de la peticion antes de que la
     # consulta real alcanzara a correr.
-    precalculados = valores_conocidos(objeto["nombre"], real)
-    if precalculados is not None:
-        return _listar(real, objeto["nombre"], precalculados)
-
+    ctx = _contexto_actual()
     sql = (
         f"SELECT DISTINCT TOP {MAX_VALORES} {_corchetes(real)} "
         f"FROM {_corchetes(base)}.dbo.{_corchetes(objeto['nombre'])} "
         f"WHERE {_corchetes(real)} IS NOT NULL ORDER BY 1"
     )
+    precalculados = valores_conocidos(objeto["nombre"], real)
+    if ctx.cadenas:
+        # Un usuario acotado ve los valores de sus cadenas, no los de todas:
+        # la lista de tiendas de otra cadena ya es informacion de esa cadena.
+        # Marcas, carriers y periodos no son de nadie y salen de la foto.
+        acotada = acceso.acotar(sql, ctx.cadenas)
+        if acotada.bloqueada:
+            return acceso.motivo(acotada, ctx.cadenas)
+        columna_cadena = acceso.columna_de_cadena(objeto["nombre"])
+        if precalculados is not None and columna_cadena and (
+            columna_cadena.casefold() == real.casefold()
+        ):
+            precalculados = [v for v in precalculados if acceso.cadena_de(v) in ctx.cadenas]
+        elif acotada.acotados and real.casefold() not in _DE_NADIE:
+            precalculados = None
+        sql = acotada.query
+    if precalculados is not None:
+        return _listar(real, objeto["nombre"], precalculados)
 
-    ctx = _contexto_actual()
     try:
         with ctx.engine.connect() as conexion:
             with _presupuesto_de_tiempo(conexion, TIMEOUT_VALORES):
@@ -913,6 +950,11 @@ def valores_distintos(tabla: str, columna: str) -> str:
         )
 
     return _listar(real, objeto["nombre"], [fila[0] for fila in filas])
+
+
+# Columnas cuyos valores no son de ninguna cadena: listarlas completas a un
+# usuario acotado no le enseña nada de las demas.
+_DE_NADIE = {"brand", "carrier", "year", "month", "week", "region"}
 
 
 def _listar(columna: str, objeto: str, valores: list) -> str:
@@ -1019,6 +1061,12 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
     if retailer.strip():
         filtro_retail = " AND [retail] LIKE ?"
         parametros.append(f"%{retailer.strip()}%")
+    ctx = _contexto_actual()
+    if ctx.cadenas:
+        pedida = acceso.cadena_de(retailer)
+        if pedida is not None and pedida not in ctx.cadenas:
+            return acceso.motivo(acceso.Acotada("", fuera=[pedida]), ctx.cadenas)
+        filtro_retail += " AND " + acceso.condicion("[retail]", ctx.cadenas)
 
     # De la fecha mas reciente que exista para ese modelo, el anuncio mas
     # barato de cada tienda y carrier. Sin el ROW_NUMBER salen decenas de
@@ -1043,7 +1091,6 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
         FROM reciente WHERE orden = 1 ORDER BY [price]
     """
 
-    ctx = _contexto_actual()
     try:
         with ctx.engine.connect() as conexion:
             cursor = conexion.exec_driver_sql(sql, tuple(parametros) * 2)
@@ -1197,8 +1244,16 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     es_valida, motivo = _evaluar_sql(sql_historico)
     if not es_valida:
         return f"Ese SQL no es una consulta de lectura valida ({motivo})."
+    evitar = _objetos_a_evitar(sql_historico)
+    if evitar:
+        return evitar
 
     ctx = _contexto_actual()
+    if ctx.cadenas:
+        acotada = acceso.acotar(sql_historico, ctx.cadenas)
+        if acotada.bloqueada:
+            return acceso.motivo(acotada, ctx.cadenas)
+        sql_historico = acotada.query
     try:
         with ctx.engine.connect() as conexion:
             df = _ejecutar_interrumpible(conexion, sql_historico, ctx.cancelacion)
@@ -1269,6 +1324,8 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
         bitacora.NOTA,
     )
     ctx = _contexto_actual()
+    if ctx.cadenas and "TELCEL" not in ctx.cadenas:
+        return acceso.motivo(acceso.Acotada("", fuera=["TELCEL"]), ctx.cadenas)
     try:
         resultado = inventario.calcular(ctx.engine, modelo, (marca or "").strip().upper())
     except Exception as error:  # noqa: BLE001
@@ -1313,6 +1370,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     mal_unida = _homologacion_mal_unida(query)
     if mal_unida:
         return mal_unida
+
+    evitar = _objetos_a_evitar(query)
+    if evitar:
+        bitacora.paso("la consulta lee una tabla marcada como NO USAR", bitacora.NOTA)
+        return evitar
 
     ctx = _contexto_actual()
     # Lo que queda del presupuesto de la peticion, menos un margen para armar
@@ -1395,12 +1457,33 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # solo confundiria.
     consulta_para_etiqueta = query
     con_repuesto = False
+
+    # Las cadenas de quien pregunta: aqui y no antes, porque los guardianes
+    # de arriba leen la consulta como la escribio el modelo. Ver acceso.py.
+    acotada = None
+    if ctx.cadenas:
+        acotada = acceso.acotar(query, ctx.cadenas)
+        if acotada.bloqueada:
+            bitacora.paso(
+                "la consulta lee cadenas que este usuario no tiene: "
+                + ", ".join(acotada.fuera + acotada.desconocidos),
+                bitacora.NOTA,
+            )
+            return acceso.motivo(acotada, ctx.cadenas)
+        query = acotada.query
+        local = acceso.acotar(pedida, ctx.cadenas, local=True)
+        pedida = None if local.bloqueada else local.query
+        if acotada.acotados:
+            bitacora.paso(
+                f"limite {', '.join(acotada.acotados)} a {acceso.nombres(ctx.cadenas)}",
+                bitacora.NOTA,
+            )
     # Primero el resumen local: si la consulta solo necesita unidades por
     # cadena, marca, modelo, carrier y periodo, se contesta en un segundo en
     # vez de minutos. Si no aplica o falla, None, y va al servidor como
     # siempre. Ver resumen_local.py.
     comenzo = time.monotonic()
-    desde_el_resumen = resumen_local.consultar(pedida)
+    desde_el_resumen = resumen_local.consultar(pedida) if pedida else None
     if desde_el_resumen is not None:
         df, sql_local = desde_el_resumen
         bitacora.paso(f"SQL (resumen local): {' '.join(sql_local.split())}", bitacora.SQL)
@@ -1533,7 +1616,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             # timeout y el usuario no recibiria NADA -- ni el Excel ni el
             # texto. Asi, en el peor caso sale sin esa hoja.
             queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
-            contexto = contexto_del_resultado(df, ctx.engine, query, queda)
+            contexto = contexto_del_resultado(
+                df, ctx.engine, query, queda, cadenas=ctx.cadenas
+            )
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
             contexto = {}
@@ -1649,6 +1734,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "Nota: la consulta se completo con la otra mitad de la cadena "
             f"({'; '.join(completadas)}), asi que este numero ya es la cadena "
             "ENTERA. No hace falta consultar la otra vista."
+        )
+
+    if acotada is not None and acotada.acotados:
+        partes.append(
+            f"Nota: este resultado trae SOLO {acceso.nombres(ctx.cadenas)}, las "
+            "cadenas a las que este usuario tiene acceso. Si hablas de un "
+            "total o del mercado, aclara que es de esas cadenas."
         )
 
     if con_repuesto:
@@ -1840,6 +1932,10 @@ class SQLAgent:
         # El idioma se sostiene entre turnos: los mensajes de WhatsApp son
         # cortos y muchos ("top 10", "y de Elektra?") no tienen idioma propio.
         self.idioma = idiomas.POR_DEFECTO
+        # Las cadenas con las que se contesto el turno anterior. Si cambian
+        # (en el panel, a media conversacion) el historial se olvida: traeria
+        # respuestas con datos que el usuario ya no puede ver.
+        self.cadenas: frozenset[str] | None = None
         self.agent_executor = self._create_agent()
 
     @staticmethod
@@ -1882,7 +1978,9 @@ class SQLAgent:
         La conexion abre en `master`, que NO contiene datos de negocio. Todo lo
         consultable vive en las cinco bases de abajo, asi que SIEMPRE debes
         escribir nombres de tres partes: [Base de datos].dbo.[Objeto]. Por
-        ejemplo: SELECT TOP 10 * FROM [GTM BI Database].dbo.[TBL_DB_FOR_DOS].
+        ejemplo: SELECT TOP 10 * FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B].
+        Lo que en el indice dice "NO USAR" da otro numero, uno viejo, o no
+        termina: no lo consultes, ni para comprobar.
         {catalogo}
 
         REGLAS CRITICAS:
@@ -2091,7 +2189,10 @@ class SQLAgent:
         return _ENLACE_SIN_DESTINO.sub(r"\1", texto)
 
     def responder(
-        self, pregunta: str, cancelacion: threading.Event | None = None
+        self,
+        pregunta: str,
+        cancelacion: threading.Event | None = None,
+        cadenas=None,
     ) -> tuple[str, list[str]]:
         """Responde una pregunta y devuelve (texto, rutas de archivos generados).
 
@@ -2100,14 +2201,23 @@ class SQLAgent:
         historial: una pregunta cancelada no ocurrio.
         """
         self.idioma = idiomas.detectar(pregunta) or self.idioma
+        cadenas = acceso.normalizar(cadenas)
+        if cadenas != getattr(self, "cadenas", None):
+            self.historial.clear()
+            self.cadenas = cadenas
         with contexto_peticion(
-            self.engine, cancelacion, pregunta, self.idioma
+            self.engine, cancelacion, pregunta, self.idioma, cadenas
         ) as ctx:
+            instruccion = idiomas.INSTRUCCION[self.idioma]
+            if ctx.cadenas:
+                # Junto a la del idioma: cambia por usuario, y lo ultimo que
+                # lee el modelo antes de la pregunta es lo que mas pesa.
+                instruccion = f"{instruccion}\n\n{acceso.instruccion(ctx.cadenas)}"
             respuesta = self.agent_executor.invoke(
                 {
                     "input": pregunta,
                     "chat_history": list(self.historial),
-                    "instruccion_idioma": idiomas.INSTRUCCION[self.idioma],
+                    "instruccion_idioma": instruccion,
                 },
                 # El observador solo mira: anota en la bitacora lo que el
                 # agente va haciendo, para poder seguirlo desde el panel.

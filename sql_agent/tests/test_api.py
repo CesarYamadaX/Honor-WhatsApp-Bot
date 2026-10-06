@@ -35,7 +35,7 @@ class AgenteFalso:
         self.antes = antes
         self.preguntas = []
 
-    def responder(self, pregunta, cancelacion=None):
+    def responder(self, pregunta, cancelacion=None, cadenas=None):
         self.preguntas.append(pregunta)
         if self.antes is not None:
             self.antes()
@@ -85,7 +85,7 @@ class TestRespuesta:
 
     def test_un_error_del_agente_se_explica_sin_stack_trace(self):
         class AgenteQueFalla:
-            def responder(self, pregunta, cancelacion=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
                 raise RuntimeError("ODBC Driver 18: login failed for user 'sa'")
 
         app = crear_app(_config(), AgenteQueFalla)
@@ -103,7 +103,7 @@ class TestRespuesta:
         # el problema donde no esta -- ademas de invitar a reintentar algo
         # que va a fallar igual hasta que alguien toque la cuenta.
         class AgenteSinCuota:
-            def responder(self, pregunta, cancelacion=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
                 raise openai.PermissionDeniedError(
                     message="Budget limit exceeded (monthly limit).",
                     response=httpx.Response(
@@ -147,7 +147,7 @@ class TestRespuesta:
         # timeout de SQL si se puede arreglar reformulando o reintentando,
         # y no hay nada que pedirle al equipo de GTM.
         class AgenteQueFalla:
-            def responder(self, pregunta, cancelacion=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
                 raise RuntimeError("timeout expired")
 
         app = crear_app(_config(), AgenteQueFalla)
@@ -177,7 +177,7 @@ class TestRespuesta:
         peticion = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
 
         class AgenteSinRed(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
                 try:
                     raise openai.APIConnectionError(request=peticion)
                 except openai.APIConnectionError as e:
@@ -338,7 +338,7 @@ class TestCancelacion:
         # hasta el final pase lo que pase.
         vistos = []
 
-        def responder(pregunta, cancelacion=None):
+        def responder(pregunta, cancelacion=None, cadenas=None):
             vistos.append(cancelacion)
             return "listo", []
 
@@ -354,7 +354,7 @@ class TestCancelacion:
         # seria ruido.
         from agent import ConsultaCancelada
 
-        def responder(pregunta, cancelacion=None):
+        def responder(pregunta, cancelacion=None, cadenas=None):
             raise ConsultaCancelada()
 
         agente.responder = responder
@@ -370,7 +370,7 @@ class TestCancelacion:
         # plazo se responde como antes en vez de dejar esperando al usuario.
         atorado = threading.Event()
 
-        def responder(pregunta, cancelacion=None):
+        def responder(pregunta, cancelacion=None, cadenas=None):
             atorado.wait(timeout=5)
             return "listo", []
 
@@ -426,7 +426,7 @@ class TestMensajesEnElIdiomaDelUsuario:
         class AgenteQueFalla:
             idioma = "en"
 
-            def responder(self, pregunta, cancelacion=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
                 raise RuntimeError("timeout expired")
 
         app = crear_app(_config(), AgenteQueFalla)

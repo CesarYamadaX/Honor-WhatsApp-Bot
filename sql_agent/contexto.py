@@ -1269,7 +1269,8 @@ def _datos_y_raw(engine, cruda: Cruda, rango, plazo) -> dict[str, pd.DataFrame]:
 
 
 def contexto_del_resultado(
-    df: pd.DataFrame, engine, query: str = "", segundos: int | None = None
+    df: pd.DataFrame, engine, query: str = "", segundos: int | None = None,
+    cadenas=None,
 ) -> dict[str, pd.DataFrame]:
     """Hojas de contexto para el resultado, vacio si no hay nada que agregar.
 
@@ -1277,6 +1278,10 @@ def contexto_del_resultado(
     modulo no, asi que se recibe en vez de adivinarlo: un presupuesto fijo
     mas largo que el que queda no hace esperar mas, hace que la peticion
     entera se caiga por timeout y el usuario no reciba NADA.
+
+    `cadenas` son las que puede ver quien pregunta (None, todas). Acotado,
+    solo se agrega el detalle de UNA cadena suya: "Ventas por tienda" y las
+    fichas de catalogo salen de tablas de todas las cadenas.
     """
     if df is None or df.empty:
         return {}
@@ -1302,7 +1307,10 @@ def contexto_del_resultado(
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
     rango = periodo(df) or periodo_de_la_consulta(query)
     if rango:
-        cruda = CRUDAS.get(retailer_del_resultado(df, query) or "")
+        cadena = retailer_del_resultado(df, query)
+        if cadenas and cadena not in cadenas:
+            return hojas
+        cruda = CRUDAS.get(cadena or "")
 
         # Reporte de UNA cadena: tres hojas y nada mas (pedido el 5/10/2026,
         # viendo el de "las ventas de Elektra de enero"): el PIVOT (lo arma
@@ -1315,6 +1323,9 @@ def contexto_del_resultado(
             reporte = _datos_y_raw(engine, cruda, rango, plazo)
             if reporte:
                 return reporte
+
+        if cadenas:
+            return hojas
 
         # Varias cadenas, o la cruda no contesto: el reporte de siempre.
         # Con el modelo si se puede cuando el reporte es de UNA cadena: ahi
@@ -1342,7 +1353,7 @@ def contexto_del_resultado(
             logger.exception("No se pudo desglosar por tienda")
 
     valores = _valores_de_texto(df)
-    if not valores:
+    if not valores or cadenas:
         return hojas
 
     with engine.connect() as conexion:

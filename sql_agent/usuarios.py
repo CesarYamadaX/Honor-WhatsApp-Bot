@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+import acceso
+
 ACTIVO = "activo"
 SUSPENDIDO = "suspendido"
 ESTADOS = (ACTIVO, SUSPENDIDO)
@@ -73,6 +75,9 @@ class Usuario:
     # falta, y un base64 de 30 KB por usuario arruina las dos cosas.
     foto: str = ""
     nota: str = ""
+    # Las cadenas que puede ver (claves de acceso.CADENAS). Vacio = todas,
+    # que es como estaba todo el mundo antes de que esto existiera.
+    cadenas: list[str] = field(default_factory=list)
     creado: str = field(default_factory=_ahora)
     actualizado: str = field(default_factory=_ahora)
 
@@ -161,6 +166,12 @@ class RegistroUsuarios:
             usuario = self._usuarios.get(numero)
             return usuario is not None and usuario.estado == ACTIVO
 
+    def cadenas_de(self, numero: str) -> frozenset[str] | None:
+        """Las cadenas que puede ver, o None si todas."""
+        with self._candado:
+            usuario = self._usuarios.get(numero)
+            return acceso.normalizar(usuario.cadenas) if usuario is not None else None
+
     def listar(self) -> list[Usuario]:
         with self._candado:
             return sorted(self._usuarios.values(), key=lambda u: (u.estado, u.numero))
@@ -210,6 +221,22 @@ class RegistroUsuarios:
         otra vez.
         """
         return self._cambiar(crudo, nombre=nombre.strip())
+
+    def poner_cadenas(self, crudo: str, cadenas: Iterable[str]) -> Usuario:
+        """Las cadenas que puede ver. Vacio le devuelve todas."""
+        pedidas = [c.strip().upper() for c in cadenas if c and c.strip()]
+        desconocidas = [c for c in pedidas if c not in acceso.CADENAS]
+        if desconocidas:
+            raise ErrorDeUsuarios(
+                f"No conozco la cadena {', '.join(desconocidas)}. Las que hay: "
+                + ", ".join(acceso.CADENAS) + "."
+            )
+        # En el orden de siempre y sin repetir, para que el archivo se lea igual.
+        ordenadas = [c for c in acceso.CADENAS if c in set(pedidas)]
+        # Marcar todas es lo mismo que no limitar.
+        if len(ordenadas) == len(acceso.CADENAS):
+            ordenadas = []
+        return self._cambiar(crudo, cadenas=ordenadas)
 
     def poner_foto(self, crudo: str, archivo: str) -> Usuario:
         return self._cambiar(crudo, foto=archivo)

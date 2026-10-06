@@ -1118,6 +1118,79 @@ NOTAS_POR_OBJETO = {
 }
 
 
+# Lo que el bot NO debe consultar: tablas y vistas que existen, que por el
+# nombre parecen buenas, y que dan otro numero, uno viejo, o no terminan.
+# Revisado el 6/10/2026 contra la base, despues de que el negocio borro
+# Coppel_test (traia las siete cadenas con nombre de una). Cada motivo dice
+# que usar en su lugar, porque es lo que se le devuelve al modelo cuando la
+# consulta se bloquea (ver agent.consultar_sql) y lo que lee en el indice.
+_VENTA = "Para venta usa [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] o la vista vw_ETL_* de la cadena."
+_LENTA = (
+    "No termina: un MAX de una columna paso de 5 minutos (medido el "
+    "6/10/2026), asi que se comeria la pregunta entera. "
+)
+EVITAR = {
+    # Dan otro numero.
+    "B2BHonorGeneralReport": (
+        "Da OTRO numero que la venta oficial: Honor en agosto de 2026 sale con "
+        "Elektra 1 616 (son 8 383) y AT&T Cacs 1 912 (son 6 612), y no trae "
+        "Coppel, Telcel, Sears ni Movistar. " + _VENTA
+    ),
+    "VW_DB_FOR_DOS": (
+        "Mezcla venta e inventario en la misma columna [QTY] (las separa "
+        "[DataType]: 'SO' e 'INV'): sumarla da Coppel agosto 2026 = 120 874 "
+        "cuando la venta fue ~49 000. Y solo trae Coppel, Liverpool Offline y "
+        "Telcel CAC. " + _VENTA + " Para inventario, INV_Retail o el "
+        "inventario de la cadena."
+    ),
+    # Se quedaron viejas.
+    "TBL_DB_FOR_DOS": "Se quedo el 24/03/2026 y solo trae tres cadenas. " + _VENTA,
+    "TAB_DB_FOR_DOS": "Solo trae octubre a diciembre de 2025. " + _VENTA,
+    "VW_DB_FOR_DOSV1": "Se quedo el 31/12/2025. " + _VENTA,
+    "TEMP_SALES": "Tabla temporal, solo trae 2025. " + _VENTA,
+    "INV_Telcel_B2B": (
+        "Se quedo el 31/05/2026. El inventario de Telcel al dia es "
+        "[RAW_INV_B2B].dbo.[TELCEL_INV_B2B] (y las semanas de inventario, la "
+        "herramienta `semanas_de_inventario`)."
+    ),
+    "vw_INV_Telcel_B2B": (
+        "Se quedo el 31/05/2026. El inventario de Telcel al dia es "
+        "[RAW_INV_B2B].dbo.[TELCEL_INV_B2B]."
+    ),
+    # Sin anio: no se sabe de cuando es cada numero.
+    "Coppel": "No tiene anio, solo [MONTH]: no se sabe de que anio es cada numero. " + _VENTA,
+    "Coppel_2024": "No tiene anio, solo [MONTH]: no se sabe de que anio es cada numero. " + _VENTA,
+    "Coppel_Monthly_Excel": "No tiene anio, solo [MesNum]. " + _VENTA,
+    # Rotas en el servidor (binding errors: les falta una tabla de origen).
+    "vw_Coppel_Monthly_Excel": "Esta rota en el servidor (le falta una tabla de origen). " + _VENTA,
+    "vw_Elektra_Monthly_Excel": "Esta rota en el servidor (le falta una tabla de origen). " + _VENTA,
+    "vw_Liverpool_Monthly_Base": "Esta rota en el servidor (le falta una tabla de origen). " + _VENTA,
+    "vw_Liverpool_Monthly_Excel": "Esta rota en el servidor (le falta dbo.Retail_StoreMap). " + _VENTA,
+    # No terminan a tiempo.
+    "VW_COPPEL_MONTLY_SOandINV_LC": _LENTA + _VENTA,
+    "VW_ELEKTRA_MONTLY_SOandINV_LC": _LENTA + _VENTA,
+    "VW_LIVERPOOL_MONTLY_SOandINV_LC": _LENTA + _VENTA,
+    "VW_RETAILERS_MONTH_SOandINV": _LENTA + "Ademas falla con 'Error converting data type varchar to float'. " + _VENTA,
+    "VW_MVS_ATT_SEARS_MONTLY_SOandINV_LC": (
+        "Tarda mas de 3 minutos y en las pruebas fallo 4 de 6 consultas. " + _VENTA
+    ),
+    "V_GTM_HonorReport_LGC": _LENTA + _VENTA,
+    "VW_edicion": _LENTA + _VENTA,
+    "Share_Retail_Price3000": _LENTA + _VENTA + " Para precios, Prices_Weekly_VW.",
+    "CompetitorsAnalysis2024_VW": _LENTA + _VENTA,
+    "CompetitorsAnalysis_Telcel_VW": _LENTA + "Para Telcel usa vw_ETL_TELCEL_B2B.",
+    "TELCEL_CompetitorsAnalysis_VW_LGC": _LENTA + "Para Telcel usa vw_ETL_TELCEL_B2B.",
+}
+
+
+def motivo_para_evitar(nombre: str) -> str | None:
+    """Por que no usar ese objeto, o None si se puede."""
+    for clave, motivo in EVITAR.items():
+        if clave.casefold() == nombre.casefold():
+            return motivo
+    return None
+
+
 @lru_cache(maxsize=1)
 def cargar_catalogo() -> dict:
     return json.loads(RUTA_CATALOGO.read_text(encoding="utf-8"))
@@ -1152,6 +1225,8 @@ def _resumen(obj: dict) -> str:
     # un paso en descubrirlo (ver actualizar_catalogo.py).
     if obj.get("rota"):
         partes.append("ROTA, no usar")
+    elif obj["nombre"] in EVITAR:
+        partes.append("NO USAR")
     return f"{obj['nombre']} ({', '.join(partes)})"
 
 
@@ -1215,6 +1290,9 @@ def _ficha(base: str, obj: dict) -> str:
             "actualizar el catalogo). Cualquier consulta a ella falla con: "
             f"{obj['rota']} -- No la uses; busca el dato en otra tabla o vista."
         )
+    evitar = EVITAR.get(obj["nombre"])
+    if evitar:
+        ficha += f"\nOJO: NO USES ESTE OBJETO. {evitar}"
     nota = NOTAS_POR_OBJETO.get(obj["nombre"])
     if nota:
         # Despues de las columnas, no antes: es la ultima linea que el modelo
