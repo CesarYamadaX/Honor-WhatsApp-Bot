@@ -642,6 +642,39 @@ _OBJETO_EN_FROM = re.compile(
 )
 
 
+_UNION_CON_HOMOLOGACION = re.compile(
+    r"JOIN\s+(?:\[?GTM BI Database\]?\s*\.\s*\[?dbo\]?\s*\.\s*)?\[?UNICOS\$\]?"
+    r"(?P<resto>.*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bJOIN\b|\bUNION\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _homologacion_por_like(sql: str) -> str:
+    """Si se une con UNICOS$ por LIKE, por que no, o "" si no.
+
+    Visto el 7/10/2026: "cuantos telefonos Honor se vendieron en agosto"
+    unio la consolidada con UNICOS$ por `[Material_Description] LIKE '%' +
+    u.[HOMOLOGACION MODELO] + '%'`. UNICOS$ tiene varias filas por modelo
+    (una por cada forma de escribirlo en cada cadena), asi que cada venta
+    casa varias veces: dio 358 079 cuando Honor vendio 160 909, y tardo 205
+    segundos. El numero inflado no da error.
+    """
+    for union in _UNION_CON_HOMOLOGACION.finditer(sql or ""):
+        on = re.split(r"\bON\b", union.group("resto"), maxsplit=1, flags=re.IGNORECASE)
+        if len(on) == 2 and re.search(r"\bLIKE\b", on[1], re.IGNORECASE):
+            return (
+                "No la ejecute: unir con UNICOS$ por LIKE cuenta cada venta "
+                "varias veces (UNICOS$ tiene varias filas por modelo). Asi, "
+                "'telefonos Honor de agosto 2026' dio 358 079 cuando Honor "
+                "vendio 160 909 en total. Une por IGUALDAD, como dice la nota "
+                "de UNICOS$ (describir_objeto): [MATERIAL DESCRIPTION FINAL] "
+                "con las vistas vw_ETL_COPPEL, [DESCRIPCION] con la tabla "
+                "cruda de cada cadena. Si solo preguntan unidades de una "
+                "marca, no hace falta UNICOS$: filtra [Brand]."
+            )
+    return ""
+
+
 def _objetos_a_evitar(query: str) -> str:
     """Si la consulta lee algo marcado como NO USAR, por que y que usar. "" si no.
 
@@ -784,9 +817,10 @@ def buscar_modelos(texto: str) -> str:
     ctx = _contexto_actual()
     try:
         with ctx.engine.connect() as conexion:
-            filas = conexion.exec_driver_sql(
-                sql, tuple(f"%{t}%" for t in tokens)
-            ).fetchall()
+            with _presupuesto_de_tiempo(conexion, _plazo_de_herramienta(ctx)):
+                filas = conexion.exec_driver_sql(
+                    sql, tuple(f"%{t}%" for t in tokens)
+                ).fetchall()
     except Exception as error:  # noqa: BLE001
         logger.exception("Fallo la busqueda de modelos")
         return f"No pude consultar el catalogo de modelos: {error}"
@@ -851,6 +885,19 @@ MARGEN_DE_ENTREGA = 20
 MINIMO_UTIL = 30
 
 MAX_VALORES = 50
+
+# Lo maximo que puede esperar a la base una herramienta que no es la
+# consulta principal (precios, modelos, pronostico, inventario). Antes no
+# tenian tope: el 7/10/2026, en la prueba de 10 personas a la vez, la de
+# precios espero 20 minutos a que el scraping soltara su tabla, y esa
+# conversacion se quedo colgada hasta el corte de 10 minutos.
+TIMEOUT_HERRAMIENTA = 90
+
+
+def _plazo_de_herramienta(ctx: "ContextoPeticion") -> int:
+    """El tope de una herramienta, sin pasarse de lo que le queda a la peticion."""
+    queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
+    return max(1, min(TIMEOUT_HERRAMIENTA, queda))
 
 # Explorar no puede costar la respuesta: la peticion entera vive dentro de
 # AGENT_TIMEOUT_SECONDS (300s por defecto), que ademas tiene que alcanzar para
@@ -1079,6 +1126,12 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
             return _sin_permiso(ctx, acceso.Acotada("", fuera=[pedida]))
         filtro_retail += " AND " + acceso.condicion("[retail]", ctx.cadenas)
 
+    # NOLOCK: el scraping reescribe esta tabla y, mientras lo hace, una
+    # lectura normal espera a que termine. Medido el 7/10/2026: la misma
+    # consulta no termino en 5 minutos y con NOLOCK tardo 7 segundos. Para
+    # precios publicados en internet, leer a media carga es aceptable; quedarse
+    # sin respuesta, no.
+    #
     # De la fecha mas reciente que exista para ese modelo, el anuncio mas
     # barato de cada tienda y carrier. Sin el ROW_NUMBER salen decenas de
     # anuncios del mismo telefono en la misma tienda, que en un chat no se
@@ -1090,10 +1143,10 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
                    ROW_NUMBER() OVER (
                        PARTITION BY [retail], [carrier] ORDER BY [price]
                    ) AS orden
-            FROM {TABLA_SCRAP}
+            FROM {TABLA_SCRAP} WITH (NOLOCK)
             WHERE {condiciones}{filtro_retail}
               AND [consultation_date] = (
-                  SELECT MAX([consultation_date]) FROM {TABLA_SCRAP}
+                  SELECT MAX([consultation_date]) FROM {TABLA_SCRAP} WITH (NOLOCK)
                   WHERE {condiciones}{filtro_retail}
               )
         )
@@ -1104,10 +1157,17 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
 
     try:
         with ctx.engine.connect() as conexion:
-            cursor = conexion.exec_driver_sql(sql, tuple(parametros) * 2)
-            filas = cursor.fetchall()
+            with _presupuesto_de_tiempo(conexion, _plazo_de_herramienta(ctx)):
+                cursor = conexion.exec_driver_sql(sql, tuple(parametros) * 2)
+                filas = cursor.fetchall()
     except Exception as error:  # noqa: BLE001
         logger.exception("Fallo la consulta de precios de internet")
+        if _es_por_tiempo(error):
+            return (
+                "La tabla de precios de internet no contesto a tiempo (puede "
+                "estar actualizandose). No reintentes: dile al usuario que "
+                "lo intente en unos minutos."
+            )
         return f"No pude consultar los precios publicados: {error}"
 
     if not filas:
@@ -1268,7 +1328,8 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
         sql_historico = acotada.query
     try:
         with ctx.engine.connect() as conexion:
-            df = _ejecutar_interrumpible(conexion, sql_historico, ctx.cancelacion)
+            with _presupuesto_de_tiempo(conexion, _plazo_de_herramienta(ctx)):
+                df = _ejecutar_interrumpible(conexion, sql_historico, ctx.cancelacion)
     except ConsultaCancelada:
         raise
     except Exception as error:  # noqa: BLE001
@@ -1340,7 +1401,10 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     if ctx.cadenas and "TELCEL" not in ctx.cadenas:
         return _sin_permiso(ctx, acceso.Acotada("", fuera=["TELCEL"]))
     try:
-        resultado = inventario.calcular(ctx.engine, modelo, (marca or "").strip().upper())
+        resultado = inventario.calcular(
+            ctx.engine, modelo, (marca or "").strip().upper(),
+            plazo=_plazo_de_herramienta(ctx),
+        )
     except Exception as error:  # noqa: BLE001
         logger.exception("Fallo el calculo de semanas de inventario")
         return f"No pude calcular las semanas de inventario: {error}"
@@ -1381,8 +1445,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             f"y una sola sentencia por consulta ({motivo})."
         )
 
-    mal_unida = _homologacion_mal_unida(query)
+    mal_unida = _homologacion_mal_unida(query) or _homologacion_por_like(query)
     if mal_unida:
+        bitacora.paso("la union con UNICOS$ contaria de mas", bitacora.NOTA)
         return mal_unida
 
     evitar = _objetos_a_evitar(query)

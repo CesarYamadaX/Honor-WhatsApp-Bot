@@ -27,6 +27,7 @@ la venta, y se dice.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -80,10 +81,27 @@ def _como_fecha(valor) -> date:
     return valor.date() if isinstance(valor, datetime) else valor
 
 
+@contextmanager
+def _con_plazo(conexion, segundos: int | None):
+    """Lo maximo que puede esperar cada consulta; sin el, una tabla
+    bloqueada dejaria la conversacion colgada. Se restaura al salir: la
+    conexion vuelve al pool y la siguiente no debe heredar este tope."""
+    bruta = getattr(conexion.connection, "dbapi_connection", conexion.connection)
+    if not segundos or not hasattr(bruta, "timeout"):  # SQLite en las pruebas
+        yield
+        return
+    anterior = bruta.timeout
+    bruta.timeout = segundos
+    try:
+        yield
+    finally:
+        bruta.timeout = anterior
+
+
 def calcular(engine, texto: str = "", marca: str = "HONOR",
-             semanas: int = SEMANAS_DE_PROMEDIO) -> Resultado | None:
+             semanas: int = SEMANAS_DE_PROMEDIO, plazo: int | None = None) -> Resultado | None:
     """Las semanas de inventario por modelo. None si no hay stock que case."""
-    with engine.connect() as conexion:
+    with engine.connect() as conexion, _con_plazo(conexion, plazo):
         foto = _como_fecha(conexion.exec_driver_sql(f"SELECT MAX([date]) FROM {INVENTARIO}").scalar())
         hasta_exclusivo = foto
         # La venta puede venir atrasada respecto a la foto: entonces la
