@@ -47,7 +47,7 @@ from catalogo import (
     valores_conocidos,
 )
 import acceso
-from contexto import contexto_del_resultado
+from contexto import contexto_del_resultado, ficha_del_archivo
 import excel_pivot
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
@@ -1685,6 +1685,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     crudo_partido = False
     crudos_agrupados = False
     solo_crudos = False
+    reporte_de_cadena = False
     zip_del_crudo = None
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
@@ -1814,6 +1815,33 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "Nota: la consulta se completo con la otra mitad de la cadena "
             f"({'; '.join(completadas)}), asi que este numero ya es la cadena "
             "ENTERA. No hace falta consultar la otra vista."
+        )
+
+    # Reporte de una cadena: el Excel se arma con la tabla completa de esa
+    # cadena, no con lo que devolvio la consulta del modelo. Lo que el
+    # mensaje cita es lo que trae el archivo.
+    ficha = ficha_del_archivo(contexto) if excel and reporte_de_cadena else None
+    if ficha:
+        partes[0] = partes[0].replace(
+            f"La consulta devolvio {len(df):,} registros; van completos en el "
+            "Excel que se le adjunta al usuario. ",
+            f"Tu consulta devolvio {len(df):,} filas, pero ESE NO es el "
+            "tamano del Excel (ver la nota de abajo). ",
+        )
+        unidades = (
+            f" y {ficha['unidades']:,.0f} unidades" if ficha.get("unidades") is not None else ""
+        )
+        donde = {
+            "Raw_Data": "en la hoja Raw_Data (el detalle completo)",
+            "ZIP": "en el ZIP de CSV (el detalle completo)",
+            "Datos": "en la hoja Datos (agrupado por tienda, marca y mes)",
+        }[ficha["donde"]]
+        filas = f"{ficha['filas']:,} filas" if ficha.get("filas") is not None else "el detalle"
+        partes.append(
+            f"EL ARCHIVO: trae {filas}{unidades} {donde}. Si dices cuantos "
+            "registros o unidades lleva el reporte, usa EXACTAMENTE estas "
+            f"cifras, nunca las {len(df):,} filas de tu consulta: esa solo "
+            "sirvio para ubicar la cadena y el periodo."
         )
 
     if acotada is not None and acotada.acotados:

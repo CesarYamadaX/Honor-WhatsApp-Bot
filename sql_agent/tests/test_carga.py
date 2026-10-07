@@ -69,3 +69,40 @@ class TestNingunaHerramientaSinTope:
         with inventario._con_plazo(conexion, 30):
             assert conexion.connection.dbapi_connection.timeout == 30
         assert conexion.connection.dbapi_connection.timeout == 0
+
+
+class TestElMensajeCitaElArchivo:
+    """Visto el 7/10/2026: el mismo Excel de AT&T se anuncio con 103 852
+    registros una vez y con 51 869 otra (las filas de la consulta del
+    modelo); el archivo traia 118 758 las dos veces."""
+
+    def _contexto(self):
+        import pandas as pd
+        crudo = pd.DataFrame({"Tienda": ["a", "b", "c"], "Cantidad": [2.0, 3.0, 5.0]})
+        crudo.attrs["pivot"] = {"unidades": "Cantidad"}
+        datos = pd.DataFrame({"Tienda": ["a", "b"], "Unidades": [5.0, 5.0]})
+        return {"Datos": datos, "Raw_Data": crudo}
+
+    def test_ficha_del_raw_data(self):
+        from contexto import ficha_del_archivo
+        assert ficha_del_archivo(self._contexto()) == {"filas": 3, "unidades": 10.0, "donde": "Raw_Data"}
+
+    def test_ficha_del_zip(self):
+        import pandas as pd
+        from contexto import ficha_del_archivo
+        datos = pd.DataFrame({"Unidades": [4.0, 6.0]})
+        datos.attrs.update({"zip": "x.zip", "filas_zip": 1_500_000, "agrupado": True})
+        assert ficha_del_archivo({"Datos": datos}) == {"filas": 1_500_000, "unidades": 10.0, "donde": "ZIP"}
+
+    def test_sin_reporte_de_cadena_no_hay_ficha(self):
+        from contexto import ficha_del_archivo
+        assert ficha_del_archivo({}) is None
+
+    def test_el_texto_que_se_reemplaza_sigue_existiendo(self):
+        # agent.consultar_sql cambia este encabezado de formatting.py por el
+        # del archivo: si alguien lo reescribe alla, el reemplazo dejaria de
+        # aplicar sin dar error.
+        import pandas as pd
+        from formatting import MAX_ROWS_AS_TEXT, formatear_resultado
+        df = pd.DataFrame({"a": range(MAX_ROWS_AS_TEXT + 5)})
+        assert f"La consulta devolvio {len(df):,} registros; van completos en el Excel que se le adjunta al usuario. " in formatear_resultado(df).texto

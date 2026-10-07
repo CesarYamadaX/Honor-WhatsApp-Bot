@@ -1038,11 +1038,13 @@ def crudo_en_zip(conexion, cruda: Cruda, desde: str, hasta: str,
     ruta = os.path.abspath(os.path.join(carpeta, f"{nombre}.zip"))
 
     parciales = []
+    escritas = 0
     numero_csv, en_este_csv, archivo, escritor = 0, 0, None, None
     with zipfile.ZipFile(ruta, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_:
         try:
             for trozo in _trozos_del_crudo(conexion, cruda, desde, hasta, columnas):
                 parciales.append(_agrupado_parcial(_con_atributos(trozo, cruda, True), cruda))
+                escritas += len(trozo)
                 inicio = 0
                 while inicio < len(trozo):
                     if escritor is None or en_este_csv >= FILAS_POR_CSV:
@@ -1067,6 +1069,8 @@ def crudo_en_zip(conexion, cruda: Cruda, desde: str, hasta: str,
     agrupado = _juntar_agrupados(parciales)
     agrupado.attrs["agrupado"] = True
     agrupado.attrs["zip"] = ruta
+    # Las filas que de verdad van en el ZIP, para que el mensaje las cite.
+    agrupado.attrs["filas_zip"] = escritas
     logger.info("Crudo de %s en ZIP: %d filas, %.1f MB", cruda.tabla, filas, os.path.getsize(ruta) / 1e6)
     return ruta, agrupado
 
@@ -1266,6 +1270,32 @@ def _datos_y_raw(engine, cruda: Cruda, rango, plazo) -> dict[str, pd.DataFrame]:
         return {}
     agrupado.attrs["agrupado"] = True
     return {"Datos": agrupado}
+
+
+def ficha_del_archivo(contexto: dict) -> dict | None:
+    """Que trae el detalle del reporte de una cadena: filas y unidades.
+
+    Es lo que el mensaje debe citar. Visto el 7/10/2026: la misma pregunta
+    ("el excel de las ventas de AT&T de agosto") dijo 103 852 registros una
+    vez y 51 869 otra, porque citaba las filas de la consulta del modelo
+    (por dia una vez, por tienda la otra). Los dos Excel eran identicos:
+    118 758 filas en Raw_Data. None si no es un reporte de cadena.
+    """
+    crudo = contexto.get("Raw_Data")
+    datos = contexto.get("Datos")
+    if crudo is not None and not crudo.empty:
+        columna = (crudo.attrs.get("pivot") or {}).get("unidades")
+        unidades = (
+            pd.to_numeric(crudo[columna], errors="coerce").sum()
+            if columna in crudo else None
+        )
+        return {"filas": len(crudo), "unidades": unidades, "donde": "Raw_Data"}
+    if datos is not None and not datos.empty and "Unidades" in datos:
+        unidades = pd.to_numeric(datos["Unidades"], errors="coerce").sum()
+        if datos.attrs.get("zip"):
+            return {"filas": datos.attrs.get("filas_zip"), "unidades": unidades, "donde": "ZIP"}
+        return {"filas": len(datos), "unidades": unidades, "donde": "Datos"}
+    return None
 
 
 def contexto_del_resultado(
