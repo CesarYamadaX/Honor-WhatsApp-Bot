@@ -748,13 +748,13 @@
           <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 2c-2.3 0-7 1.2-7 3.5V19h14v-2.5C15 14.2 10.3 13 8 13zm8 0c-.3 0-.6 0-1 .1 1.2.8 2 2 2 3.4V19h6v-2.5c0-2.3-4.7-3.5-7-3.5z"/></svg><span class="cuenta aviso" id="cuenta-usuarios"></span></span>
           <span class="etiqueta" data-t="tab_usuarios">Usuarios</span>
         </button>
-        <button role="tab" id="tab-logs" aria-selected="false" aria-controls="lista">
-          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h14V6H5zm2 2.5 3.5 3.5L7 15.5l-1.4-1.4L7.7 12 5.6 9.9 7 8.5zM12 14h6v1.8h-6V14z"/></svg><span class="cuenta alto" id="cuenta-logs"></span></span>
-          <span class="etiqueta" data-t="tab_logs">Logs</span>
-        </button>
         <button role="tab" id="tab-calificaciones" aria-selected="false" aria-controls="lista">
           <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2 20h3V10H2v10zm20-9c0-1.1-.9-2-2-2h-5.6l.9-4.3v-.3c0-.4-.2-.8-.4-1.1L13.8 2 7.6 8.2c-.4.4-.6.8-.6 1.4V18c0 1.1.9 2 2 2h8.2c.8 0 1.5-.5 1.8-1.2l2.9-6.8c.1-.2.1-.5.1-.7V11z"/></svg><span class="cuenta aviso" id="cuenta-calificaciones"></span></span>
           <span class="etiqueta" data-t="tab_calificaciones">Calificaciones</span>
+        </button>
+        <button role="tab" id="tab-logs" aria-selected="false" aria-controls="lista">
+          <span class="icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v12h14V6H5zm2 2.5 3.5 3.5L7 15.5l-1.4-1.4L7.7 12 5.6 9.9 7 8.5zM12 14h6v1.8h-6V14z"/></svg><span class="cuenta alto" id="cuenta-logs"></span></span>
+          <span class="etiqueta" data-t="tab_logs">Logs</span>
         </button>
       </div>
     </div>
@@ -873,9 +873,9 @@ const TEXTOS = {
     bienvenida:
       "Elige una conversación para ver qué le preguntaron al bot, qué contestó " +
       "y qué hizo para contestarlo. En Usuarios se da de alta, se suspende o se " +
-      "elimina a quien puede escribirle. En Logs está lo técnico: la conexión con " +
-      "WhatsApp y los errores. En Calificaciones, las respuestas que los usuarios " +
-      "calificaron reaccionando en WhatsApp.",
+      "elimina a quien puede escribirle. En Calificaciones, las respuestas que los " +
+      "usuarios calificaron reaccionando en WhatsApp. En Logs está lo técnico: la " +
+      "conexión con WhatsApp y los errores.",
     resumen: (chats, usuarios) =>
       `${chats} conversación${chats === 1 ? "" : "es"} registrada${chats === 1 ? "" : "s"} · ` +
       `${usuarios} usuario${usuarios === 1 ? "" : "s"} en la lista`,
@@ -1019,8 +1019,8 @@ const TEXTOS = {
     bienvenida:
       "Pick a conversation to see what the bot was asked, what it answered and " +
       "what it did to answer it. Under Users you add, suspend or remove whoever " +
-      "can message it. Logs has the technical side: the WhatsApp connection and " +
-      "the errors. Ratings lists the answers users rated by reacting on WhatsApp.",
+      "can message it. Ratings lists the answers users rated by reacting on " +
+      "WhatsApp. Logs has the technical side: the WhatsApp connection and the errors.",
     resumen: (chats, usuarios) =>
       `${chats} conversation${chats === 1 ? "" : "s"} recorded · ` +
       `${usuarios} user${usuarios === 1 ? "" : "s"} on the list`,
