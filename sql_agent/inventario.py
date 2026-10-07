@@ -208,6 +208,12 @@ def _numero(x: float) -> str:
     return f"{x:,.0f}"
 
 
+_MESES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre",
+)
+
+
 def como_texto(r: Resultado, maximo: int = 15) -> str:
     """Lo que lee el modelo: la cuenta, como se hizo y el detalle por modelo."""
     semanas = f"{r.semanas:.1f}" if r.semanas is not None else "sin venta, no se puede calcular"
@@ -218,6 +224,12 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
         f"Venta semanal promedio: {_numero(r.venta_semanal)} unidades, de todos los "
         f"canales de Telcel, del {r.desde:%d/%m/%Y} al {r.hasta:%d/%m/%Y}.",
         "Calculo: stock / venta semanal promedio.",
+        # Pedido el 7/10/2026: que se lea como lo diria una persona, con la
+        # fecha del corte y el stock, no solo "8.1 semanas".
+        f"Al contestar, empieza asi: \"Al {r.foto.day} de {_MESES[r.foto.month - 1]}, "
+        "Telcel tiene <stock> equipos <marca> en inventario; al ritmo de venta "
+        "del ultimo mes (unos <venta semanal> a la semana) le alcanzan para "
+        "unas <semanas> semanas.\" Con las cifras de arriba.",
     ]
     if r.recortada:
         lineas.append(
@@ -237,8 +249,8 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
         if len(r.tabla) > maximo:
             lineas.append(f"(y {len(r.tabla) - maximo} modelos mas, que van adjuntos)")
         lineas.append(
-            "Al contestar, da el total y nombra los 3 modelos con mas stock con "
-            "sus semanas. El resto va adjunto: no lo menciones."
+            "Al contestar, nombra los 3 modelos con mas stock con sus "
+            "semanas. El resto va adjunto: no lo menciones."
         )
     lentos = r.tabla.loc[pd.to_numeric(r.tabla["Semanas de inventario"], errors="coerce").fillna(0) > 52, "Modelo"].tolist()
     if lentos:
