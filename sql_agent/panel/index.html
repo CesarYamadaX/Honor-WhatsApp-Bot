@@ -594,6 +594,7 @@
     padding: 8px 14px; font-size: 12px; line-height: 1.5; color: var(--tinta-2);
     border-bottom: 1px solid var(--borde);
   }
+  .leyenda-calif .emojis { display: block; font-size: 16px; letter-spacing: 1px; margin-top: 2px; }
   .filtros-calif { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--borde); }
   .filtros-calif button {
     border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
@@ -917,7 +918,8 @@ const TEXTOS = {
     lenguas: { es: "español", en: "inglés", zh: "chino" },
     no_se_tradujo: "No se pudo traducir. Intenta de nuevo.",
     filtro_calif: { "-1": "👎 Malas", "1": "👍 Buenas", "": "Todas" },
-    leyenda_calif: (buenas, malas) => `Cuentan como buena: ${buenas}. Como mala: ${malas}.`,
+    leyenda_buenas: "Cuentan como buena:",
+    leyenda_malas: "Cuentan como mala:",
     sin_calificaciones:
       "Todavía nadie ha calificado. Cuando un usuario reacciona a una respuesta del bot, aparece aquí.",
     calificada: (emoji, fecha) => `${emoji} calificada el ${fecha}`,
@@ -1052,7 +1054,8 @@ const TEXTOS = {
     lenguas: { es: "Spanish", en: "English", zh: "Chinese" },
     no_se_tradujo: "Couldn't translate. Try again.",
     filtro_calif: { "-1": "👎 Bad", "1": "👍 Good", "": "All" },
-    leyenda_calif: (buenas, malas) => `Count as good: ${buenas}. As bad: ${malas}.`,
+    leyenda_buenas: "Count as good:",
+    leyenda_malas: "Count as bad:",
     sin_calificaciones:
       "Nobody has rated anything yet. When a user reacts to a bot answer, it shows up here.",
     calificada: (emoji, fecha) => `${emoji} rated on ${fecha}`,
@@ -2345,10 +2348,19 @@ function pintarListaCalif(caja) {
     filtros.append(boton);
   }
   caja.append(filtros);
-  // Que reacciones cuentan: ya no son solo los pulgares.
+  // Que reacciones cuentan en el filtro elegido: con "Malas" solo las
+  // malas, con "Buenas" solo las buenas, y con "Todas" nada (las dos listas
+  // juntas eran un parrafo de emojis que no se leia).
   const { buenas, malas } = reaccionesQueCuentan;
-  if (buenas.length) {
-    caja.append(elemento("div", "leyenda-calif", t("leyenda_calif", buenas.join(" "), malas.join(" "))));
+  const cuentan = filtroCalif === "-1" ? malas : filtroCalif === "1" ? buenas : [];
+  if (cuentan.length) {
+    const clave = filtroCalif === "-1" ? "leyenda_malas" : "leyenda_buenas";
+    const leyenda = elemento("div", "leyenda-calif", t(clave));
+    // El servicio las manda sin selector de variante (asi las compara), y
+    // ❤, ☹ o ⚠ sin el se pintan como texto en blanco y negro.
+    const enColor = (e) => (e.codePointAt(0) < 0x3000 ? `${e}\uFE0F` : e);
+    leyenda.append(elemento("span", "emojis", cuentan.map(enColor).join(" ")));
+    caja.append(leyenda);
   }
 
   const visibles = cacheCalif.filter((c) => soloNumero(c.chat_id).includes(filtro));
