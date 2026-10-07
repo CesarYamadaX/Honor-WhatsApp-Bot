@@ -476,6 +476,27 @@ def _cual_retailer(texto: str) -> str | None:
     return encontrados.pop() if len(encontrados) == 1 else None
 
 
+# Columnas del catalogo de tiendas cuyo NOMBRE trae una cadena. "[Coppel
+# Name]" es el nombre de cualquier tienda en CustomerStores, no Coppel.
+# Visto el 7/10/2026: un reporte de Liverpool region 4 que unia por [Coppel
+# Name] se tomo como "Coppel y Liverpool" y salio con las tiendas de todo
+# el mercado pegadas.
+_COLUMNAS_CON_NOMBRE_DE_CADENA = re.compile(r"\[?Coppel[ _]Name\]?", re.IGNORECASE)
+
+# La consulta se queda con unas tiendas o una region, no con la cadena
+# entera: el reporte de cadena (todas sus tiendas del periodo) le pegaria
+# lo que no se pidio.
+_ACOTA_TIENDAS = re.compile(
+    r"\[?Region\]?\s*(=|IN\b|LIKE\b)|CustomerStores|STATES_AND_REGIONS"
+    r"|\[?(Store|STORE|Tienda|Store Name|Nombre Tienda)\]?\s*(=|IN\b|LIKE\b)",
+    re.IGNORECASE,
+)
+
+
+def acotado_a_tiendas(query: str) -> bool:
+    return bool(_ACOTA_TIENDAS.search(query or ""))
+
+
 def retailer_del_resultado(df: pd.DataFrame, query: str) -> str | None:
     """De que cadena es el reporte, mirando primero el resultado y luego el SQL.
 
@@ -492,7 +513,7 @@ def retailer_del_resultado(df: pd.DataFrame, query: str) -> str | None:
         # reporte de varias cadenas y salio sin PIVOT ni Raw_Data.
         cadenas = {_cual_retailer(v) for v in valores} - {None}
         return cadenas.pop() if len(cadenas) == 1 else None
-    return _cual_retailer(query or "")
+    return _cual_retailer(_COLUMNAS_CON_NOMBRE_DE_CADENA.sub("", query or ""))
 
 
 def acotado_del_resultado(df: pd.DataFrame, query: str = "") -> dict[str, list[str]]:
@@ -1300,7 +1321,7 @@ def ficha_del_archivo(contexto: dict) -> dict | None:
 
 def contexto_del_resultado(
     df: pd.DataFrame, engine, query: str = "", segundos: int | None = None,
-    cadenas=None,
+    cadenas=None, extras: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """Hojas de contexto para el resultado, vacio si no hay nada que agregar.
 
@@ -1312,6 +1333,10 @@ def contexto_del_resultado(
     `cadenas` son las que puede ver quien pregunta (None, todas). Acotado,
     solo se agrega el detalle de UNA cadena suya: "Ventas por tienda" y las
     fichas de catalogo salen de tablas de todas las cadenas.
+
+    `extras` en False deja fuera "Ventas por tienda" y las fichas de
+    catalogo (Tiendas, Regiones, Carriers): pedido el 7/10/2026, un reporte
+    trae lo que se pidio y esas hojas solo si se pidio un desglose.
     """
     if df is None or df.empty:
         return {}
@@ -1335,6 +1360,11 @@ def contexto_del_resultado(
 
     # El desglose por tienda va despues: es lo que se pidio ver, y lo unico
     # que cuesta tiempo. Si falla o no aplica, el resto sigue.
+    # Unas tiendas o una region: el resultado ya es lo que se pidio. Ni el
+    # reporte de la cadena entera ni las hojas extra.
+    if acotado_a_tiendas(query):
+        return hojas
+
     rango = periodo(df) or periodo_de_la_consulta(query)
     if rango:
         cadena = retailer_del_resultado(df, query)
@@ -1354,7 +1384,7 @@ def contexto_del_resultado(
             if reporte:
                 return reporte
 
-        if cadenas:
+        if cadenas or not extras:
             return hojas
 
         # Varias cadenas, o la cruda no contesto: el reporte de siempre.
@@ -1383,7 +1413,7 @@ def contexto_del_resultado(
             logger.exception("No se pudo desglosar por tienda")
 
     valores = _valores_de_texto(df)
-    if not valores or cadenas:
+    if not valores or cadenas or not extras:
         return hojas
 
     with engine.connect() as conexion:

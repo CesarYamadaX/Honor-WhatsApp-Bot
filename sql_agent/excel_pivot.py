@@ -23,6 +23,7 @@ mas lento y mas fragil que hacerlo de a uno.
 
 import logging
 import os
+import re
 import threading
 import time
 
@@ -280,6 +281,48 @@ def agregar_pivot(
         return True
     finally:
         _CANDADO.release()
+
+
+_ES_TIENDA = re.compile(r"tienda|store|sucursal|honor name|punto de venta", re.IGNORECASE)
+_ES_MES = re.compile(r"^(mes|month|num month|mes num|mesnum)$", re.IGNORECASE)
+_NO_ES_MEDIDA = re.compile(
+    r"^(a[nñ]o|anio|year|mes|month|semana|week|dia|day)$|capa|maximo|max|share|%|precio|price|promedio",
+    re.IGNORECASE,
+)
+_PREFERIDA = (re.compile(r"total", re.IGNORECASE), re.compile(r"unidades|qty|cantidad|ventas|units", re.IGNORECASE))
+
+
+def config_por_tienda_y_mes(df: pd.DataFrame) -> dict | None:
+    """Pivot de tiendas por mes para el resultado de una consulta, o None.
+
+    Pedido el 7/10/2026, con el pivot que el usuario armo a mano sobre "la
+    capa mensual de Liverpool region 4": tiendas en filas, meses en
+    columnas, suma de unidades. Solo si el resultado tiene esa forma: una
+    columna de tienda, una de mes y una medida que se pueda sumar (no la
+    capa ni un precio, que sumados no significan nada).
+    """
+    tienda = next((c for c in df.columns if _ES_TIENDA.search(str(c))
+                   and not pd.api.types.is_numeric_dtype(df[c])), None)
+    mes = next((c for c in df.columns if _ES_MES.match(str(c).strip())), None)
+    if tienda is None or mes is None:
+        return None
+    medidas = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])
+               and c not in (tienda, mes) and not _NO_ES_MEDIDA.search(str(c))]
+    for patron in _PREFERIDA:
+        elegida = next((c for c in medidas if patron.search(str(c))), None)
+        if elegida is not None:
+            break
+    else:
+        elegida = medidas[0] if len(medidas) == 1 else None
+    if elegida is None:
+        return None
+    return {
+        "filas": [tienda],
+        "columnas": [mes],
+        "medida": elegida,
+        "nombre_medida": str(elegida),
+        "con_share": False,
+    }
 
 
 def config_ventas_por_tienda(df: pd.DataFrame) -> dict | None:

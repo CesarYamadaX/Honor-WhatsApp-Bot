@@ -128,3 +128,51 @@ class TestElInventarioDeTelcelVaALaHerramienta:
     def test_otras_tablas_no(self):
         from agent import _inventario_telcel_a_mano as f
         assert f("SELECT 1 FROM [RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B]", "ventas de Telcel") == ""
+
+
+class TestElReporteDeLiverpoolRegion4:
+    """Visto el 7/10/2026: "la capa mensual de las tiendas de Liverpool
+    region 4 de 2025" en Excel. Le faltaban dos tiendas, traia hojas que no
+    se pidieron, y el usuario le agrego a mano un pivot de tiendas por mes."""
+
+    def test_unir_tiendas_tal_cual_se_bloquea(self):
+        from agent import _tiendas_sin_normalizar as f
+        assert f("SELECT 1 FROM v JOIN CustomerStores cs ON cs.[Coppel Name] = v.[Store]")
+        assert f("SELECT 1 FROM v JOIN CustomerStores cs ON v.STORE = cs.[Coppel Name]")
+        normalizado = (
+            "SELECT 1 FROM v JOIN CustomerStores cs ON "
+            "REPLACE(REPLACE(LTRIM(RTRIM(cs.[Coppel Name])), '  ', ' '), '  ', ' ') = "
+            "REPLACE(REPLACE(LTRIM(RTRIM(v.[Store])), '  ', ' '), '  ', ' ')"
+        )
+        assert f(normalizado) == ""
+
+    def test_coppel_name_no_es_coppel(self):
+        import pandas as pd
+        from contexto import retailer_del_resultado
+        q = "SELECT * FROM vw_ETL_Liverpool v JOIN CustomerStores cs ON cs.[Coppel Name] = v.[Store]"
+        assert retailer_del_resultado(pd.DataFrame({"x": [1]}), q) == "LIVERPOOL"
+
+    def test_acotado_a_tiendas_no_lleva_hojas_extra(self):
+        import pandas as pd
+        from contexto import contexto_del_resultado
+        df = pd.DataFrame({"Tienda": ["L MTY CENTRO"], "Año": [2025], "Mes": [1], "Unidades": [5.0]})
+        q = "SELECT ... FROM CustomerStores cs WHERE cs.[RetailName] = 'LIVERPOOL' AND cs.[Region] = 'R4'"
+        # Sin base: si intentara el reporte de cadena o las hojas extra, fallaria.
+        assert contexto_del_resultado(df, None, q) == {}
+
+    def test_pivot_de_tiendas_por_mes(self):
+        import pandas as pd
+        import excel_pivot
+        df = pd.DataFrame({
+            "Tienda": ["a"], "Año": [2025], "Mes": [1], "Unidades Liverpool": [1.0],
+            "Unidades IOT": [0.0], "Unidades totales": [1.0], "CAPA mensual 2025": [5.0],
+        })
+        config = excel_pivot.config_por_tienda_y_mes(df)
+        assert config["filas"] == ["Tienda"] and config["columnas"] == ["Mes"]
+        assert config["medida"] == "Unidades totales"  # ni la capa ni una parcial
+
+    def test_sin_tienda_o_mes_no_hay_pivot(self):
+        import pandas as pd
+        import excel_pivot
+        assert excel_pivot.config_por_tienda_y_mes(pd.DataFrame({"Mes": [1], "Unidades": [2.0]})) is None
+        assert excel_pivot.config_por_tienda_y_mes(pd.DataFrame({"Tienda": ["a"], "Unidades": [2.0]})) is None

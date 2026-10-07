@@ -703,6 +703,38 @@ def _inventario_telcel_a_mano(query: str, pregunta: str) -> str:
     )
 
 
+# Una tienda del catalogo comparada tal cual con la tienda de las ventas.
+_NOMBRE_DE_TIENDA = r"(?:[\w$]+\s*\.\s*)?\[?(?:Coppel Name|HONOR NAME)\]?"
+_TIENDA_DE_VENTA = r"(?:[\w$]+\s*\.\s*)?\[?(?:Store|STORE|Tienda|Store Name|Nombre Tienda)\]?"
+_TIENDAS_UNIDAS_TAL_CUAL = re.compile(
+    rf"(?<![\w(]){_NOMBRE_DE_TIENDA}\s*=\s*{_TIENDA_DE_VENTA}(?![\w)])"
+    rf"|(?<![\w(]){_TIENDA_DE_VENTA}\s*=\s*{_NOMBRE_DE_TIENDA}(?![\w)])",
+    re.IGNORECASE,
+)
+
+
+def _tiendas_sin_normalizar(sql: str) -> str:
+    """Si se une el catalogo de tiendas con las ventas por nombre tal cual.
+
+    Visto el 7/10/2026: en las ventas de Liverpool, Galerias Monterrey y
+    Tampico vienen con DOBLE espacio ('L  MONTERREY', 'L  TAMPICO') y en
+    CustomerStores con uno ('L MONTERREY'). `cs.[Coppel Name] = v.[Store]`
+    las perdia sin dar error: el reporte de la region 4 salio sin dos de sus
+    tiendas mas grandes (~29 mil unidades en 2024-2025).
+    """
+    if not _TIENDAS_UNIDAS_TAL_CUAL.search(sql or ""):
+        return ""
+    return (
+        "No la ejecute: unir CustomerStores con las ventas por el nombre de "
+        "la tienda TAL CUAL pierde tiendas sin dar error -- en las ventas "
+        "algunas vienen con doble espacio ('L  MONTERREY', 'L  TAMPICO') y en "
+        "el catalogo con uno ('L MONTERREY'); a Liverpool region 4 le faltaban "
+        "Galerias Monterrey y Tampico. Compara los dos lados normalizados: "
+        "`REPLACE(REPLACE(LTRIM(RTRIM(cs.[Coppel Name])), '  ', ' '), '  ', ' ') "
+        "= REPLACE(REPLACE(LTRIM(RTRIM(v.[Store])), '  ', ' '), '  ', ' ')`."
+    )
+
+
 def _objetos_a_evitar(query: str) -> str:
     """Si la consulta lee algo marcado como NO USAR, por que y que usar. "" si no.
 
@@ -1475,7 +1507,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             f"y una sola sentencia por consulta ({motivo})."
         )
 
-    mal_unida = _homologacion_mal_unida(query) or _homologacion_por_like(query)
+    mal_unida = (
+        _homologacion_mal_unida(query)
+        or _homologacion_por_like(query)
+        or _tiendas_sin_normalizar(query)
+    )
     if mal_unida:
         bitacora.paso("la union con UNICOS$ contaria de mas", bitacora.NOTA)
         return mal_unida
@@ -1720,6 +1756,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     crudos_agrupados = False
     solo_crudos = False
     reporte_de_cadena = False
+    con_datos = False
     zip_del_crudo = None
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
@@ -1732,7 +1769,8 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             # texto. Asi, en el peor caso sale sin esa hoja.
             queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
             contexto = contexto_del_resultado(
-                df, ctx.engine, query, queda, cadenas=ctx.cadenas
+                df, ctx.engine, query, queda, cadenas=ctx.cadenas,
+                extras=pidio_desglose(ctx.pregunta),
             )
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
@@ -1755,11 +1793,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 and pidio_desglose(ctx.pregunta)
             ):
                 contexto["Consulta"] = df
+            con_datos = not reporte_de_cadena and not (
+                contexto and len(df) <= MAX_ROWS_AS_TEXT
+            )
             excel = ExcelExporter.export_to_excel(
                 df,
                 contexto=contexto,
-                con_datos=not reporte_de_cadena
-                and not (contexto and len(df) <= MAX_ROWS_AS_TEXT),
+                con_datos=con_datos,
                 # Muchos datos: solo el crudo, y con el escritor rapido.
                 rapido=solo_crudos,
             )
@@ -1808,6 +1848,20 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 "el crudo ocupa varias hojas; va sin pivot para no resumir solo una",
                 bitacora.NOTA,
             )
+        # Un reporte que no es de cadena (unas tiendas, una region): si el
+        # resultado es tiendas por mes, el mismo pivot que armo a mano el
+        # usuario el 7/10/2026 sobre la hoja Datos.
+        if (
+            sera_el_reporte_bueno
+            and crudos is None
+            and not solo_crudos
+            and con_datos
+            and len(df) <= MAX_FILAS_POR_HOJA_DE_EXCEL
+        ):
+            config = excel_pivot.config_por_tienda_y_mes(df)
+            if config:
+                bitacora.paso("armando el pivot de tiendas por mes", bitacora.NOTA)
+                excel_pivot.agregar_pivot(excel, "Datos", **config)
         if (
             sera_el_reporte_bueno
             and not crudo_partido
