@@ -90,6 +90,9 @@ _DE_UNA_CADENA = {
 # las que por el nombre serian de una, pero no se pudo medir (la consulta no
 # termino en 4 minutos): con el filtro dan lo mismo si de verdad son de una.
 _POR_COLUMNA = {
+    # La vista virtual con el modelo (ventas_con_modelo.py) se expande a las
+    # vistas reales antes de los permisos; esto es para valores_distintos.
+    "vw_ETL_Con_Modelo": "Retail",
     "CompetitorsAnalysis_Telcel_VW": "Retail",
     "TELCEL_CompetitorsAnalysis_VW_LGC": "Retail",
     "VW_COPPEL_MONTLY_SOandINV_LC": "Retail",

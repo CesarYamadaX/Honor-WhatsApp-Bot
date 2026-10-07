@@ -48,8 +48,19 @@ def cargar_valores() -> dict:
     return json.loads(RUTA_VALORES.read_text(encoding="utf-8"))
 
 
+# vw_ETL_Con_Modelo no existe en el servidor: sus valores son los de la
+# consolidada (de la que es la misma venta) y, la region, los del catalogo
+# de tiendas.
+_VALORES_PRESTADOS = {
+    "vw_etl_con_modelo": {"region": "CustomerStores", "*": "ETL_Consolidado_B2B"},
+}
+
+
 def valores_conocidos(objeto: str, columna: str) -> list[str] | None:
     """Los valores precalculados de esa columna, o None si no hay foto."""
+    prestados = _VALORES_PRESTADOS.get(objeto.casefold())
+    if prestados:
+        objeto = prestados.get(columna.casefold(), prestados["*"])
     por_objeto = cargar_valores().get(objeto, {})
     for nombre, valores in por_objeto.items():
         if nombre.casefold() == columna.casefold():
@@ -497,7 +508,8 @@ def avisos_de_media_cadena(query: str) -> list[str]:
 
 def _objetos_nombrados(query: str) -> list[str]:
     """Los objetos con foto de valores que esta consulta menciona."""
-    return [o for o in cargar_valores() if re.search(rf"\b{re.escape(o)}\b", query, re.I)]
+    candidatos = list(cargar_valores()) + ["vw_ETL_Con_Modelo"]  # usa los valores prestados
+    return [o for o in candidatos if re.search(rf"\b{re.escape(o)}\b", query, re.I)]
 
 
 def _parecidos_primero(conocidos: list[str], pedidos: list[str]) -> str:
@@ -594,9 +606,11 @@ NOTAS_GENERALES = [
     "Usala por "
     "defecto, y escribe su nombre COMPLETO tal cual: vive en RAW_DATA_B2B y "
     "NO en [GTM BI Database] -- escribirla ahi es el error mas comun y falla "
-    "con 'Invalid object name'. Las tablas crudas son su insumo y no cuadran con ella (filtran "
-    "distinto y no estan agregadas); ve a ellas solo si te piden el dato "
-    "crudo, y entonces avisa que no es la cifra oficial.",
+    "con 'Invalid object name'. Las tablas crudas (COPPEL_B2B, EKT_B2B, "
+    "TELCEL_B2B, LIVERPOOL_B2B$, ATT_B2B, SEARS_B2B, MVS_B2B y sus _IOT) son "
+    "su insumo y NO se usan para responder: no cuadran con la venta oficial "
+    "y una consulta que las lea no se ejecuta. El detalle crudo le llega al "
+    "usuario solo, en el Excel.",
     "Este es el BI de Honor Mexico, pero las tablas de venta traen TODAS las "
     "marcas (Samsung, Motorola, Oppo, Xiaomi, Apple...): son datos de "
     "competencia. Por eso 'las ventas de Honor' NO son el total de la tabla: "
@@ -604,11 +618,9 @@ NOTAS_GENERALES = [
     "filtras por ella, le estaras reportando el mercado entero como si fuera "
     "de esa marca, y el numero saldra varias veces mas grande de lo real.",
     "NUNCA filtres ETL_Consolidado_B2B por [Retail]. Si la pregunta es de UN "
-    "retailer, consulta directamente la vista de ESE retailer -- SALVO que "
-    "pidan detalle POR MODELO, que va por la tabla cruda unida a la "
-    "homologacion (ver la regla de UNICOS$: es la unica forma de no partir un "
-    "mismo modelo en varias filas, y ademas tarda 2s en vez de 60). Las "
-    "vistas por retailer son para totales, tendencias y cortes por tienda o "
+    "retailer, consulta directamente la vista de ESE retailer (o, si piden "
+    "el MODELO o la clasificacion, vw_ETL_Con_Modelo filtrada por [Retail]). "
+    "Las vistas por retailer son para totales, tendencias y cortes por tienda o "
     "carrier: "
     "[RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] para Coppel, [vw_ETL_Elektra] para "
     "Elektra, [vw_ETL_Liverpool] para Liverpool, [vw_ETL_TELCEL_B2B] para "
@@ -622,71 +634,26 @@ NOTAS_GENERALES = [
     "todas. Acotar por fecha NO ayuda (un solo SUM de un mes tarda 63s igual). "
     "Deja la consolidada para comparar entre retailers o filtrar por [Brand], "
     "que si es rapido (~9s).",
-    "HOMOLOGACION: SOLO existen DOS formas validas de unir con UNICOS$, y "
-    "cada tabla va con SU columna. Cruzarlas pierde casi todo el volumen en "
-    "silencio.\n"
-    "  (A) tabla CRUDA  +  u.[DESCRIPCION]\n"
-    "      ON u.[Retail]='COPPEL' AND u.[DESCRIPCION] = v.[Modelo]\n"
-    "      Sirve para TODOS los retailers. Es la opcion por defecto.\n"
-    "  (B) vw_ETL_COPPEL o vw_ETL_COPPEL_IOT  +  "
-    "u.[MATERIAL DESCRIPTION FINAL]\n"
-    "      ON u.[Retail]='COPPEL' AND "
-    "u.[MATERIAL DESCRIPTION FINAL] = v.[Material_Description]\n"
-    "      Solo esas dos vistas, solo esa columna.\n"
-    "PROHIBIDO: una vista vw_ETL_* con u.[DESCRIPCION]. Medido, pierde el "
-    "96% del volumen y devuelve un top que parece razonable pero es falso.\n"
-    "AGRUPAR POR MODELO SE HACE SIEMPRE POR LA HOMOLOGACION, no por la "
-    "descripcion cruda del retailer. Cada cadena escribe el mismo telefono a "
-    "su manera ('IP. 15 PRO MAX 256GB', 'IPHONE 15 128 GB'), asi que agrupar "
-    "por el texto del retailer parte un mismo modelo en varias filas y los "
-    "totales salen mal. La homologacion vive en "
-    "[GTM BI Database].dbo.[UNICOS$] y la columna a agrupar es "
-    "[HOMOLOGACION MODELO] ('APPLE IPHONE 15 128GB 5G').\n"
-    "La RUTA SEGURA es unir contra la TABLA CRUDA del retailer por "
-    "[DESCRIPCION], que es la descripcion tal cual la escribe la cadena:\n"
-    "  FROM [RAW_DATA_B2B].dbo.[COPPEL_B2B] v\n"
-    "  JOIN [GTM BI Database].dbo.[UNICOS$] u\n"
-    "    ON u.[Retail] = 'COPPEL' AND u.[DESCRIPCION] = v.[Modelo]\n"
-    "  GROUP BY u.[HOMOLOGACION MODELO]\n"
-    "La columna de descripcion cambia por tabla: COPPEL_B2B y Coppel_IOT "
-    "[Modelo], EKT_B2B [Desc Sku], TELCEL_B2B [Descripción] (pero para "
-    "contar Telcel usa la vista, ver abajo), LIVERPOOL_B2B$ y "
-    "Liverpool_IOT [Material Description], ATT_B2B, MVS_B2B y SEARS_B2B "
-    "[Model]. Medido: tarda 1-3s y deja sin casar 0% en Telcel, 0.7% en "
-    "Elektra y 2.5% en Coppel.\n"
-    "[Retail] en UNICOS$ va en MAYUSCULAS y no se escribe como en las ventas: "
-    "COPPEL, ELEKTRA, TELCEL, LIVERPOOL, SEARS, 'AT&T DEALERS', 'AT&T CACS', "
-    "'MOVISTAR CACS', 'MOVISTAR CALL CENTER'.",
-    "CUIDADO al homologar desde una vista vw_ETL_*: su [Material_Description] "
-    "no es la descripcion del retailer, es un CONCAT que cada vista arma "
-    "distinto. Solo en vw_ETL_COPPEL y vw_ETL_COPPEL_IOT es "
-    "CONCAT(Marca, Modelo), y ahi SI casa --al 100%-- pero contra "
-    "[MATERIAL DESCRIPTION FINAL] de UNICOS$, no contra [DESCRIPCION]. En las "
-    "demas lleva un SKU o un codigo delante (Elektra CONCAT(SKU, desc sku), "
-    "Telcel CONCAT(Material, Descripción), Sears CONCAT('Sears ', Model)) y "
-    "asi, entero, NO casa con ninguna columna de UNICOS$: medido, el join "
-    "pierde el 100% en Telcel y en Elektra. Para Elektra homologa desde la "
-    "tabla cruda.\n"
-    "TELCEL ES DISTINTO: NO uses la cruda TELCEL_B2B para contar, trae menos "
-    "que la vista (agosto de 2026, HONOR: 58 744 contra 62 665, -6%; le "
-    "faltan SKUs). Homologa desde vw_ETL_TELCEL_B2B quitandole el SKU de "
-    "adelante:\n"
-    "  FROM [RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B] v\n"
-    "  JOIN (SELECT DISTINCT RTRIM([DESCRIPCION]) AS d, [HOMOLOGACION MODELO], "
-    "[CLASSIFICATION] FROM [GTM BI Database].dbo.[UNICOS$] WHERE [Retail] = "
-    "'TELCEL') u\n"
-    "    ON u.d = RTRIM(SUBSTRING(v.[Material_Description], "
-    "CHARINDEX(' ', v.[Material_Description]) + 1, 500))\n"
-    "Medido: casa el 100% de agosto y enero de 2026 y el 95.6% de "
-    "septiembre (lo que falta son modelos nuevos que UNICOS$ aun no tiene, "
-    "como X6E y X7E: con LEFT JOIN y su descripcion no se pierden). "
-    "'Cuantos TELEFONOS vendio Honor en Telcel en agosto 2026' = 59 438 "
-    "(SMARTPHONE; las tablets son otras 3 227).\n"
-    "REGLA GENERAL: despues de un join de homologacion, comprueba cuanto "
-    "volumen quedo sin casar (LEFT JOIN y contar los NULL). Si se perdio una "
-    "parte grande, la llave esta mal y el top que salga sera falso aunque "
-    "parezca razonable: paso de verdad, un top 10 construido con el 3.6% de "
-    "las ventas.",
+    "POR MODELO, POR CLASIFICACION O POR REGION ('solo celulares', 'que "
+    "modelos se vendieron', 'top de modelos', 'la region 4'): usa "
+    "[RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo]. "
+    "Es la venta oficial de las nueve vistas ETL con tres columnas mas, "
+    "[Region] (R1 a R9, RM) y: "
+    "[Modelo] (el modelo homologado, 'HONOR MAGIC 8 LITE 512GB 5G') y "
+    "[Clasificacion] ('SMARTPHONE', 'TABLET', 'LAPTOP', 'SMARTWATCH', "
+    "'AUDIO', 'ACCESORIO'). Trae las mismas columnas que la consolidada "
+    "([Retail], [Store], [Brand], [Material_Description], [Carrier], [Date], "
+    "[Year], [Month], [WEEK], [QTY]), asi que se filtra igual, y suma "
+    "exactamente lo mismo que las vistas (medido en agosto de 2026, cadena por "
+    "cadena). NO la unas tu con UNICOS$: el modelo ya viene puesto, con el "
+    "cruce correcto de cada cadena. Ejemplo:\n"
+    "  SELECT [Modelo], SUM([QTY]) AS [Unidades]\n"
+    "  FROM [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo]\n"
+    "  WHERE [Brand] = 'HONOR' AND [Clasificacion] = 'SMARTPHONE' AND [Year] = 2026 AND [Month] = 8\n"
+    "  GROUP BY [Modelo] ORDER BY [Unidades] DESC\n"
+    "Lo que el catalogo aun no tiene sale con [Modelo] NULL: no se pierde de "
+    "los totales. Agrupar por la descripcion del retailer parte un mismo "
+    "modelo en varias filas: agrupa siempre por [Modelo].",
     "UNICOS$ tiene ademas [CLASSIFICATION], que separa SMARTPHONE de TABLET, "
     "LAPTOP, COMPUTER, SMARTWATCH, AUDIO y ACCESORIO. Es la forma limpia de "
     "responder 'solo celulares' o 'solo accesorios' sin adivinar por el "
@@ -740,24 +707,15 @@ NOTAS_GENERALES = [
     "'TELCEL CAC', 'TELCEL RETAIL', 'TELCEL DISTR. ASOC.', 'TELCEL WEB', "
     "'TELCEL CORPO.' y 'TELCEL VENTA EMP.'. Filtra con LIKE, o mira antes con "
     "`valores_distintos` como estan escritos.",
-    "REGION: la region de una tienda (R1 a R9, y RM) vive en "
-    "[GTM BI Database].dbo.[CustomerStores].[Region], y se llega a ella "
-    "uniendo por la TABLA CRUDA del retailer, no por la vista consolidada "
-    "-- desde la consolidada, Telcel y Sears no casan NUNCA y Elektra casa "
-    "la mitad. Cada cadena enlaza distinto, y esta medido sobre sus tiendas "
-    "de agosto de 2026:\n"
-    "  - Coppel (COPPEL_B2B.[Tienda]), Telcel (TELCEL_B2B.[Venta]), AT&T "
-    "(ATT_B2B.[Nombre de la Organización]) y Liverpool "
-    "(LIVERPOOL_B2B$.[STORE]) casan con cs.[Coppel Name]: 99.6%, 99.4%, "
-    "99.5% y 94.5%.\n"
-    "  - Elektra y Sears NO casan por nombre. Se unen por el NUMERO de "
-    "tienda (EKT_B2B.[Tienda #], SEARS_B2B.[#POS]), que el catalogo guarda "
-    "entre parentesis al final de [HONOR NAME] ('SEARS SATELITE (104)', "
-    "'ELEKTRA MERIDA 2 (8649)'): 99.1% y 98.9%.\n"
-    "Filtra siempre el catalogo por [RetailName] (COPPEL, ELEKTRA, TELCEL, "
-    "LIVERPOOL, AT&T, SEARS, MOVISTAR) para no cruzar nombres entre "
-    "cadenas, y une con LEFT JOIN: una tienda sin region no puede borrar su "
-    "venta.",
+    "REGION: la region de una tienda (R1 a R9, y RM) ya viene en la columna "
+    "[Region] de [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo], sobre la venta "
+    "oficial: filtra `[Region] = 'R4'` o agrupa por ella. NO la unas tu con "
+    "CustomerStores: los nombres de tienda vienen escritos distinto en cada "
+    "cadena (espacios de mas, prefijos de region de Telcel, numeros en "
+    "Elektra y Sears) y la vista ya hace el cruce correcto de cada una "
+    "(medido en agosto de 2026: AT&T, Coppel, Elektra, Movistar y Sears "
+    "100%, Telcel 99.7%, Liverpool 98%). Lo que no casa sale con [Region] "
+    "NULL y sigue contando en los totales.",
     "EL MODELO SIEMPRE SE AGRUPA POR SU NOMBRE HOMOLOGADO, nunca por el "
     "texto que escribe el retailer, y cada base tiene SU columna homologada:\n"
     "  - venta      -> [GTM BI Database].dbo.[UNICOS$].[HOMOLOGACION MODELO]\n"
@@ -779,7 +737,8 @@ NOTAS_GENERALES = [
     "Complete_Scrap antes de consultarla: [price] trae ceros y el modelo "
     "solo se agrupa bien por [approved_name].",
     "CAPA es la capacidad de venta de una tienda: el MAXIMO que esa tienda "
-    "llego a vender en un periodo. No es una columna de ninguna tabla, se "
+    "llego a vender en un periodo, contando TODAS las marcas (es de la tienda, "
+    "no de Honor; solo es de una marca si la pregunta la nombra). No es una columna de ninguna tabla, se "
     "calcula: unidades por tienda y por mes, y de esos meses el MAX. Di "
     "siempre de que ventana salio ('el maximo mensual desde 2025'), porque el "
     "CAPA depende de cuanto historial mires. "
@@ -864,7 +823,21 @@ NOTAS_GENERALES = [
 
 # Notas de un objeto concreto, que salen cuando el agente lo consulta.
 NOTAS_POR_OBJETO = {
+    "vw_ETL_Con_Modelo": (
+        "La venta OFICIAL (las nueve vistas vw_ETL_*, las de Power BI) con el "
+        "modelo ya puesto: [Modelo] es [HOMOLOGACION MODELO] de UNICOS$ y "
+        "[Clasificacion] su [CLASSIFICATION]. Usala para TODO lo que sea por "
+        "modelo o por tipo de producto ('top de modelos', 'solo celulares', "
+        "'cuantos Magic 8 Lite'). Filtra la cadena por [Retail] como en la "
+        "consolidada. Trae ademas [Region] (R1 a R9, RM) de la tienda, del "
+        "catalogo CustomerStores. Suma exactamente lo que las vistas; lo que "
+        "no casa sale en NULL y sigue contando. No la unas con UNICOS$ ni con "
+        "CustomerStores: ya esta unida, con el cruce correcto de cada cadena."
+    ),
     "UNICOS$": (
+        "PARA RESPONDER POR MODELO NO LA UNAS TU: usa vw_ETL_Con_Modelo, que "
+        "ya trae [Modelo] y [Clasificacion] sobre la venta oficial. Lo que "
+        "sigue es como esta hecha esta tabla.\n"
         "LA tabla de homologacion: convierte la descripcion que usa cada "
         "retailer en un nombre de modelo unico, y toda agrupacion por modelo "
         "pasa por aqui. Se agrupa por [HOMOLOGACION MODELO].\n"
@@ -1191,9 +1164,40 @@ def motivo_para_evitar(nombre: str) -> str | None:
     return None
 
 
+# La vista con el modelo no existe en el servidor (ver ventas_con_modelo.py):
+# se agrega al catalogo para que el bot la vea en el indice y la pueda
+# describir como a cualquier otra.
+_VISTA_CON_MODELO = {
+    "nombre": "vw_ETL_Con_Modelo",
+    "tipo": "vista",
+    "filas": None,
+    "columnas": [
+        {"nombre": n, "tipo": t} for n, t in (
+            ("Retail", "varchar(20)"), ("Store", "nvarchar(511)"), ("Brand", "nvarchar(255)"),
+            ("Material_Description", "nvarchar(532)"), ("Carrier", "varchar(13)"),
+            ("Date", "datetime"), ("Year", "int"), ("Month", "int"), ("WEEK", "int"),
+            ("QTY", "float"), ("Modelo", "nvarchar(255)"), ("Clasificacion", "varchar(50)"),
+            ("Region", "nvarchar(255)"),
+        )
+    ],
+}
+
+# Las tablas crudas de venta: el detalle del Excel, no para responder.
+_CRUDAS_DE_VENTA = {
+    "COPPEL_B2B", "Coppel_IOT", "EKT_B2B", "TELCEL_B2B", "LIVERPOOL_B2B$",
+    "Liverpool_IOT", "ATT_B2B", "SEARS_B2B", "MVS_B2B",
+}
+
+
 @lru_cache(maxsize=1)
 def cargar_catalogo() -> dict:
-    return json.loads(RUTA_CATALOGO.read_text(encoding="utf-8"))
+    catalogo = json.loads(RUTA_CATALOGO.read_text(encoding="utf-8"))
+    for base in catalogo["bases"]:
+        if base["nombre"] == "RAW_DATA_B2B" and not any(
+            o["nombre"] == _VISTA_CON_MODELO["nombre"] for o in base["objetos"]
+        ):
+            base["objetos"].append(_VISTA_CON_MODELO)
+    return catalogo
 
 
 def _corchetes(nombre: str) -> str:
@@ -1227,6 +1231,10 @@ def _resumen(obj: dict) -> str:
         partes.append("ROTA, no usar")
     elif obj["nombre"] in EVITAR:
         partes.append("NO USAR")
+    elif obj["nombre"] in _CRUDAS_DE_VENTA:
+        partes.append("cruda: solo para el Excel, no para responder")
+    elif obj["nombre"] == _VISTA_CON_MODELO["nombre"]:
+        partes.append("venta oficial con [Modelo], [Clasificacion] y [Region]")
     return f"{obj['nombre']} ({', '.join(partes)})"
 
 

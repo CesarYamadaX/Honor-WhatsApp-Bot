@@ -55,6 +55,7 @@ import bitacora
 import inventario
 import resumen_local
 import revisor
+import ventas_con_modelo
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from sugerencias import sugerir
@@ -733,9 +734,10 @@ def _tiendas_sin_normalizar(sql: str) -> str:
         "la tienda TAL CUAL pierde tiendas sin dar error -- en las ventas "
         "algunas vienen con doble espacio ('L  MONTERREY', 'L  TAMPICO') y en "
         "el catalogo con uno ('L MONTERREY'); a Liverpool region 4 le faltaban "
-        "Galerias Monterrey y Tampico. Compara los dos lados normalizados: "
-        "`REPLACE(REPLACE(LTRIM(RTRIM(cs.[Coppel Name])), '  ', ' '), '  ', ' ') "
-        "= REPLACE(REPLACE(LTRIM(RTRIM(v.[Store])), '  ', ' '), '  ', ' ')`."
+        "Galerias Monterrey y Tampico. Para la region usa la columna [Region] "
+        "de [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo], que ya hace el cruce bien "
+        "en todas las cadenas; si necesitas otra columna del catalogo, compara "
+        "los dos lados sin espacios de mas."
     )
 
 
@@ -774,6 +776,62 @@ def _crudo_con_devoluciones(sql: str) -> str:
             f"cada tabla cruda, o usa la vista vw_ETL_* de la cadena."
         )
     return ""
+
+
+# Las tablas crudas de venta. Pedido el 7/10/2026: las respuestas salen
+# SOLO de las vistas ETL, las mismas de Power BI; la cruda es el insumo y va
+# al Excel como detalle (Raw_Data), nunca a la respuesta.
+_CRUDAS_DE_VENTA = {c.tabla.casefold() for c in CRUDAS.values()} | {
+    "liverpool_iot", "coppel_iot", "mvs_b2b",
+}
+
+
+def _tabla_cruda_para_responder(sql: str) -> str:
+    """Si la consulta lee una tabla cruda de venta, por que no. "" si no."""
+    crudas = sorted({
+        r.objeto for r in acceso.referencias(sql or "") if r.objeto.casefold() in _CRUDAS_DE_VENTA
+    })
+    if not crudas:
+        return ""
+    return (
+        f"No la ejecute: {', '.join(crudas)} es una tabla cruda, y las "
+        "respuestas salen solo de las vistas ETL, que son la venta oficial "
+        "(las mismas de Power BI); la cruda no suma igual. Usa la vista de la "
+        "cadena (vw_ETL_*), la consolidada, o -- si piden el modelo, solo "
+        "celulares o una region -- [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo], que "
+        "ya trae [Modelo], [Clasificacion] y [Region]. El detalle crudo le "
+        "llega al usuario solo, en el Excel."
+    )
+
+
+_PIDE_CAPA = re.compile(r"(?<!\w)capa(?!\w)|capacidad de venta|store capacity", re.IGNORECASE)
+_FILTRA_MARCA = re.compile(r"\[?Brand\]?\s*(=|IN\b|LIKE\b)|\[?Marca\]?\s*(=|IN\b|LIKE\b)", re.IGNORECASE)
+
+
+def _capa_de_una_marca(query: str, pregunta: str) -> str:
+    """Si se pide la CAPA y la consulta la saca de una sola marca. "" si no.
+
+    La CAPA es la capacidad de venta de la TIENDA: lo maximo que vendio en un
+    mes, de todas las marcas. Visto el 7/10/2026: "la capa mensual de las
+    tiendas de Liverpool region 4" salio una vez con todas las marcas (L
+    Monterrey La Fe, 2 149) y otra solo con Honor (L Saltillo, 245). Solo es
+    de una marca si la pregunta la nombra.
+    """
+    if not _PIDE_CAPA.search(pregunta or "") or not _FILTRA_MARCA.search(query or ""):
+        return ""
+    marcas = valores_conocidos("ETL_Consolidado_B2B", "Brand") or []
+    nombradas = [
+        m for m in marcas
+        if m and re.search(rf"(?<!\w){re.escape(str(m))}(?!\w)", pregunta, re.IGNORECASE)
+    ]
+    if nombradas:
+        return ""
+    return (
+        "No la ejecute: la CAPA es la capacidad de venta de la TIENDA, lo maximo "
+        "que vendio en un mes contando TODAS las marcas, y la pregunta no nombra "
+        "ninguna. Quita el filtro de [Brand] (si quieres, agrega la parte de "
+        "Honor como columna aparte, pero la capa es la de todas)."
+    )
 
 
 def _objetos_a_evitar(query: str) -> str:
@@ -1069,6 +1127,18 @@ def valores_distintos(tabla: str, columna: str) -> str:
         f"WHERE {_corchetes(real)} IS NOT NULL ORDER BY 1"
     )
     precalculados = valores_conocidos(objeto["nombre"], real)
+    if objeto["nombre"] == ventas_con_modelo.NOMBRE and precalculados is None:
+        # La vista virtual no se puede recorrer con un DISTINCT en 20 s: el
+        # modelo y la clasificacion salen del catalogo de modelos.
+        if real == "Modelo":
+            return "Para ver como se escribe un modelo usa `buscar_modelos`: [Modelo] es [HOMOLOGACION MODELO] de UNICOS$."
+    if objeto["nombre"] == ventas_con_modelo.NOMBRE:
+        if precalculados is None and real == "Clasificacion":
+            sql = (f"SELECT DISTINCT TOP {MAX_VALORES} [CLASSIFICATION] FROM "
+                   f"{ventas_con_modelo.UNICOS} WHERE [CLASSIFICATION] IS NOT NULL ORDER BY 1")
+        else:
+            # Antes de los permisos: asi ven las vistas reales.
+            sql = ventas_con_modelo.expandir(sql, ctx.cadenas)
     if ctx.cadenas:
         # Un usuario acotado ve los valores de sus cadenas, no los de todas:
         # la lista de tiendas de otra cadena ya es informacion de esa cadena.
@@ -1419,11 +1489,16 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     es_valida, motivo = _evaluar_sql(sql_historico)
     if not es_valida:
         return f"Ese SQL no es una consulta de lectura valida ({motivo})."
-    evitar = _objetos_a_evitar(sql_historico) or _crudo_con_devoluciones(sql_historico)
+    evitar = (
+        _objetos_a_evitar(sql_historico)
+        or _tabla_cruda_para_responder(sql_historico)
+        or _crudo_con_devoluciones(sql_historico)
+    )
     if evitar:
         return evitar
 
     ctx = _contexto_actual()
+    sql_historico = ventas_con_modelo.expandir(sql_historico, ctx.cadenas)
     if ctx.cadenas:
         acotada = acceso.acotar(sql_historico, ctx.cadenas)
         if acotada.bloqueada:
@@ -1554,7 +1629,8 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         )
 
     mal_unida = (
-        _homologacion_mal_unida(query)
+        _tabla_cruda_para_responder(query)
+        or _homologacion_mal_unida(query)
         or _homologacion_por_like(query)
         or _tiendas_sin_normalizar(query)
         or _crudo_con_devoluciones(query)
@@ -1569,7 +1645,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         return evitar
 
     ctx = _contexto_actual()
-    a_la_herramienta = _inventario_telcel_a_mano(query, ctx.pregunta)
+    a_la_herramienta = (
+        _inventario_telcel_a_mano(query, ctx.pregunta)
+        or _capa_de_una_marca(query, ctx.pregunta)
+    )
     if a_la_herramienta:
         bitacora.paso("inventario de Telcel a mano: va a la herramienta", bitacora.NOTA)
         return a_la_herramienta
@@ -1653,6 +1732,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # solo confundiria.
     consulta_para_etiqueta = query
     con_repuesto = False
+
+    # La vista virtual con el modelo (ver ventas_con_modelo.py): se cambia
+    # por la union real aqui, despues de los guardianes (que leen lo que
+    # escribio el modelo) y antes de los permisos.
+    query = ventas_con_modelo.expandir(query, ctx.cadenas)
 
     # Las cadenas de quien pregunta: aqui y no antes, porque los guardianes
     # de arriba leen la consulta como la escribio el modelo. Ver acceso.py.
@@ -2298,10 +2382,11 @@ class SQLAgent:
            ([GTM BI Database].dbo.[UNICOS$]) y agrupar por
            [HOMOLOGACION MODELO]. Nunca agrupes por la descripcion de la tabla
            de ventas: cada cadena escribe el mismo telefono a su manera y el
-           mismo modelo sale partido en varias filas. La ruta que funciona
-           para todos los retailers es la TABLA CRUDA unida por
-           [DESCRIPCION] (ver la nota de UNICOS$ en el catalogo); ademas es
-           mucho mas rapida que la vista.
+           mismo modelo sale partido en varias filas. Para eso existe
+           [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo]: la venta oficial con
+           [Modelo], [Clasificacion] y [Region] ya puestos. Las respuestas salen SOLO
+           de las vistas ETL (la consolidada, las vw_ETL_* y esta); las
+           tablas crudas de venta no se usan para responder.
            Despues del join comprueba cuanto quedo sin casar: si se perdio una
            parte grande del volumen, la llave esta mal y el resultado es falso
            aunque parezca razonable.

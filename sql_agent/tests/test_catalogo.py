@@ -308,16 +308,13 @@ class TestLaRegion:
     """Se pidio poder buscar por region. La region no esta en la venta: vive
     en CustomerStores y cada cadena se enlaza distinto."""
 
-    def test_el_prompt_dice_que_la_region_va_por_la_tabla_cruda(self):
+    def test_el_prompt_manda_la_region_a_la_vista_con_modelo(self):
+        # Desde el 7/10/2026 la region sale de la venta oficial: la columna
+        # [Region] de vw_ETL_Con_Modelo ya hace el cruce de cada cadena (antes
+        # se mandaba a la tabla cruda, que no suma igual que las vistas).
         texto = catalogo.indice()
-        assert "REGION" in texto
-        assert "CustomerStores" in texto and "TABLA CRUDA" in texto
-
-    def test_se_avisa_de_las_dos_cadenas_que_no_casan_por_nombre(self):
-        # Elektra y Sears: forzarlo con LIKE inventaria cruces.
-        texto = catalogo.indice()
-        assert "Elektra y Sears NO casan por nombre" in texto
-        assert "HONOR NAME" in texto
+        assert "REGION" in texto and "[Region]" in texto and "vw_ETL_Con_Modelo" in texto
+        assert "NO la unas tu con CustomerStores" in texto
 
     def test_la_ficha_del_catalogo_trae_el_enlace_de_cada_cadena(self):
         ficha = catalogo.describir_objeto.invoke({"nombre": "CustomerStores"})
@@ -456,11 +453,16 @@ class TestTelcelSeHomologaDesdeLaVista:
     [Material_Description] la vista casa al 100%.
     """
 
-    def test_la_nota_manda_a_la_vista_y_dice_como_unir(self):
-        texto = catalogo.indice()
-        assert "NO uses la cruda TELCEL_B2B para contar" in texto
-        assert "SUBSTRING(v.[Material_Description]" in texto
-        assert "59 438" in texto
+    def test_el_modelo_de_telcel_sale_de_su_vista(self):
+        # Desde el 7/10/2026 ese cruce vive en vw_ETL_Con_Modelo: la vista de
+        # Telcel sin el SKU de adelante contra [DESCRIPCION], nunca la cruda.
+        import ventas_con_modelo
+        cadena, llave, columna, _ = ventas_con_modelo.VISTAS["vw_ETL_TELCEL_B2B"]
+        assert cadena == "TELCEL" and columna == "DESCRIPCION" and "SUBSTRING" in llave
+        import acceso
+        leidas = {r.objeto for r in acceso.referencias(ventas_con_modelo.expandir(
+            "SELECT 1 FROM vw_ETL_Con_Modelo", ["TELCEL"]))}
+        assert "vw_ETL_TELCEL_B2B" in leidas and "TELCEL_B2B" not in leidas
 
 
 class TestPromotoriaNoCuentaDeMas:
