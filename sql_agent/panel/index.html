@@ -472,12 +472,31 @@
   .persona .rotulo-campo { display: block; font-size: 12px; color: var(--tinta-2); margin: 12px 0 4px; }
   .persona .rotulo-campo:first-child { margin-top: 0; }
   .persona .pie-edicion {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--borde-fuerte);
+    display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+    margin-top: 16px;
   }
-  .persona .pie-edicion .hueco { flex: 1; }
-  .persona .pie-edicion button.accion.peligro { color: var(--alto); border-color: transparent; padding-left: 4px; }
-  .persona .pie-edicion button.accion.peligro:hover { border-color: var(--alto); padding-left: 10px; }
+  .persona .pie-edicion button.principal { padding: 8px 20px; font-size: 13.5px; }
+  .persona .pie-edicion button.principal:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  /* Eliminar va aparte, al fondo y con su explicacion: es lo unico que no
+     tiene vuelta atras y no debe parecer un boton mas junto a Guardar. */
+  .persona .zona-eliminar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--borde-fuerte);
+  }
+  .persona .zona-eliminar .explica { flex: 1 1 220px; font-size: 12px; color: var(--tinta-2); }
+  button.eliminar-usuario {
+    display: inline-flex; align-items: center; gap: 6px; flex: none;
+    font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    color: var(--alto); background: none; border: 1px solid var(--alto); border-radius: 8px;
+    padding: 6px 12px;
+  }
+  button.eliminar-usuario svg { fill: currentColor; }
+  button.eliminar-usuario:hover { background: var(--alto); color: #fff; }
+  button.eliminar-usuario:focus-visible { outline: 2px solid var(--alto); outline-offset: 2px; }
+  .persona.editando .quitar-foto {
+    font: inherit; font-size: 11.5px; background: none; border: none; padding: 0;
+    color: var(--tinta-2); cursor: pointer; text-decoration: underline;
+  }
   button.avatar-boton { background: none; border: none; padding: 0; cursor: pointer; font: inherit; }
   button.avatar-boton:focus-visible { outline: 2px solid var(--acento); outline-offset: 3px; border-radius: 8px; }
   .persona.editando .avatar-boton { display: flex; flex-direction: column; align-items: center; gap: 5px; align-self: flex-start; }
@@ -502,15 +521,49 @@
   .acceso .rotulo { color: var(--tinta-2); font-size: 12px; margin-right: 2px; }
   .pastilla.cadena { background: none; border: 1px solid var(--borde-fuerte); color: var(--tinta-2); font-weight: 500; }
   .pastilla.cadena.limitada { border-color: var(--acento); color: var(--acento-fuerte); }
-  button.opcion-cadena {
-    font: inherit; font-size: 12.5px; background: none; color: var(--tinta-2);
-    border: 1px solid var(--borde-fuerte); border-radius: 15px;
-    padding: 3px 11px; cursor: pointer; white-space: nowrap;
+  /* Que cadenas puede ver: un interruptor de "todas" y, apagado, una
+     casilla por cadena. */
+  .acceso-datos { margin-top: 14px; }
+  .acceso-datos .titulo-acceso { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  button.interruptor-todas {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    font: inherit; font-size: 14px; color: var(--tinta); text-align: left; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: 10px;
+    padding: 10px 12px;
   }
-  button.opcion-cadena[aria-pressed="true"] {
-    background: var(--ok-suave); color: var(--acento-fuerte); border-color: var(--acento);
+  button.interruptor-todas .riel {
+    flex: none; width: 36px; height: 20px; border-radius: 10px; background: var(--borde-fuerte);
+    position: relative; transition: background .15s;
   }
-  button.opcion-cadena:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  button.interruptor-todas .riel::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s;
+  }
+  button.interruptor-todas[aria-checked="true"] .riel { background: var(--acento-fuerte); }
+  button.interruptor-todas[aria-checked="true"] .riel::after { transform: translateX(16px); }
+  button.interruptor-todas .detalle { margin-left: auto; font-size: 12px; color: var(--tinta-2); }
+  button.interruptor-todas:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+  .casillas-cadenas {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px; margin-top: 8px;
+  }
+  label.casilla-cadena {
+    display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none;
+    background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: 10px;
+    padding: 9px 11px; font-size: 14px; transition: border-color .12s, background .12s;
+  }
+  label.casilla-cadena input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  label.casilla-cadena .caja {
+    flex: none; width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--borde-fuerte);
+    display: grid; place-items: center; transition: background .12s, border-color .12s;
+  }
+  label.casilla-cadena .caja svg { width: 12px; height: 12px; fill: #fff; opacity: 0; }
+  label.casilla-cadena:hover { border-color: var(--acento); }
+  label.casilla-cadena:has(input:checked) { border-color: var(--acento); background: var(--ok-suave); }
+  label.casilla-cadena:has(input:checked) .caja { background: var(--acento-fuerte); border-color: var(--acento-fuerte); }
+  label.casilla-cadena:has(input:checked) .caja svg { opacity: 1; }
+  label.casilla-cadena:has(input:focus-visible) { outline: 2px solid var(--acento); outline-offset: 2px; }
+  .acceso-datos .pista { margin-top: 8px; }
+  .acceso-datos .pista.falta { color: var(--alto); }
   button.accion {
     font-size: 12.5px; background: none; color: var(--tinta-2);
     border: 1px solid var(--borde-fuerte); border-radius: 15px;
@@ -643,6 +696,13 @@
     .persona .datos { flex-basis: calc(100% - 60px); }
     .persona .acciones { width: 100%; }
     .resumen-usuarios { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    /* Editando, la foto va arriba: al lado le quitaba a la ficha el ancho
+       que necesitan las casillas. */
+    .persona.editando { flex-direction: column; align-items: stretch; }
+    .persona.editando .datos { flex-basis: auto; }
+    .persona.editando .avatar-boton { flex-direction: row; align-self: flex-start; }
+    .casillas-cadenas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    button.interruptor-todas .detalle { display: none; }
     button.cifra { padding: 9px 12px; }
     button.cifra .numero { font-size: 19px; }
   }
@@ -874,6 +934,14 @@ const TEXTOS = {
     ultimo_mensaje: (cuando) => `último mensaje ${cuando}`,
     sin_mensajes: "sin mensajes todavía",
     hoy_corto: "hoy",
+    acceso_a_datos: "Acceso a datos",
+    todas_detalle: "venta, inventario, promotoría y precios",
+    marca_cadenas: "Marca las cadenas que puede ver.",
+    marca_una: "Marca al menos una cadena, o deja encendido «Todas las cadenas».",
+    eliminar_usuario: "Eliminar usuario",
+    explica_eliminar:
+      "Sale de la lista. Si vuelve a escribir será un desconocido; para quitarle el acceso sin perderlo, usa Suspender.",
+    guardar_cambios: "Guardar cambios",
     rotulo_nombre: "Nombre",
     foto: "Foto",
     confirmar_suspender: (quien) =>
@@ -1010,6 +1078,14 @@ const TEXTOS = {
     ultimo_mensaje: (cuando) => `last message ${cuando}`,
     sin_mensajes: "no messages yet",
     hoy_corto: "today",
+    acceso_a_datos: "Data access",
+    todas_detalle: "sales, inventory, promoters and prices",
+    marca_cadenas: "Check the retailers they can see.",
+    marca_una: "Check at least one retailer, or leave “All retailers” on.",
+    eliminar_usuario: "Remove user",
+    explica_eliminar:
+      "They leave the list. If they write again they will be a stranger; to cut access without losing them, use Suspend.",
+    guardar_cambios: "Save changes",
     rotulo_nombre: "Name",
     foto: "Photo",
     confirmar_suspender: (quien) =>
@@ -1846,6 +1922,7 @@ let editando = null;
 let grupoDePersonas = "todos";
 // Las cadenas elegidas en el formulario de alta. Vacio = todas.
 const cadenasDeAlta = new Set();
+let accesoDeAlta = null;
 
 // 5215564532268 -> +52 1 55 6453 2268. Solo da formato a los de Mexico,
 // que son todos los de hoy; cualquier otro se muestra con su + y nada mas.
@@ -1882,7 +1959,8 @@ function pintarPersonas() {
   const caja = $("personas");
   caja.replaceChildren();
   const alta = $("alta-cadenas");
-  alta.replaceChildren(selectorDeCadenas(cadenasDeAlta));
+  accesoDeAlta = checklistDeCadenas(cadenasDeAlta);
+  alta.replaceChildren(accesoDeAlta);
 
   // Activos primero y, dentro, por nombre: es el orden en que se buscan.
   const ordenados = [...cacheUsuarios].sort((a, b) =>
@@ -1929,17 +2007,24 @@ function pintarCifras() {
 function fichaEditable(usuario) {
   const fila = elemento("div", "persona editando");
 
+  const columnaFoto = elemento("div", "avatar-boton");
   const retrato = elemento("button", "avatar-boton");
   retrato.type = "button";
   retrato.title = t("cambiar_foto");
   retrato.setAttribute("aria-label", t("cambiar_foto"));
   retrato.append(avatar(usuario.numero, "", usuario.foto), elemento("span", null, t("foto")));
   retrato.addEventListener("click", () => elegirFoto(usuario));
+  columnaFoto.append(retrato);
+  if (usuario.foto) {
+    const quitar = elemento("button", "quitar-foto", t("quitar_foto"));
+    quitar.type = "button";
+    quitar.addEventListener("click", () => cambiar("quitar-foto", { numero: usuario.numero }));
+    columnaFoto.append(quitar);
+  }
 
   const datos = elemento("div", "datos");
   // Vacio = todas, igual que en el servicio.
   const elegidas = new Set(usuario.cadenas || []);
-  const guardar = () => guardarFicha(usuario, campo.value, elegidas);
   const cerrar = () => { editando = null; pintarPersonas(); };
 
   const rotulo = elemento("label", "rotulo-campo", t("rotulo_nombre"));
@@ -1949,32 +2034,37 @@ function fichaEditable(usuario) {
   campo.id = `nombre-${usuario.numero}`;
   campo.value = usuario.nombre || "";
   campo.placeholder = t("ph_nombre");
+
+  const guardarBoton = elemento("button", "principal", t("guardar_cambios"));
+  guardarBoton.type = "button";
+  const acceso = checklistDeCadenas(elegidas, (ok) => { guardarBoton.disabled = !ok; });
+  const guardar = () => { if (acceso.valido()) guardarFicha(usuario, campo.value, elegidas); };
+  guardarBoton.addEventListener("click", guardar);
   campo.addEventListener("keydown", (evento) => {
     if (evento.key === "Enter") guardar();
     if (evento.key === "Escape") cerrar();
   });
 
   const pie = elemento("div", "pie-edicion");
-  pie.append(boton(t("eliminar"), "tache", () => eliminar(usuario), "peligro"));
-  pie.append(elemento("span", "hueco"));
-  if (usuario.foto) {
-    pie.append(boton(t("quitar_foto"), "tache", () => cambiar("quitar-foto", { numero: usuario.numero })));
-  }
-  pie.append(
-    boton(t("cancelar"), "tache", cerrar),
-    boton(t("guardar"), "palomita", guardar, "buena"),
-  );
+  pie.append(boton(t("cancelar"), "tache", cerrar), guardarBoton);
+
+  const zona = elemento("div", "zona-eliminar");
+  const borrar = elemento("button", "eliminar-usuario");
+  borrar.type = "button";
+  borrar.append(icono("basura"), elemento("span", null, t("eliminar_usuario")));
+  borrar.addEventListener("click", () => eliminar(usuario));
+  zona.append(elemento("span", "explica", t("explica_eliminar")), borrar);
 
   datos.append(
     rotulo,
     campo,
     elemento("div", "pista", numeroLegible(usuario.numero)),
-    selectorDeCadenas(elegidas),
-    elemento("div", "pista", t("pista_cadenas")),
+    acceso,
     pie,
+    zona,
   );
 
-  fila.append(retrato, datos);
+  fila.append(columnaFoto, datos);
   // Enfocar despues de montar: sobre un nodo suelto no hace nada.
   queueMicrotask(() => campo.focus());
   return fila;
@@ -2047,37 +2137,69 @@ function lineaDeAcceso(usuario) {
 
 // Una opcion por cadena, mas "Todas". Marcar todas a mano es lo mismo que
 // "Todas": el servicio lo guarda como sin limite.
-function selectorDeCadenas(elegidas) {
-  const caja = elemento("div", "acceso");
-  caja.setAttribute("role", "group");
-  caja.setAttribute("aria-label", t("puede_ver"));
-  caja.append(elemento("span", "rotulo", t("puede_ver")));
-  const opciones = [];
-  const pintar = () => {
-    for (const { boton: b, clave } of opciones) {
-      b.setAttribute("aria-pressed", String(clave ? elegidas.has(clave) : !elegidas.size));
-    }
-  };
-  const opcion = (clave, etiqueta) => {
-    const b = elemento("button", "opcion-cadena", etiqueta);
-    b.type = "button";
-    b.addEventListener("click", () => {
-      if (!clave) {
-        elegidas.clear();
-      } else if (elegidas.has(clave)) {
-        elegidas.delete(clave);
-      } else {
-        elegidas.add(clave);
-        if (elegidas.size === cacheCadenas.length) elegidas.clear();
-      }
+// Que cadenas puede ver: un interruptor de "Todas las cadenas" y, apagado,
+// una casilla por cadena. `elegidas` es el Set que se edita (vacio = todas,
+// igual que en el servicio). Devuelve el nodo y si lo elegido es valido:
+// apagar "todas" sin marcar ninguna no es "todas", es un error.
+function checklistDeCadenas(elegidas, alCambiar = () => {}) {
+  const caja = elemento("div", "acceso-datos");
+  caja.append(elemento("div", "titulo-acceso", t("acceso_a_datos")));
+
+  let todas = elegidas.size === 0;
+  const interruptor = elemento("button", "interruptor-todas");
+  interruptor.type = "button";
+  interruptor.setAttribute("role", "switch");
+  interruptor.append(
+    elemento("span", "riel"),
+    elemento("span", null, t("todas_las_cadenas")),
+    elemento("span", "detalle", t("todas_detalle")),
+  );
+
+  const casillas = elemento("div", "casillas-cadenas");
+  casillas.setAttribute("role", "group");
+  casillas.setAttribute("aria-label", t("puede_ver"));
+  const PALOMA = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 16.6 5.4 12.4 4 13.8l5.6 5.6L20 9l-1.4-1.4z"/></svg>';
+  for (const cadena of cacheCadenas) {
+    const etiqueta = elemento("label", "casilla-cadena");
+    const marca = document.createElement("input");
+    marca.type = "checkbox";
+    marca.checked = elegidas.has(cadena.clave);
+    marca.addEventListener("change", () => {
+      if (marca.checked) elegidas.add(cadena.clave);
+      else elegidas.delete(cadena.clave);
       pintar();
     });
-    opciones.push({ boton: b, clave });
-    caja.append(b);
+    const cuadro = elemento("span", "caja");
+    cuadro.innerHTML = PALOMA;
+    etiqueta.append(marca, cuadro, elemento("span", null, cadena.nombre));
+    casillas.append(etiqueta);
+  }
+
+  const pista = elemento("div", "pista");
+  const valido = () => todas || elegidas.size > 0;
+  const pintar = () => {
+    interruptor.setAttribute("aria-checked", String(todas));
+    casillas.hidden = todas;
+    pista.hidden = todas;
+    pista.className = `pista${valido() ? "" : " falta"}`;
+    pista.textContent = valido() ? t("pista_cadenas") : t("marca_una");
+    alCambiar(valido());
   };
-  opcion(null, t("todas_las_cadenas"));
-  for (const cadena of cacheCadenas) opcion(cadena.clave, cadena.nombre);
+  interruptor.addEventListener("click", () => {
+    todas = !todas;
+    if (todas) {
+      elegidas.clear();
+      for (const marca of casillas.querySelectorAll("input")) marca.checked = false;
+    } else {
+      // Al apagarlo, la primera casilla queda a la mano.
+      queueMicrotask(() => casillas.querySelector("input")?.focus());
+    }
+    pintar();
+  });
+
+  caja.append(interruptor, casillas, pista);
   pintar();
+  caja.valido = valido;
   return caja;
 }
 
@@ -2154,6 +2276,8 @@ const ICONOS = {
   palomita: `<path d="M9.6 16.6 5.4 12.4 4 13.8l5.6 5.6L20 9l-1.4-1.4z"/>`,
   // Lapiz, para editar.
   lapiz: `<path d="M3 17.3V21h3.7L17.8 9.9l-3.7-3.7zm17.7-10.4a1 1 0 0 0 0-1.4l-2.2-2.2a1 1 0 0 0-1.4 0l-1.8 1.8 3.7 3.7z"/>`,
+  // Bote de basura, para eliminar.
+  basura: `<path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/>`,
 };
 
 function icono(nombre) {
@@ -2202,6 +2326,10 @@ function eliminar(usuario) {
 
 $("form-alta").addEventListener("submit", async (evento) => {
   evento.preventDefault();
+  if (accesoDeAlta && !accesoDeAlta.valido()) {
+    mostrarError(t("marca_una"));
+    return;
+  }
   try {
     mostrarError("");
     const alta = await pedir("/panel/usuarios", {
