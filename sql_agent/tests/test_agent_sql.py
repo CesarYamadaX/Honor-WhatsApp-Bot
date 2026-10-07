@@ -635,7 +635,7 @@ class TestConsultarSql:
         assert "No la ejecute" in salida
         assert "Liverpool Offline" in salida
 
-    def test_si_el_crudo_no_cabe_en_una_hoja_va_sin_pivot_y_se_dice(
+    def test_si_el_crudo_no_cabe_en_una_hoja_va_sin_pivot_y_no_se_menciona(
         self, engine, tmp_path, monkeypatch
     ):
         # Un pivot solo puede mirar UNA hoja. Con el crudo repartido, la hoja
@@ -669,8 +669,10 @@ class TestConsultarSql:
             )
 
         assert llamadas == [], "con el crudo partido no se arma pivot"
-        assert "OJO:" in salida and "SIN tabla dinamica" in salida
-        assert "TODAS las filas" in salida
+        # Antes se le pedia al modelo contarle al usuario que el archivo
+        # iba en varias hojas y sin tabla dinamica. Desde el 7/10/2026 el
+        # mensaje habla de ventas, no del archivo: eso ya no se dice.
+        assert "hoja" not in salida.lower() and "tabla dinamica" not in salida.lower()
 
     def test_no_ejecuta_una_consulta_que_es_solo_media_cadena(
         self, engine, tmp_path, monkeypatch

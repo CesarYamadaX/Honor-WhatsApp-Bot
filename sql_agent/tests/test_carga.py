@@ -106,3 +106,25 @@ class TestElMensajeCitaElArchivo:
         from formatting import MAX_ROWS_AS_TEXT, formatear_resultado
         df = pd.DataFrame({"a": range(MAX_ROWS_AS_TEXT + 5)})
         assert f"La consulta devolvio {len(df):,} registros; van completos en el Excel que se le adjunta al usuario. " in formatear_resultado(df).texto
+
+
+class TestElInventarioDeTelcelVaALaHerramienta:
+    """Visto el 7/10/2026: en ingles se contesto el inventario con un SUM a
+    mano (solo el stock, sin para cuanto alcanza)."""
+
+    Q = "SELECT SUM([STOCK]) FROM [RAW_INV_B2B].dbo.[TELCEL_INV_B2B] WHERE [BRAND] = 'HONOR'"
+
+    def test_en_cualquier_idioma(self):
+        from agent import _inventario_telcel_a_mano as f
+        for pregunta in ("What's the Honor inventory at Telcel?", "Telcel的荣耀库存情况怎么样？",
+                         "cuanto inventario hay en Telcel por modelo?"):
+            assert "semanas_de_inventario" in f(self.Q, pregunta), pregunta
+
+    def test_por_tienda_o_region_si_va_a_mano(self):
+        from agent import _inventario_telcel_a_mano as f
+        assert f(self.Q, "inventario de Honor en Telcel por tienda") == ""
+        assert f(self.Q, "Telcel inventory by region") == ""
+
+    def test_otras_tablas_no(self):
+        from agent import _inventario_telcel_a_mano as f
+        assert f("SELECT 1 FROM [RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B]", "ventas de Telcel") == ""

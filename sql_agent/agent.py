@@ -675,6 +675,34 @@ def _homologacion_por_like(sql: str) -> str:
     return ""
 
 
+_POR_LUGAR = re.compile(
+    r"tienda|sucursal|punto de venta|regi[oó]n|zona|estado|ciudad|almac[eé]n|cedis"
+    r"|\bstores?\b|\bregions?\b|\bwarehouse|门店|地区|区域|仓库",
+    re.IGNORECASE,
+)
+_INVENTARIO_TELCEL = re.compile(r"(?<!\w)(TELCEL_INV_B2B|INV_Telcel_B2B|vw_INV_Telcel_B2B)(?!\w)", re.IGNORECASE)
+
+
+def _inventario_telcel_a_mano(query: str, pregunta: str) -> str:
+    """Si se consulta el inventario de Telcel a mano, a la herramienta. "" si no.
+
+    Visto el 7/10/2026: "What's the Honor inventory at Telcel?" se contesto
+    con un SUM de TELCEL_INV_B2B -- el stock y nada mas -- en vez de con
+    `semanas_de_inventario`, que da fecha, stock y para cuanto alcanza. En
+    espanol si la uso, por suerte: su descripcion solo hablaba de semanas.
+    Un desglose pedido ("por tienda", "por region") si va a mano: la
+    herramienta lo da por modelo.
+    """
+    if not _INVENTARIO_TELCEL.search(query or "") or _POR_LUGAR.search(pregunta or ""):
+        return ""
+    return (
+        "No la ejecute: el inventario de Telcel se contesta con "
+        "`semanas_de_inventario` (llamala con el modelo, o vacio para toda la "
+        "marca). Da la fecha del corte, el stock y para cuanto le alcanza, "
+        "que es lo que se quiere saber aunque solo pregunten 'cuanto hay'."
+    )
+
+
 def _objetos_a_evitar(query: str) -> str:
     """Si la consulta lee algo marcado como NO USAR, por que y que usar. "" si no.
 
@@ -1379,10 +1407,12 @@ def pidio_desglose(pregunta: str) -> bool:
 
 @tool
 def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
-    """Para cuantas semanas le alcanza el inventario a Telcel.
+    """El inventario de Telcel: cuanto hay, a que fecha y para cuanto alcanza.
 
-    Usala SIEMPRE que pregunten por semanas de inventario, cobertura, "para
-    cuanto le alcanza", "cuanto le dura el stock" o sell-through de Telcel.
+    Usala SIEMPRE que pregunten por el inventario o el stock de Telcel, en
+    cualquier forma o idioma: "como esta el inventario", "cuanto hay",
+    "what's the inventory", "库存", semanas de inventario, cobertura, "para
+    cuanto le alcanza", "cuanto le dura el stock" o sell-through.
     No lo calcules con `consultar_sql`: la cuenta ya esta definida por el
     negocio (stock de la foto mas reciente / venta semanal promedio de las
     ultimas 4 semanas, de todos los canales de Telcel) y aqui sale siempre
@@ -1456,6 +1486,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         return evitar
 
     ctx = _contexto_actual()
+    a_la_herramienta = _inventario_telcel_a_mano(query, ctx.pregunta)
+    if a_la_herramienta:
+        bitacora.paso("inventario de Telcel a mano: va a la herramienta", bitacora.NOTA)
+        return a_la_herramienta
     # Lo que queda del presupuesto de la peticion, menos un margen para armar
     # el Excel y la grafica. Sin esto una consulta pesada se lleva los 90
     # segundos enteros y el usuario no recibe NADA: ni datos ni explicacion,
@@ -2082,8 +2116,9 @@ class SQLAgent:
            resultado corto se responde solo como texto, y sin eso el usuario se
            queda esperando un adjunto que nunca llega.
            `consultar_sql` es SOLO para la respuesta final, nunca para explorar.
-           Semanas de inventario, cobertura o "para cuanto le alcanza el
-           stock" en Telcel: `semanas_de_inventario`, nunca un SELECT propio.
+           Cualquier pregunta del inventario de Telcel (cuanto hay, como
+           esta, semanas, cobertura, "para cuanto le alcanza"), en cualquier
+           idioma: `semanas_de_inventario`, nunca un SELECT propio.
            Para explorar tienes tres herramientas que NO generan reporte:
            `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
            celular) y `valores_distintos` (como estan escritos los valores de una
