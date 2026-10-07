@@ -47,13 +47,14 @@ from catalogo import (
     valores_conocidos,
 )
 import acceso
-from contexto import contexto_del_resultado, ficha_del_archivo
+from contexto import CRUDAS, contexto_del_resultado, ficha_del_archivo
 import excel_pivot
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import inventario
 import resumen_local
+import revisor
 import idioma as idiomas
 from pronostico import ERROR_TIPICO, pidio_pronostico, proyectar
 from sugerencias import sugerir
@@ -460,6 +461,9 @@ class ContextoPeticion:
     # permiso o la respuesta con el aviso al final.
     negadas: set[str] = field(default_factory=set)
     hubo_datos: bool = False
+    # Lo que de verdad salio de la base en esta vuelta, como lo leyo el
+    # modelo. Con esto el revisor comprueba que el mensaje diga la verdad.
+    vistos: list[str] = field(default_factory=list)
 
     def registrar_reporte(self, *rutas: str | None) -> None:
         """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
@@ -733,6 +737,43 @@ def _tiendas_sin_normalizar(sql: str) -> str:
         "`REPLACE(REPLACE(LTRIM(RTRIM(cs.[Coppel Name])), '  ', ' '), '  ', ' ') "
         "= REPLACE(REPLACE(LTRIM(RTRIM(v.[Store])), '  ', ' '), '  ', ' ')`."
     )
+
+
+# La columna de unidades de cada tabla cruda de venta. Liverpool_IOT, la
+# otra mitad de Liverpool, se llama distinto pero cuenta igual.
+_UNIDADES_CRUDAS = {c.tabla.casefold(): c.unidades for c in CRUDAS.values()} | {
+    "liverpool_iot": "Vtas# U Per 1",
+}
+
+
+def _crudo_con_devoluciones(sql: str) -> str:
+    """Si suma unidades de una tabla cruda sin quitar las devoluciones. "" si no.
+
+    La venta oficial -- la de las vistas vw_ETL_* y la de Power BI -- cuenta
+    solo las filas con 1 unidad o mas; la tabla cruda trae ademas las
+    devoluciones en negativo. Visto el 7/10/2026: la capa de Liverpool
+    region 4 se saco de las crudas y Tampico Altama en diciembre de 2025
+    dio 2 054 cuando la venta fue 2 090. La misma pregunta, contestada antes
+    desde las vistas, habia dado 2 090: dos numeros para lo mismo.
+    """
+    if not re.search(r"\bSUM\s*\(", sql or "", re.IGNORECASE):
+        return ""
+    objetos = {r.objeto.casefold() for r in acceso.referencias(sql)}
+    for tabla in sorted(objetos & set(_UNIDADES_CRUDAS)):
+        columna = re.escape(_UNIDADES_CRUDAS[tabla])
+        if not re.search(rf"\[?{columna}\]?", sql, re.IGNORECASE):
+            continue
+        if re.search(rf"\[?{columna}\]?\s*(>=\s*1(\.0+)?(?!\d)|>\s*0(\.0+)?(?!\d))", sql, re.IGNORECASE):
+            continue
+        return (
+            f"No la ejecute: la venta oficial (la de las vistas vw_ETL_* y la "
+            f"de Power BI) cuenta solo las filas con 1 unidad o mas, y la tabla "
+            f"cruda trae ademas las devoluciones en negativo: sumada asi da de "
+            f"menos (Liverpool Tampico Altama, diciembre de 2025: 2 054 contra "
+            f"2 090). Agrega `[{_UNIDADES_CRUDAS[tabla]}] >= 1` al WHERE de "
+            f"cada tabla cruda, o usa la vista vw_ETL_* de la cadena."
+        )
+    return ""
 
 
 def _objetos_a_evitar(query: str) -> str:
@@ -1264,7 +1305,9 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
             "el mismo telefono: la diferencia de precio es de version, no de "
             "tienda. Nombra la version en cada renglon."
         )
-    return "\n".join(lineas)
+    texto = "\n".join(lineas)
+    ctx.vistos.append(f"Precios publicados en internet de {modelo!r}:\n{texto}")
+    return texto
 
 
 MAX_MESES_PRONOSTICO = 12
@@ -1376,7 +1419,7 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
     es_valida, motivo = _evaluar_sql(sql_historico)
     if not es_valida:
         return f"Ese SQL no es una consulta de lectura valida ({motivo})."
-    evitar = _objetos_a_evitar(sql_historico)
+    evitar = _objetos_a_evitar(sql_historico) or _crudo_con_devoluciones(sql_historico)
     if evitar:
         return evitar
 
@@ -1418,7 +1461,9 @@ def pronosticar_ventas(sql_historico: str, meses: int = 3) -> str:
 
     _registrar_base(ctx, resultado)
     ctx.hubo_datos = True
-    return _texto_del_pronostico(resultado)
+    texto = _texto_del_pronostico(resultado)
+    ctx.vistos.append(f"Historia mensual ({len(serie)} meses) y pronostico:\n{texto}")
+    return texto
 
 
 # Un desglose pedido con todas sus letras. Solo entonces el resultado de la
@@ -1482,6 +1527,7 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
             ctx.archivos.append(ExcelExporter.export_to_excel(resultado.tabla))
         except Exception:  # noqa: BLE001 - el texto ya trae el total y los principales
             logger.exception("No se pudo armar el Excel de semanas de inventario")
+    ctx.vistos.append(f"Semanas de inventario de Telcel:\n{texto}")
     return texto
 
 
@@ -1511,9 +1557,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         _homologacion_mal_unida(query)
         or _homologacion_por_like(query)
         or _tiendas_sin_normalizar(query)
+        or _crudo_con_devoluciones(query)
     )
     if mal_unida:
-        bitacora.paso("la union con UNICOS$ contaria de mas", bitacora.NOTA)
+        bitacora.paso("la consulta contaria de mas o de menos", bitacora.NOTA)
         return mal_unida
 
     evitar = _objetos_a_evitar(query)
@@ -1776,6 +1823,14 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             logger.exception("No se pudo armar el contexto; va solo la tabla")
             contexto = {}
 
+        # El revisor de archivos: permisos, alcance y cuadre de cada hoja
+        # antes de que se escriba nada (ver revisor.py).
+        revision = revisor.revisar_hojas(df, contexto, cadenas=ctx.cadenas, query=query)
+        contexto = revision.contexto
+        for hallazgo in revision.hallazgos:
+            logger.warning("Revisor de archivos: %s", hallazgo)
+            bitacora.paso(f"revisor de archivos: {hallazgo}", bitacora.NOTA)
+
         try:
             # Reporte de una cadena (contexto trae su propia hoja "Datos", lo
             # agrupado, y "Raw_Data", lo completo): el resultado de la consulta
@@ -1797,7 +1852,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 contexto and len(df) <= MAX_ROWS_AS_TEXT
             )
             excel = ExcelExporter.export_to_excel(
-                df,
+                revision.df,
                 contexto=contexto,
                 con_datos=con_datos,
                 # Muchos datos: solo el crudo, y con el escritor rapido.
@@ -2001,7 +2056,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             _registrar_base(ctx, proyeccion)
             partes.append(_texto_del_pronostico(proyeccion))
 
-    return "\n\n".join(partes)
+    salida = "\n\n".join(partes)
+    ctx.vistos.append(f"Consulta: {' '.join(consulta_para_etiqueta.split())[:1500]}\n{salida}")
+    return salida
 
 
 class Observador(BaseCallbackHandler):
@@ -2445,6 +2502,22 @@ class SQLAgent:
                 # Ofrecer "tambien te puedo decir..." debajo de un "no pude"
                 # seria prometer lo que acaba de fallar.
                 ctx.sugerencias = []
+            # El revisor: que cada cifra este en los datos y sea de lo que se
+            # pidio (ver revisor.py). Va antes del aviso de permisos y de la
+            # ficha del pronostico, que no son del modelo.
+            if ctx.vistos and not sin_conclusion:
+                revision = revisor.revisar_respuesta(pregunta, ctx.vistos, texto, ctx.cadenas)
+                if revision.ok:
+                    bitacora.paso("revisor: la respuesta cuadra con los datos", bitacora.NOTA)
+                else:
+                    logger.warning("Revisor: %s", "; ".join(revision.problemas))
+                    bitacora.paso(
+                        "revisor: " + ("; ".join(revision.problemas) or "encontro un problema")
+                        + (" -- se corrigio el mensaje" if revision.texto else ""),
+                        bitacora.NOTA,
+                    )
+                    if revision.texto:
+                        texto = revision.texto
             # Pidio una cadena que no tiene: el aviso lo pone el servicio, en
             # su idioma, y dice que el permiso es SUYO. Si no quedo nada que
             # si pueda ver, el mensaje es solo el aviso.
