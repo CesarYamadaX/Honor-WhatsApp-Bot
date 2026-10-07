@@ -131,6 +131,16 @@ def _joins_de_region(cadena: str) -> tuple[str, str]:
     return por_nombre + otra, "COALESCE(r1.[Region], r2.[Region])"
 
 
+# Si la llave principal no casa, otra. Coppel arma su descripcion como marca +
+# modelo, y a veces la marca de la venta no es la del catalogo: 'POCO POCO
+# C85 256 GB' en la venta, 'XIAOMI POCO C85 256 GB' en la FINAL. Sin la
+# primera palabra casa con [DESCRIPCION] ('POCO C85 256 GB'). Medido el
+# 7/10/2026 en septiembre-octubre de 2026.
+_SEGUNDA_LLAVE_DE_MODELO = {
+    "COPPEL": ("DESCRIPCION", _SIN_CODIGO),
+}
+
+
 # El codigo de articulo: la primera palabra de la descripcion.
 _CODIGO = "LEFT(RTRIM(v.[Material_Description]), CHARINDEX(' ', RTRIM(v.[Material_Description]) + ' ') - 1)"
 
@@ -168,16 +178,34 @@ def _rama(vista: str) -> str:
     retails_sql = ", ".join("'" + r.replace("'", "''") + "'" for r in retails)
     filtro = f"[Retail] IN ({retails_sql}) AND " if retails else ""
     columnas = ", ".join(f"v.[{c}]" for c in _COLUMNAS)
-    # Una fila del catalogo por llave: si la misma descripcion aparece dos
-    # veces, la venta se contaria dos veces.
+
+    def catalogo(alias: str, columna_del_catalogo: str, llave_de_la_venta: str) -> str:
+        # Una fila del catalogo por llave: si la misma descripcion aparece dos
+        # veces, la venta se contaria dos veces. Las dos llaves normalizadas
+        # (mayusculas, sin espacios de mas a los lados ni en medio): el
+        # catalogo de Liverpool trae descripciones con un espacio delante
+        # (' HUAWEI BAND 10, NEGRO INTENSO') y no casaban (7/10/2026).
+        clave = _normal(f"[{columna_del_catalogo}]")
+        return (
+            f"LEFT JOIN (SELECT {clave} AS [Llave], "
+            f"MIN([HOMOLOGACION MODELO]) AS [Modelo], MIN([CLASSIFICATION]) AS [Clasificacion] "
+            f"FROM {UNICOS} WHERE {filtro}[{columna_del_catalogo}] IS NOT NULL "
+            f"GROUP BY {clave}) {alias} ON {alias}.[Llave] = {_normal(llave_de_la_venta)} "
+        )
+
+    joins = catalogo("u", columna, llave)
+    modelo, clasificacion = "u.[Modelo]", "u.[Clasificacion]"
+    otra = _SEGUNDA_LLAVE_DE_MODELO.get(cadena)
+    if otra:
+        columna2, llave2 = otra
+        joins += catalogo("u2", columna2, llave2)
+        modelo = "COALESCE(u.[Modelo], u2.[Modelo])"
+        clasificacion = "COALESCE(u.[Clasificacion], u2.[Clasificacion])"
     return (
-        f"SELECT {columnas}, u.[Modelo], u.[Clasificacion], {region} AS [Region] "
+        f"SELECT {columnas}, {modelo} AS [Modelo], {clasificacion} AS [Clasificacion], "
+        f"{region} AS [Region] "
         f"FROM [RAW_DATA_B2B].dbo.[{vista}] v "
-        f"LEFT JOIN (SELECT UPPER(RTRIM([{columna}])) AS [Llave], "
-        f"MIN([HOMOLOGACION MODELO]) AS [Modelo], MIN([CLASSIFICATION]) AS [Clasificacion] "
-        f"FROM {UNICOS} WHERE {filtro}[{columna}] IS NOT NULL "
-        f"GROUP BY UPPER(RTRIM([{columna}]))) u ON u.[Llave] = UPPER({llave}) "
-        f"{joins_region}"
+        f"{joins}{joins_region}"
     )
 
 

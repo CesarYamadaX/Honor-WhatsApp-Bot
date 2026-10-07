@@ -834,6 +834,38 @@ def _capa_de_una_marca(query: str, pregunta: str) -> str:
     )
 
 
+# Desde cuanto de la venta sin modelo vale la pena decirlo.
+MINIMO_SIN_MODELO = 0.02
+
+
+def _venta_sin_modelo(df: pd.DataFrame) -> str:
+    """Si el resultado agrupa por modelo y una parte quedo sin modelo, el aviso.
+
+    El catalogo de modelos (UNICOS$) no esta al dia: medido el 7/10/2026,
+    el 35% de la venta de octubre de Telcel Retail son modelos que aun no
+    tiene (Honor X6E y X7E, Redmi Note 17 Pro, Moto G37...). En un "por
+    modelo" esa venta sale en una fila sin nombre; contarla como "otros" o
+    ignorarla deja fuera justo los lanzamientos.
+    """
+    columna = next((c for c in df.columns if str(c).strip().lower() in ("modelo", "model")), None)
+    if columna is None or df.empty:
+        return ""
+    medida = tiempo.medida(df)
+    if medida is None:
+        return ""
+    valores = pd.to_numeric(df[medida], errors="coerce").fillna(0)
+    total = valores.sum()
+    sin = valores[df[columna].isna()].sum()
+    if total <= 0 or sin / total < MINIMO_SIN_MODELO:
+        return ""
+    return (
+        f"OJO: {sin:,.0f} unidades ({sin / total:.0%}) son modelos que el catalogo "
+        "de modelos todavia no tiene (lanzamientos recientes): salen en la fila "
+        "sin nombre. Dilo en una frase al contestar -- no las cuentes como "
+        "'otros' ni las dejes fuera sin avisar."
+    )
+
+
 def _objetos_a_evitar(query: str) -> str:
     """Si la consulta lee algo marcado como NO USAR, por que y que usar. "" si no.
 
@@ -2101,6 +2133,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             "para tenerlo completo acote el periodo (un mes, por ejemplo), sin "
             "hablar de hojas ni archivos."
         )
+
+    sin_modelo = _venta_sin_modelo(df)
+    if sin_modelo:
+        partes.append(sin_modelo)
 
     incompleto = tiempo.ultimo_periodo_incompleto(df)
     if incompleto:

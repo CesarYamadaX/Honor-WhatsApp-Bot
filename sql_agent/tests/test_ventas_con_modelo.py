@@ -128,3 +128,32 @@ class TestLaVistaVirtualRapida:
         import catalogo
         assert "R4" in catalogo.valores_conocidos("vw_ETL_Con_Modelo", "Region")
         assert "Liverpool Offline" in catalogo.valores_conocidos("vw_ETL_Con_Modelo", "Retail")
+
+
+class TestElCatalogoNoEstaAlDia:
+    """Medido el 7/10/2026: el 35% de la venta de octubre de Telcel Retail son
+    modelos que UNICOS$ aun no tiene (Honor X6E y X7E entre ellos)."""
+
+    def test_se_avisa_la_venta_sin_modelo(self):
+        import pandas as pd
+        from agent import _venta_sin_modelo
+        df = pd.DataFrame({"Modelo": ["HONOR X6C", None, "HONOR X8D"], "Unidades": [100.0, 60.0, 40.0]})
+        aviso = _venta_sin_modelo(df)
+        assert "60 unidades (30%)" in aviso
+
+    def test_poco_o_nada_sin_modelo_no_se_avisa(self):
+        import pandas as pd
+        from agent import _venta_sin_modelo
+        assert _venta_sin_modelo(pd.DataFrame({"Modelo": ["A", "B"], "Unidades": [5.0, 5.0]})) == ""
+        assert _venta_sin_modelo(pd.DataFrame({"Tienda": ["A"], "Unidades": [5.0]})) == ""
+
+    def test_las_llaves_se_comparan_normalizadas(self):
+        # ' HUAWEI BAND 10, NEGRO INTENSO' (con espacio delante) en el catalogo
+        # de Liverpool no casaba.
+        q = m.derivada(["LIVERPOOL"])
+        assert "LTRIM(RTRIM(REPLACE(REPLACE([DESCRIPCION]" in q
+
+    def test_coppel_tiene_segunda_llave_sin_la_marca(self):
+        # 'POCO POCO C85 256 GB' en la venta, 'POCO C85 256 GB' en [DESCRIPCION].
+        q = m.derivada(["COPPEL"])
+        assert "COALESCE(u.[Modelo], u2.[Modelo])" in q
