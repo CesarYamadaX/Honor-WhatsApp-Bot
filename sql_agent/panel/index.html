@@ -993,6 +993,7 @@ const TEXTOS = {
     calificada: (emoji, fecha) => `${emoji} calificada el ${fecha}`,
     actualizando: "Actualizando…",
     turno_perdido: "No encontré esa respuesta en la bitácora.",
+    turno_sin_registro: "Respuesta anterior al registro de mensajes (antes del 5 de octubre): no se sabe a qué pregunta fue.",
     ver_conversacion: "Ver la conversación completa",
   },
   en: {
@@ -1137,6 +1138,7 @@ const TEXTOS = {
     calificada: (emoji, fecha) => `${emoji} rated on ${fecha}`,
     actualizando: "Refreshing…",
     turno_perdido: "I couldn't find that answer in the log.",
+    turno_sin_registro: "Answer sent before messages were recorded (before October 5): the question is unknown.",
     ver_conversacion: "See the whole conversation",
   },
 };
@@ -2445,6 +2447,12 @@ let reaccionesQueCuentan = { buenas: [], malas: [] };
 // Que calificaciones habia la ultima vez, para notar cuando llega una.
 let firmaCalif = null;
 
+// Por que una calificacion no trae su pregunta: un mensaje que no quedo
+// registrado (los de antes del 5/10/2026) o un turno que ya no esta.
+function sinTurno(calif) {
+  return String(calif.turno_id || "").startsWith("sin-registro:") ? "turno_sin_registro" : "turno_perdido";
+}
+
 async function cargarCalificaciones() {
   const consulta = filtroCalif ? `?valor=${filtroCalif}` : "";
   const datos = await pedir(`/panel/calificaciones${consulta}`);
@@ -2510,7 +2518,7 @@ function pintarListaCalif(caja) {
       elemento("span", "hora", diaLargo(calif.fecha)),
     );
     const abajo = elemento("div", "abajo");
-    abajo.append(elemento("span", "vista-previa", calif.turno?.pregunta || t("turno_perdido")));
+    abajo.append(elemento("span", "vista-previa", calif.turno?.pregunta || t(sinTurno(calif))));
     centro.append(arriba, abajo);
     fila.append(elemento("div", "avatar calif", calif.emoji), centro);
     fila.addEventListener("click", () => abrirCalificacion(calif));
@@ -2531,7 +2539,7 @@ function abrirCalificacion(calif) {
   const caja = $("vista-calificacion");
   caja.replaceChildren();
   if (!calif.turno) {
-    caja.append(elemento("div", "vacio", t("turno_perdido")));
+    caja.append(elemento("div", "vacio", t(sinTurno(calif))));
     return;
   }
   caja.append(elemento("span", "dia", diaLargo(calif.turno.inicio)));

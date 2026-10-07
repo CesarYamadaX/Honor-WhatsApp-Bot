@@ -25,6 +25,9 @@ from pathlib import Path
 
 BUENA = 1
 MALA = -1
+# El "turno" de una calificacion a un mensaje del bot que no quedo registrado
+# (ver api.reaccion): no hay pregunta a la que ligarla, se liga al mensaje.
+SIN_REGISTRO = "sin-registro:"
 
 _TONOS_Y_VARIANTES = {chr(c) for c in range(0x1F3FB, 0x1F400)} | {"️"}
 _UNION = "‍"  # une emojis: 🤦‍♂️ es 🤦 + ZWJ + ♂

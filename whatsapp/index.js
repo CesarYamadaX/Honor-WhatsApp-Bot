@@ -372,6 +372,14 @@ async function atender(mensaje) {
     const reaccion = mensaje.message?.reactionMessage;
     if (reaccion) {
       const reaccionado = reaccion.key?.id;
+      // fromMe es desde quien reacciona: true es un mensaje SUYO, no del bot.
+      // El servicio guarda cualquier otra reaccion aunque el mensaje no este
+      // registrado, asi que esta es la unica forma de no calificar al bot por
+      // un 👍 que el usuario se puso a si mismo.
+      if (reaccion.key?.fromMe) {
+        descartado("reaccion a un mensaje propio", jid);
+        return;
+      }
       if (reaccionado && (await autorizado(AGENT_API_URL, idAutorizacion))) {
         const resultado = await reaccionar(AGENT_API_URL, idAutorizacion, reaccionado, reaccion.text ?? "");
         console.log(

@@ -105,12 +105,36 @@ class TestDeWhatsAppAlPanel:
         _reaccionar(cliente, "wamid-1", "")
         assert notas.de_turnos([turno]) == {}
 
-    def test_otras_reacciones_y_mensajes_ajenos_no_califican(self, todo):
+    def test_las_reacciones_ambiguas_no_califican(self, todo):
         cliente, _, notas = todo
         _preguntar_y_mandar(cliente)
         assert _reaccionar(cliente, "wamid-1", "😂").json()["calificado"] is False
-        assert _reaccionar(cliente, "no-es-del-bot", "👎").json()["calificado"] is False
         assert notas.cuantas() == {"buenas": 0, "malas": 0}
+
+    def test_un_mensaje_del_bot_sin_registro_se_califica_igual(self, todo):
+        # Visto el 7/10/2026: un 👍 a un Excel del 1 de octubre (antes de que
+        # se registraran los mensajes) se perdia. Se guarda ligado al
+        # mensaje; el panel lo muestra como "anterior al registro".
+        cliente, _, notas = todo
+        r = _reaccionar(cliente, "3EB05BCD3E3BAD87FECE08", "👍").json()
+        assert r["calificado"] is True and r["turno"] == "sin-registro:3EB05BCD3E3BAD87FECE08"
+        assert notas.cuantas() == {"buenas": 1, "malas": 0}
+        lista = cliente.get("/panel/calificaciones").json()["calificaciones"]
+        assert lista[0]["turno_id"].startswith("sin-registro:") and lista[0]["turno"] is None
+        # Y quitar la reaccion la quita.
+        _reaccionar(cliente, "3EB05BCD3E3BAD87FECE08", "")
+        assert notas.cuantas() == {"buenas": 0, "malas": 0}
+
+    def test_una_respuesta_de_error_tambien_trae_su_turno(self, tmp_path):
+        class Falla(AgenteFalso):
+            def responder(self, pregunta, cancelacion=None, cadenas=None):
+                raise RuntimeError("algo se rompio")
+
+        app = crear_app(_config(), lambda: Falla("x"), bitacora=Bitacora(tmp_path / "b"),
+                        calificaciones=Calificaciones())
+        with TestClient(app) as cliente:
+            r = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"}).json()
+        assert r["turno"]
 
     def test_un_numero_ajeno_no_califica(self, todo):
         cliente, _, _ = todo

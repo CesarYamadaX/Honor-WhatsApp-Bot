@@ -26,7 +26,13 @@ import traduccion
 import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
-from calificaciones import REACCIONES_BUENAS, REACCIONES_MALAS, Calificaciones, valor_de
+from calificaciones import (
+    REACCIONES_BUENAS,
+    REACCIONES_MALAS,
+    SIN_REGISTRO,
+    Calificaciones,
+    valor_de,
+)
 from fotos import AlmacenDeFotos, ErrorDeFoto
 from config import Config
 from session import RegistroSesiones
@@ -313,6 +319,7 @@ def crear_app(
                     reply=idiomas.texto("base_no_disponible", idioma),
                     files=[],
                     idioma=idioma,
+                    turno=turno.id,
                 )
             if es_falla_del_servicio(error):
                 logger.error(
@@ -324,6 +331,7 @@ def crear_app(
                     reply=idiomas.texto("servicio_caido", idioma),
                     files=[],
                     idioma=idioma,
+                    turno=turno.id,
                 )
             if es_falla_de_red_del_modelo(error):
                 logger.error("No se pudo hablar con el proveedor del modelo (%s)", chat_id)
@@ -331,9 +339,12 @@ def crear_app(
                     reply=idiomas.texto("modelo_sin_conexion", idioma),
                     files=[],
                     idioma=idioma,
+                    turno=turno.id,
                 )
+            # Con su turno: tambien un "no pude" se puede calificar.
             return Respuesta(
-                reply=idiomas.texto("error_interno", idioma), files=[], idioma=idioma
+                reply=idiomas.texto("error_interno", idioma), files=[], idioma=idioma,
+                turno=turno.id,
             )
         finally:
             sesion.lock.release()
@@ -440,7 +451,13 @@ def crear_app(
             notas.turno_de, peticion.mensaje_id, peticion.chat_id
         )
         if turno_id is None:
-            return {"calificado": False, "motivo": "no es una respuesta del bot"}
+            # Un mensaje del bot que no quedo registrado: los anteriores al
+            # 5/10/2026, cuando esto no existia. Visto el 7/10/2026: un 👍 a un
+            # Excel del 1 de octubre se perdia como "no es una respuesta del
+            # bot". Se guarda igual, ligado al mensaje y no a una pregunta:
+            # en el panel sale como "respuesta anterior al registro". El
+            # sidecar ya descarta las reacciones a mensajes del propio usuario.
+            turno_id = f"{SIN_REGISTRO}{peticion.mensaje_id}"
         if not peticion.emoji:
             await run_in_threadpool(notas.quitar, turno_id, peticion.chat_id)
             logger.info("%s quito su calificacion de %s", peticion.chat_id, turno_id)
