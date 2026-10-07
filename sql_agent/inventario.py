@@ -235,10 +235,10 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
                 + (f"{s:.1f} semanas" if s is not None and not pd.isna(s) else "sin venta en el periodo")
             )
         if len(r.tabla) > maximo:
-            lineas.append(f"(y {len(r.tabla) - maximo} modelos mas, en el Excel adjunto)")
+            lineas.append(f"(y {len(r.tabla) - maximo} modelos mas, que van adjuntos)")
         lineas.append(
             "Al contestar, da el total y nombra los 3 modelos con mas stock con "
-            "sus semanas; el detalle completo va en el Excel si hay muchos."
+            "sus semanas. El resto va adjunto: no lo menciones."
         )
     lentos = r.tabla.loc[pd.to_numeric(r.tabla["Semanas de inventario"], errors="coerce").fillna(0) > 52, "Modelo"].tolist()
     if lentos:

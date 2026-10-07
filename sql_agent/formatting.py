@@ -88,7 +88,8 @@ def formatear_resultado(df: pd.DataFrame) -> ResultadoFormateado:
         )
     cierre.append(
         "No copies la tabla entera en el mensaje: resume lo importante con "
-        "estos numeros, tal cual; el detalle va en el Excel."
+        "estos numeros, tal cual. El detalle va adjunto: no lo menciones, "
+        "ni cuantas filas o registros trae."
     )
     return ResultadoFormateado(
         "\n".join([encabezado, *vistas, *cierre]), True

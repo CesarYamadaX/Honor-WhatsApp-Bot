@@ -1818,31 +1818,24 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         )
 
     # Reporte de una cadena: el Excel se arma con la tabla completa de esa
-    # cadena, no con lo que devolvio la consulta del modelo. Lo que el
-    # mensaje cita es lo que trae el archivo.
+    # cadena, no con lo que devolvio la consulta del modelo. Antes el mensaje
+    # citaba las filas de esa consulta (el mismo Excel de AT&T se anuncio con
+    # 103 852 y con 51 869); despues las del archivo. Pedido el 7/10/2026:
+    # ni unas ni otras -- el mensaje habla de ventas, no del archivo. Lo que
+    # se le da al modelo es la cifra de negocio del periodo.
     ficha = ficha_del_archivo(contexto) if excel and reporte_de_cadena else None
     if ficha:
         partes[0] = partes[0].replace(
             f"La consulta devolvio {len(df):,} registros; van completos en el "
             "Excel que se le adjunta al usuario. ",
-            f"Tu consulta devolvio {len(df):,} filas, pero ESE NO es el "
-            "tamano del Excel (ver la nota de abajo). ",
+            f"Tu consulta devolvio {len(df):,} filas; ese numero es solo para "
+            "ti, no lo menciones. ",
         )
-        unidades = (
-            f" y {ficha['unidades']:,.0f} unidades" if ficha.get("unidades") is not None else ""
-        )
-        donde = {
-            "Raw_Data": "en la hoja Raw_Data (el detalle completo)",
-            "ZIP": "en el ZIP de CSV (el detalle completo)",
-            "Datos": "en la hoja Datos (agrupado por tienda, marca y mes)",
-        }[ficha["donde"]]
-        filas = f"{ficha['filas']:,} filas" if ficha.get("filas") is not None else "el detalle"
-        partes.append(
-            f"EL ARCHIVO: trae {filas}{unidades} {donde}. Si dices cuantos "
-            "registros o unidades lleva el reporte, usa EXACTAMENTE estas "
-            f"cifras, nunca las {len(df):,} filas de tu consulta: esa solo "
-            "sirvio para ubicar la cadena y el periodo."
-        )
+        if ficha.get("unidades") is not None:
+            partes.append(
+                f"TOTAL DEL PERIODO en esta cadena, todas las marcas: "
+                f"{ficha['unidades']:,.0f} unidades. Si das un total, es este."
+            )
 
     if acotada is not None and acotada.acotados:
         partes.append(
@@ -1869,38 +1862,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     # septiembre lleva 15 584 unidades contra 160 909 de agosto y nadie
     # aclara que el mes va por la mitad: el numero es correcto y la lectura
     # es un desplome que no ocurrio.
-    if solo_crudos:
+    # Como va armado el archivo (solo el detalle, un ZIP aparte, varias
+    # hojas) ya no se le cuenta al usuario: pedido el 7/10/2026, el mensaje
+    # habla de ventas y el adjunto se explica solo. La unica excepcion es
+    # cuando el detalle NO va: eso si cambia lo que recibe.
+    if crudos_agrupados and not zip_del_crudo:
         partes.append(
-            "OJO: el reporte es grande, asi que el Excel lleva SOLO el detalle "
-            "completo ('Raw_Data', repartido en varias hojas si no cabe en "
-            "una), sin tabla dinamica ni hoja agrupada. Diselo al usuario en "
-            "una linea, y que el archivo puede tardar en abrir."
-        )
-
-    if zip_del_crudo:
-        partes.append(
-            "OJO: el detalle completo es demasiado grande para un Excel que "
-            "WhatsApp acepte, asi que va aparte en un ZIP con archivos CSV "
-            "(uno por cada millon de filas, se abren con Excel), y el Excel "
-            "lleva el PIVOT y la hoja 'Datos' agrupada. Diselo al usuario en "
-            "una linea."
-        )
-    elif crudos_agrupados:
-        partes.append(
-            "OJO: el detalle crudo de este periodo es demasiado grande para "
-            "mandarse por WhatsApp, asi que el Excel lleva el PIVOT y la hoja "
-            "'Datos' (agrupada por tienda, marca y mes) pero NO 'Raw_Data'. "
-            "Diselo al usuario, y que si quiere el detalle completo acote el "
-            "periodo (un mes, por ejemplo)."
-        )
-
-    if crudo_partido:
-        partes.append(
-            "OJO: los datos crudos no caben en una sola hoja de Excel, asi que "
-            "van repartidos en varias ('Raw_Data', 'Raw_Data (2)'...) y el "
-            "archivo va SIN tabla dinamica: un pivot solo puede resumir una "
-            "hoja, y resumir solo la primera seria enganoso. Estan TODAS las "
-            "filas. Dilo al responder."
+            "OJO: el detalle de cada venta de este periodo es demasiado grande "
+            "para mandarlo por WhatsApp; va resumido por tienda, marca y mes. "
+            "Si el usuario pidio el detalle, dile en una frase sencilla que "
+            "para tenerlo completo acote el periodo (un mes, por ejemplo), sin "
+            "hablar de hojas ni archivos."
         )
 
     incompleto = tiempo.ultimo_periodo_incompleto(df)
@@ -2127,6 +2099,12 @@ class SQLAgent:
            responde lo que se pidio.
         5. Respondes en un telefono: se breve. No repitas la tabla de resultados en
            tu respuesta final, resumela en una o dos frases.
+           Contesta con lo que se pidio, como lo diria una persona: las
+           cifras del negocio (unidades, share, precios, promotores, semanas
+           de inventario). NUNCA hables de como viene el dato: ni filas, ni
+           registros, ni hojas, ni columnas, ni Excel, ZIP o CSV, ni "te
+           adjunto el archivo". Si hay archivo o grafica, llega adjunto
+           solo, debajo de tu mensaje.
            No cierres ofreciendo mas datos ("¿quieres que lo abra por
            tienda?", "¿te lo comparo con el ano pasado?"): al final del
            mensaje se agregan solas, y en el idioma del usuario, dos cosas
