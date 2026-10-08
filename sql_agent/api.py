@@ -27,6 +27,7 @@ import transcripcion
 from agent import ConsultaCancelada
 from bitacora import Bitacora
 from calificaciones import (
+    MAX_COMENTARIO,
     REACCIONES_BUENAS,
     REACCIONES_MALAS,
     SIN_REGISTRO,
@@ -225,6 +226,12 @@ class Reaccion(BaseModel):
     emoji: str = ""  # vacio = el usuario quito la reaccion
 
 
+class Comentario(BaseModel):
+    turno_id: str
+    chat_id: str
+    texto: str = ""  # vacio = borrar el comentario
+
+
 def crear_app(
     config: Config,
     fabrica_agente: Callable[[], Any],
@@ -280,6 +287,9 @@ def crear_app(
                 pregunta,
                 cancelacion=sesion.cancelacion,
                 cadenas=usuarios.cadenas_de(numero) if numero else None,
+                # Se leen en cada pregunta: un comentario nuevo en el panel
+                # vale desde el siguiente mensaje, como las cadenas.
+                notas=notas.notas_para_el_bot(),
             )
             idioma_usado = getattr(sesion.agente, "idioma", idioma)
             diario.terminar(
@@ -827,6 +837,26 @@ def crear_app(
             # Para que el panel diga cuales cuentan sin tener su propia lista.
             "reacciones": {"buenas": REACCIONES_BUENAS, "malas": REACCIONES_MALAS},
         }
+
+    @app.post("/panel/calificaciones/comentario")
+    async def comentar_calificacion(comentario: Comentario) -> dict:
+        """Por que una respuesta se califico asi. Lo lee el bot (ver
+        Calificaciones.notas_para_el_bot) desde la siguiente pregunta."""
+        _solo_local()
+        if len(comentario.texto) > MAX_COMENTARIO:
+            raise HTTPException(status_code=413, detail="Comentario demasiado largo")
+        turno = await run_in_threadpool(diario.buscar, comentario.turno_id)
+        actual = await run_in_threadpool(notas.de_turnos, [comentario.turno_id])
+        await run_in_threadpool(
+            notas.comentar,
+            comentario.turno_id,
+            comentario.chat_id,
+            comentario.texto,
+            (turno or {}).get("pregunta", ""),
+            actual.get(comentario.turno_id, {}).get("valor"),
+        )
+        logger.info("Panel: comentario en %s (%d caracteres)", comentario.turno_id, len(comentario.texto.strip()))
+        return {"comentario": comentario.texto.strip()}
 
     _FUENTES_DE_LOG = {"whatsapp", "api", "iniciar"}
 

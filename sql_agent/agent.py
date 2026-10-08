@@ -2591,6 +2591,7 @@ class SQLAgent:
         pregunta: str,
         cancelacion: threading.Event | None = None,
         cadenas=None,
+        notas: str = "",
     ) -> tuple[str, list[str]]:
         """Responde una pregunta y devuelve (texto, rutas de archivos generados).
 
@@ -2617,6 +2618,11 @@ class SQLAgent:
             self.engine, cancelacion, pregunta, self.idioma, cadenas
         ) as ctx:
             instruccion = idiomas.INSTRUCCION[self.idioma]
+            if notas:
+                # Los comentarios del panel sobre respuestas calificadas
+                # (Calificaciones.notas_para_el_bot). Antes que lo de acceso:
+                # el permiso es lo ultimo que lee el modelo y lo que manda.
+                instruccion = f"{instruccion}\n\n{notas}"
             if ampliado:
                 # Sin esto el modelo ve en el historial que se le nego y lo
                 # vuelve a negar ("intentalo de nuevo" -> otra vez no).

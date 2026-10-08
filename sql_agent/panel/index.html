@@ -658,6 +658,30 @@
   }
   .filtros-calif button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
   .avatar.calif { font-size: 22px; background: var(--barra); }
+  /* El comentario de una calificacion: por que se califico asi. */
+  .comentario-calif {
+    margin: 14px auto 0; max-width: 640px; width: 100%; box-sizing: border-box;
+    background: var(--panel); border: 1px solid var(--borde); border-radius: 10px;
+    padding: 12px 14px; display: grid; gap: 8px;
+  }
+  .comentario-calif label { font-weight: 600; font-size: 14px; color: var(--tinta); }
+  .comentario-calif .ayuda { font-size: 12.5px; color: var(--tinta-3); margin: -4px 0 0; }
+  .comentario-calif textarea {
+    width: 100%; box-sizing: border-box; min-height: 84px; resize: vertical;
+    font: inherit; font-size: 14px; line-height: 1.4; color: var(--tinta);
+    background: var(--barra); border: 1px solid var(--borde-fuerte); border-radius: 8px; padding: 8px 10px;
+  }
+  .comentario-calif textarea:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .comentario-calif .pie { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .comentario-calif .estado { font-size: 12.5px; color: var(--tinta-3); margin-right: auto; }
+  .comentario-calif .estado.listo { color: var(--acento-fuerte); }
+  .comentario-calif button {
+    border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
+    border-radius: 16px; padding: 6px 16px; font-size: 13px; cursor: pointer;
+  }
+  .comentario-calif button.guardar { background: var(--acento); border-color: transparent; color: #fff; font-weight: 600; }
+  .comentario-calif button:disabled { opacity: .5; cursor: default; }
+  .comentario-calif button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
   .ir-al-chat {
     display: block; margin: 14px auto 4px; border: 1px solid var(--borde-fuerte); background: var(--panel);
     color: var(--acento-fuerte); border-radius: 16px; padding: 6px 16px; font-size: 13px; cursor: pointer;
@@ -995,6 +1019,16 @@ const TEXTOS = {
     turno_perdido: "No encontré esa respuesta en la bitácora.",
     turno_sin_registro: "Respuesta anterior al registro de mensajes (antes del 5 de octubre): no se sabe a qué pregunta fue.",
     ver_conversacion: "Ver la conversación completa",
+    comentario_titulo: "¿Por qué esta calificación?",
+    comentario_ayuda: "El bot lee los comentarios más recientes antes de cada respuesta, para no repetir el error. No los ve ningún usuario.",
+    comentario_ejemplo: "Ej.: las ventas debían ser netas, sin devoluciones; o: el Excel no necesitaba la hoja de tiendas.",
+    comentario_guardar: "Guardar",
+    comentario_borrar: "Borrar",
+    comentario_guardado: "Guardado. El bot lo toma en cuenta desde su siguiente respuesta.",
+    comentario_borrado: "Comentario borrado.",
+    comentario_sin_guardar: "Sin guardar",
+    comentario_quedan: (n) => `${n} caracteres disponibles`,
+    con_comentario: "Con comentario",
   },
   en: {
     marca: "Bot panel",
@@ -1140,6 +1174,16 @@ const TEXTOS = {
     turno_perdido: "I couldn't find that answer in the log.",
     turno_sin_registro: "Answer sent before messages were recorded (before October 5): the question is unknown.",
     ver_conversacion: "See the whole conversation",
+    comentario_titulo: "Why this rating?",
+    comentario_ayuda: "The bot reads the most recent comments before every answer, so it doesn't repeat the mistake. Users never see them.",
+    comentario_ejemplo: "E.g.: sales should be net of returns; or: the Excel didn't need the stores sheet.",
+    comentario_guardar: "Save",
+    comentario_borrar: "Delete",
+    comentario_guardado: "Saved. The bot takes it into account from its next answer.",
+    comentario_borrado: "Comment deleted.",
+    comentario_sin_guardar: "Not saved",
+    comentario_quedan: (n) => `${n} characters left`,
+    con_comentario: "Has a comment",
   },
 };
 
@@ -1782,7 +1826,8 @@ function burbujaDeTurno(turno) {
   if (turno.calificacion) {
     const mala = Number(turno.calificacion.valor) < 0;
     const globo = elemento("span", `reaccion${mala ? " mala" : ""}`, turno.calificacion.emoji);
-    globo.title = t("calificada", turno.calificacion.emoji, diaLargo(turno.calificacion.fecha));
+    globo.title = t("calificada", turno.calificacion.emoji, diaLargo(turno.calificacion.fecha))
+      + (turno.calificacion.comentario ? `\n💬 ${turno.calificacion.comentario}` : "");
     respuesta.classList.add("con-reaccion");
     respuesta.append(globo);
   }
@@ -2518,6 +2563,11 @@ function pintarListaCalif(caja) {
       elemento("span", "hora", diaLargo(calif.fecha)),
     );
     const abajo = elemento("div", "abajo");
+    if (calif.comentario) {
+      const marca = elemento("span", null, "💬 ");
+      marca.title = t("con_comentario");
+      abajo.append(marca);
+    }
     abajo.append(elemento("span", "vista-previa", calif.turno?.pregunta || t(sinTurno(calif))));
     centro.append(arriba, abajo);
     fila.append(elemento("div", "avatar calif", calif.emoji), centro);
@@ -2540,6 +2590,7 @@ function abrirCalificacion(calif) {
   caja.replaceChildren();
   if (!calif.turno) {
     caja.append(elemento("div", "vacio", t(sinTurno(calif))));
+    caja.append(cajaDeComentario(calif));
     return;
   }
   caja.append(elemento("span", "dia", diaLargo(calif.turno.inicio)));
@@ -2548,6 +2599,7 @@ function abrirCalificacion(calif) {
   const burbuja = burbujaDeTurno({ ...calif.turno, calificacion: calif });
   burbuja.querySelector("details.tramoya")?.setAttribute("open", "");
   caja.append(burbuja);
+  caja.append(cajaDeComentario(calif));
   const ir = elemento("button", "ir-al-chat", t("ver_conversacion"));
   ir.type = "button";
   ir.addEventListener("click", () => {
@@ -2555,6 +2607,92 @@ function abrirCalificacion(calif) {
     abrirChat(calif.chat_id).catch((e) => mostrarError(e.message));
   });
   caja.append(ir);
+}
+
+// Lo escrito y no guardado, por calificacion: el panel se repinta solo
+// (deslizar, cambiar de idioma) y no debe tirar un comentario a medias.
+const borradores = new Map();
+const MAX_COMENTARIO = 1000;
+const claveDe = (calif) => `${calif.turno_id}|${calif.chat_id}`;
+
+function cajaDeComentario(calif) {
+  const clave = claveDe(calif);
+  const guardado = calif.comentario || "";
+  const caja = elemento("div", "comentario-calif");
+  const id = `comentario-${Math.random().toString(36).slice(2)}`;
+  const etiqueta = elemento("label", null, t("comentario_titulo"));
+  etiqueta.htmlFor = id;
+  const ayuda = elemento("p", "ayuda", t("comentario_ayuda"));
+  ayuda.id = `${id}-ayuda`;
+  const texto = document.createElement("textarea");
+  texto.id = id;
+  texto.maxLength = MAX_COMENTARIO;
+  texto.placeholder = t("comentario_ejemplo");
+  texto.setAttribute("aria-describedby", ayuda.id);
+  texto.value = borradores.has(clave) ? borradores.get(clave) : guardado;
+
+  const pie = elemento("div", "pie");
+  const estado = elemento("span", "estado");
+  estado.setAttribute("role", "status");
+  estado.setAttribute("aria-live", "polite");
+  const borrar = elemento("button", null, t("comentario_borrar"));
+  borrar.type = "button";
+  const guardar = elemento("button", "guardar", t("comentario_guardar"));
+  guardar.type = "button";
+  pie.append(estado, borrar, guardar);
+
+  let actual = guardado;
+  const pintar = (aviso) => {
+    const cambio = texto.value.trim() !== actual;
+    guardar.disabled = !cambio || !texto.value.trim();
+    borrar.hidden = !actual;
+    estado.classList.toggle("listo", Boolean(aviso));
+    estado.textContent = aviso || (cambio ? t("comentario_sin_guardar")
+      : texto.value ? t("comentario_quedan", MAX_COMENTARIO - texto.value.length) : "");
+  };
+  texto.addEventListener("input", () => {
+    if (texto.value.trim() === actual) borradores.delete(clave);
+    else borradores.set(clave, texto.value);
+    pintar();
+  });
+
+  async function enviar(valor, aviso) {
+    guardar.disabled = borrar.disabled = true;
+    try {
+      const r = await pedir("/panel/calificaciones/comentario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turno_id: calif.turno_id, chat_id: calif.chat_id, texto: valor }),
+      });
+      actual = r.comentario;
+      texto.value = actual;
+      borradores.delete(clave);
+      // En la cache tambien, para que el 💬 de la lista aparezca o se vaya.
+      for (const c of cacheCalif) if (claveDe(c) === clave) c.comentario = actual;
+      calif.comentario = actual;
+      if (solapa === "calificaciones") pintarLista();
+      mostrarError("");
+      pintar(t(aviso));
+    } catch (error) {
+      mostrarError(error.message);
+      pintar();
+    } finally {
+      borrar.disabled = false;
+    }
+  }
+  guardar.addEventListener("click", () => enviar(texto.value, "comentario_guardado"));
+  borrar.addEventListener("click", () => enviar("", "comentario_borrado"));
+  // Ctrl/Cmd+Enter guarda sin soltar el teclado.
+  texto.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !guardar.disabled) {
+      e.preventDefault();
+      guardar.click();
+    }
+  });
+
+  caja.append(etiqueta, ayuda, texto, pie);
+  pintar();
+  return caja;
 }
 
 async function cargarDias() {

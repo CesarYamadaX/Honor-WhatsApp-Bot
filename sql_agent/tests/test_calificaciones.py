@@ -127,7 +127,7 @@ class TestDeWhatsAppAlPanel:
 
     def test_una_respuesta_de_error_tambien_trae_su_turno(self, tmp_path):
         class Falla(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None, cadenas=None):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
                 raise RuntimeError("algo se rompio")
 
         app = crear_app(_config(), lambda: Falla("x"), bitacora=Bitacora(tmp_path / "b"),
@@ -148,3 +148,67 @@ def test_un_turno_se_encuentra_por_su_id(tmp_path):
     diario.terminar(turno, respuesta="respuesta")
     assert diario.buscar(turno.id)["respuesta"] == "respuesta"
     assert diario.buscar("20990101-000000-ffffff") is None
+
+
+class TestComentarios:
+    """Pedido el 8/10/2026: escribir en el panel por que se califico asi,
+    para que el bot (y quien lo mantiene) aprenda de eso."""
+
+    def _comentar(self, cliente, turno, texto):
+        return cliente.post("/panel/calificaciones/comentario",
+                            json={"turno_id": turno, "chat_id": AUTORIZADO, "texto": texto})
+
+    def test_el_comentario_sale_en_el_panel(self, todo):
+        cliente, _, _ = todo
+        turno = _preguntar_y_mandar(cliente)
+        _reaccionar(cliente, "wamid-1", "👎")
+        assert self._comentar(cliente, turno, "  faltaron las devoluciones ").status_code == 200
+        fila = cliente.get("/panel/calificaciones").json()["calificaciones"][0]
+        assert fila["comentario"] == "faltaron las devoluciones"
+        conv = cliente.get(f"/panel/conversaciones?chat_id={AUTORIZADO}").json()["turnos"][0]
+        assert conv["calificacion"]["comentario"] == "faltaron las devoluciones"
+
+    def test_el_bot_lo_lee_en_la_siguiente_pregunta(self, tmp_path):
+        vistas = []
+
+        class Atento(AgenteFalso):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+                vistas.append(notas)
+                return super().responder(pregunta, cancelacion, cadenas)
+
+        notas = Calificaciones()
+        app = crear_app(_config(), lambda: Atento("ok"), bitacora=Bitacora(tmp_path / "b"),
+                        calificaciones=notas)
+        with TestClient(app) as cliente:
+            turno = _preguntar_y_mandar(cliente)
+            _reaccionar(cliente, "wamid-1", "👎")
+            self._comentar(cliente, turno, "usa la venta neta, sin devoluciones")
+            cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "y en julio?"})
+        assert vistas[0] == ""
+        assert "usa la venta neta, sin devoluciones" in vistas[1]
+        assert "MAL calificada" in vistas[1] and "cuanto vendio Honor" in vistas[1]
+        assert "nunca repitas cifras" in vistas[1]
+
+    def test_sobrevive_a_quitar_la_reaccion_y_vacio_lo_borra(self, todo):
+        cliente, _, notas = todo
+        turno = _preguntar_y_mandar(cliente)
+        _reaccionar(cliente, "wamid-1", "👎")
+        self._comentar(cliente, turno, "mal el mes")
+        _reaccionar(cliente, "wamid-1", "")
+        assert "MAL calificada" in notas.notas_para_el_bot()
+        self._comentar(cliente, turno, "   ")
+        assert notas.notas_para_el_bot() == ""
+
+    def test_uno_demasiado_largo_se_rechaza(self, todo):
+        cliente, _, _ = todo
+        turno = _preguntar_y_mandar(cliente)
+        assert self._comentar(cliente, turno, "x" * 1001).status_code == 413
+
+    def test_el_bot_lee_solo_los_mas_recientes(self):
+        notas = Calificaciones()
+        for i in range(20):
+            notas.comentar(f"t{i:02}", "chat", f"nota {i:02}", f"pregunta {i}", MALA)
+        texto = notas.notas_para_el_bot(limite=3)
+        assert texto.count("- Respuesta") == 3
+        # El mas nuevo al final: lo ultimo que lee el modelo pesa mas.
+        assert texto.index("nota 17") < texto.index("nota 18") < texto.index("nota 19")

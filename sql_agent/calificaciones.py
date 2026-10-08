@@ -13,6 +13,10 @@ Dos tablas:
   llega con el id del mensaje, no del turno.
 - calificaciones: una por turno y chat; reaccionar otra vez la reemplaza y
   quitar la reaccion la borra, como en WhatsApp.
+- comentarios: por que se califico asi, escrito desde el panel (pedido el
+  8/10/2026). Aparte de la calificacion para que no se pierda si el usuario
+  cambia o quita su reaccion. El bot lee los mas recientes antes de cada
+  pregunta (ver `notas_para_el_bot`).
 """
 
 from __future__ import annotations
@@ -50,6 +54,12 @@ REACCIONES_MALAS = (
     "☹", "😒", "🤦", "🤨", "🤔", "❌", "🚫", "⚠", "💩",
 )
 _VALOR = {e: BUENA for e in REACCIONES_BUENAS} | {e: MALA for e in REACCIONES_MALAS}
+
+# Un comentario es una nota, no un documento; y todos van en el prompt.
+MAX_COMENTARIO = 1000
+# Cuantos comentarios lee el bot: los mas recientes. Mas seria prompt que
+# paga cada pregunta, y los viejos casi siempre ya estan corregidos.
+COMENTARIOS_PARA_EL_BOT = 15
 
 
 def valor_de(emoji: str) -> int | None:
@@ -93,6 +103,15 @@ class Calificaciones:
                     fecha TEXT NOT NULL,
                     PRIMARY KEY (turno_id, chat_id)
                 );
+                CREATE TABLE IF NOT EXISTS comentarios (
+                    turno_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    texto TEXT NOT NULL,
+                    pregunta TEXT NOT NULL,
+                    valor INTEGER,
+                    fecha TEXT NOT NULL,
+                    PRIMARY KEY (turno_id, chat_id)
+                );
             """)
 
     def registrar_enviados(self, chat_id: str, turno_id: str, mensajes: list[str]) -> None:
@@ -125,6 +144,68 @@ class Calificaciones:
                 (turno_id, chat_id),
             )
 
+    def comentar(
+        self, turno_id: str, chat_id: str, texto: str, pregunta: str = "", valor: int | None = None
+    ) -> None:
+        """Guarda (o reemplaza) el comentario de una respuesta; vacio lo borra.
+
+        La pregunta y la calificacion se copian: el bot lee los comentarios
+        sin abrir la bitacora, y el comentario sigue diciendo de que era
+        aunque el usuario quite su reaccion.
+        """
+        texto = (texto or "").strip()[:MAX_COMENTARIO]
+        with self._candado, self._conexion:
+            if not texto:
+                self._conexion.execute(
+                    "DELETE FROM comentarios WHERE turno_id = ? AND chat_id = ?",
+                    (turno_id, chat_id),
+                )
+                return
+            self._conexion.execute(
+                "INSERT OR REPLACE INTO comentarios VALUES (?, ?, ?, ?, ?, ?)",
+                (turno_id, chat_id, texto, (pregunta or "")[:500], valor, _ahora()),
+            )
+
+    def comentarios(self, limite: int = COMENTARIOS_PARA_EL_BOT) -> list[dict]:
+        """Los comentarios mas recientes primero, con la calificacion de ahora
+        (o la que tenia al comentar, si ya la quitaron)."""
+        with self._candado, closing(self._conexion.cursor()) as cursor:
+            filas = cursor.execute(
+                "SELECT c.turno_id, c.chat_id, c.texto, c.pregunta, COALESCE(k.valor, c.valor), c.fecha "
+                "FROM comentarios c LEFT JOIN calificaciones k "
+                "ON k.turno_id = c.turno_id AND k.chat_id = c.chat_id "
+                "ORDER BY c.fecha DESC, c.rowid DESC LIMIT ?",
+                (limite,),
+            ).fetchall()
+        return [
+            {"turno_id": t, "chat_id": c, "texto": x, "pregunta": p, "valor": v, "fecha": f}
+            for t, c, x, p, v, f in filas
+        ]
+
+    def notas_para_el_bot(self, limite: int = COMENTARIOS_PARA_EL_BOT) -> str:
+        """Los comentarios recientes como instruccion para el modelo, o "".
+
+        Los escribe solo quien administra el bot (el panel es local), asi que
+        valen como instrucciones. Pero pueden traer cifras o nombres de una
+        cadena que el usuario de ahora no ve: van como guia de COMO
+        contestar, nunca como datos que repetir.
+        """
+        filas = self.comentarios(limite)
+        if not filas:
+            return ""
+        renglones = []
+        for fila in reversed(filas):  # del mas viejo al mas nuevo: lo ultimo pesa mas
+            como = {BUENA: "bien calificada", MALA: "MAL calificada"}.get(fila["valor"], "comentada")
+            pregunta = f' a "{fila["pregunta"]}"' if fila["pregunta"] else ""
+            renglones.append(f"- Respuesta {como}{pregunta}: {fila['texto']}")
+        return (
+            "NOTAS DEL ADMINISTRADOR sobre respuestas anteriores (de cualquier "
+            "usuario). Son para que contestes mejor: aplica lo que piden a "
+            "preguntas parecidas. No son datos: nunca repitas cifras, cadenas "
+            "ni nombres que vengan aqui, y no las menciones al usuario.\n"
+            + "\n".join(renglones)
+        )
+
     def de_turnos(self, turno_ids: list[str]) -> dict[str, dict]:
         """La calificacion de cada turno de la lista que tenga una."""
         ids = [i for i in turno_ids if i]
@@ -132,26 +213,33 @@ class Calificaciones:
             return {}
         with self._candado, closing(self._conexion.cursor()) as cursor:
             filas = cursor.execute(
-                f"SELECT turno_id, valor, emoji, fecha FROM calificaciones "
-                f"WHERE turno_id IN ({', '.join('?' * len(ids))})",
+                f"SELECT k.turno_id, k.valor, k.emoji, k.fecha, c.texto FROM calificaciones k "
+                f"LEFT JOIN comentarios c ON c.turno_id = k.turno_id AND c.chat_id = k.chat_id "
+                f"WHERE k.turno_id IN ({', '.join('?' * len(ids))})",
                 ids,
             ).fetchall()
-        return {t: {"valor": v, "emoji": e, "fecha": f} for t, v, e, f in filas}
+        return {
+            t: {"valor": v, "emoji": e, "fecha": f, "comentario": x or ""}
+            for t, v, e, f, x in filas
+        }
 
     def lista(self, valor: int | None = None, limite: int = 200) -> list[dict]:
         """Las calificaciones mas recientes primero, opcionalmente de un solo tipo."""
         donde, parametros = "", []
         if valor is not None:
-            donde, parametros = "WHERE valor = ?", [valor]
+            donde, parametros = "WHERE k.valor = ?", [valor]
         with self._candado, closing(self._conexion.cursor()) as cursor:
             filas = cursor.execute(
-                f"SELECT turno_id, chat_id, valor, emoji, fecha FROM calificaciones "
-                f"{donde} ORDER BY fecha DESC LIMIT ?",
+                f"SELECT k.turno_id, k.chat_id, k.valor, k.emoji, k.fecha, c.texto, c.fecha "
+                f"FROM calificaciones k LEFT JOIN comentarios c "
+                f"ON c.turno_id = k.turno_id AND c.chat_id = k.chat_id "
+                f"{donde} ORDER BY k.fecha DESC LIMIT ?",
                 [*parametros, limite],
             ).fetchall()
         return [
-            {"turno_id": t, "chat_id": c, "valor": v, "emoji": e, "fecha": f}
-            for t, c, v, e, f in filas
+            {"turno_id": t, "chat_id": c, "valor": v, "emoji": e, "fecha": f,
+             "comentario": x or "", "comentado": fc}
+            for t, c, v, e, f, x, fc in filas
         ]
 
     def cuantas(self) -> dict:
