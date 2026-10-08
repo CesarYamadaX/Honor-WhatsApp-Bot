@@ -27,6 +27,7 @@
     /* El acento es azul, no el verde de WhatsApp: se toma prestada la
        disposicion, no la marca -- y el azul es el de Honor. */
     --acento: #1877c9;
+    --sobre-acento: #fff;
     --acento-fuerte: #0f5ba6;
     --burbuja-entra: #ffffff;
     --burbuja-sale: #d6e9fb;
@@ -65,6 +66,7 @@
     --tinta-2: #8696a0;
     --tinta-3: #667781;
     --acento: #53a6f0;
+    --sobre-acento: #0b141a;
     --acento-fuerte: #53a6f0;
     --burbuja-entra: #202c33;
     --burbuja-sale: #0b4a7a;
@@ -92,6 +94,7 @@
     --tinta-2: #8696a0;
     --tinta-3: #667781;
     --acento: #53a6f0;
+    --sobre-acento: #0b141a;
     --acento-fuerte: #53a6f0;
     --burbuja-entra: #202c33;
     --burbuja-sale: #0b4a7a;
@@ -664,30 +667,58 @@
   }
   .filtros-calif button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
   .avatar.calif { font-size: 22px; background: var(--barra); }
-  /* El comentario de una calificacion: por que se califico asi. */
+  /* El comentario de una calificacion: por que se califico asi. Dos
+     estados que se tienen que distinguir de un vistazo: guardado (tarjeta
+     con su marca verde) y escribiendo (caja de texto, "sin guardar"). */
   .comentario-calif {
     margin: 14px auto 0; max-width: 640px; width: 100%; box-sizing: border-box;
     background: var(--panel); border: 1px solid var(--borde); border-radius: 10px;
-    padding: 12px 14px; display: grid; gap: 8px;
+    padding: 12px 14px; display: grid; gap: 8px; box-shadow: var(--sombra);
   }
-  .comentario-calif label { font-weight: 600; font-size: 14px; color: var(--tinta); }
-  .comentario-calif .ayuda { font-size: 12.5px; color: var(--tinta-3); margin: -4px 0 0; }
+  .comentario-calif .cabeza { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .comentario-calif label, .comentario-calif .titulo-comentario { font-weight: 600; font-size: 14px; color: var(--tinta); }
+  .comentario-calif .ayuda { font-size: 12.5px; color: var(--tinta-3); margin: 0; }
   .comentario-calif textarea {
     width: 100%; box-sizing: border-box; min-height: 84px; resize: vertical;
     font: inherit; font-size: 14px; line-height: 1.4; color: var(--tinta);
     background: var(--barra); border: 1px solid var(--borde-fuerte); border-radius: 8px; padding: 8px 10px;
   }
   .comentario-calif textarea:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .comentario-calif.con-borrador textarea { border-color: var(--aviso); }
   .comentario-calif .pie { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .comentario-calif .estado { font-size: 12.5px; color: var(--tinta-3); margin-right: auto; }
-  .comentario-calif .estado.listo { color: var(--acento-fuerte); }
+  .comentario-calif .estado.sin-guardar { color: var(--aviso); font-weight: 600; }
   .comentario-calif button {
     border: 1px solid var(--borde-fuerte); background: var(--panel); color: var(--tinta-2);
     border-radius: 16px; padding: 6px 16px; font-size: 13px; cursor: pointer;
   }
-  .comentario-calif button.guardar { background: var(--acento); border-color: transparent; color: #fff; font-weight: 600; }
+  .comentario-calif button.guardar { background: var(--acento); border-color: transparent; color: var(--sobre-acento); font-weight: 600; }
+  .comentario-calif button.peligro { color: var(--alto); }
   .comentario-calif button:disabled { opacity: .5; cursor: default; }
   .comentario-calif button:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+  /* Guardado: la marca y el texto citado. */
+  .sello-guardado {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
+    color: var(--acento-fuerte); background: var(--ok-suave); border-radius: 10px; padding: 2px 9px;
+  }
+  .comentario-calif .cita {
+    margin: 0; padding: 8px 12px; border-left: 3px solid var(--acento); background: var(--barra);
+    border-radius: 0 8px 8px 0; font-size: 14px; line-height: 1.45; color: var(--tinta);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .comentario-calif .lectura { font-size: 12.5px; color: var(--tinta-2); margin: 0; }
+  .comentario-calif .lectura.ya-no { color: var(--tinta-3); }
+  .comentario-calif.recien { animation: recien-guardado 1.6s ease-out; }
+  @keyframes recien-guardado {
+    0% { box-shadow: 0 0 0 3px var(--acento); }
+    100% { box-shadow: var(--sombra); }
+  }
+  @media (prefers-reduced-motion: reduce) { .comentario-calif.recien { animation: none; } }
+  /* En la lista: el comentario debajo de la pregunta. */
+  .renglon .comentario-previa {
+    display: block; font-size: 12.5px; color: var(--acento-fuerte); font-style: italic;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px;
+  }
   .ir-al-chat {
     display: block; margin: 14px auto 4px; border: 1px solid var(--borde-fuerte); background: var(--panel);
     color: var(--acento-fuerte); border-radius: 16px; padding: 6px 16px; font-size: 13px; cursor: pointer;
@@ -1029,13 +1060,20 @@ const TEXTOS = {
     comentario_titulo_archivo: (que) => `¿Por qué esta calificación ${que}?`,
     del_archivo: { xlsx: "del Excel", png: "de la gráfica", zip: "del ZIP", otro: "del archivo" },
     parte_archivo: { xlsx: "Excel", png: "Gráfica", zip: "ZIP", otro: "Archivo" },
-    comentario_ayuda: "El bot lee los comentarios más recientes antes de cada respuesta, para no repetir el error. No los ve ningún usuario.",
+    comentario_ayuda: "El bot lee los comentarios más recientes antes de cada respuesta, para no repetir el error. Ningún usuario los ve.",
     comentario_ejemplo: "Ej.: las ventas debían ser netas, sin devoluciones; o: el Excel no necesitaba la hoja de tiendas.",
+    comentario_tuyo: "Tu comentario",
     comentario_guardar: "Guardar",
+    comentario_cancelar: "Cancelar",
+    comentario_editar: "Editar",
     comentario_borrar: "Borrar",
-    comentario_guardado: "Guardado. El bot lo toma en cuenta desde su siguiente respuesta.",
+    comentario_borrar_seguro: "¿Borrar este comentario? El bot dejará de tomarlo en cuenta.",
+    comentario_sello: (cuando) => `✓ Guardado${cuando ? ` · ${cuando}` : ""}`,
+    comentario_lo_lee: "🤖 El bot lo toma en cuenta en sus respuestas.",
+    comentario_ya_no: "🤖 El bot ya no lo lee: solo toma en cuenta los 15 comentarios más recientes.",
     comentario_borrado: "Comentario borrado.",
-    comentario_sin_guardar: "Sin guardar",
+    comentario_guardando: "Guardando…",
+    comentario_sin_guardar: "● Sin guardar",
     comentario_quedan: (n) => `${n} caracteres disponibles`,
     con_comentario: "Con comentario",
   },
@@ -1189,11 +1227,18 @@ const TEXTOS = {
     parte_archivo: { xlsx: "Excel", png: "Chart", zip: "ZIP", otro: "File" },
     comentario_ayuda: "The bot reads the most recent comments before every answer, so it doesn't repeat the mistake. Users never see them.",
     comentario_ejemplo: "E.g.: sales should be net of returns; or: the Excel didn't need the stores sheet.",
+    comentario_tuyo: "Your comment",
     comentario_guardar: "Save",
+    comentario_cancelar: "Cancel",
+    comentario_editar: "Edit",
     comentario_borrar: "Delete",
-    comentario_guardado: "Saved. The bot takes it into account from its next answer.",
+    comentario_borrar_seguro: "Delete this comment? The bot will stop taking it into account.",
+    comentario_sello: (cuando) => `✓ Saved${cuando ? ` · ${cuando}` : ""}`,
+    comentario_lo_lee: "🤖 The bot takes it into account in its answers.",
+    comentario_ya_no: "🤖 The bot no longer reads it: it only uses the 15 most recent comments.",
     comentario_borrado: "Comment deleted.",
-    comentario_sin_guardar: "Not saved",
+    comentario_guardando: "Saving…",
+    comentario_sin_guardar: "● Not saved",
     comentario_quedan: (n) => `${n} characters left`,
     con_comentario: "Has a comment",
   },
@@ -2600,16 +2645,16 @@ function pintarListaCalif(caja) {
       elemento("span", "hora", diaLargo(calif.fecha)),
     );
     const abajo = elemento("div", "abajo");
-    if (calif.comentario) {
-      const marca = elemento("span", null, "💬 ");
-      marca.title = t("con_comentario");
-      abajo.append(marca);
-    }
     const previa = elemento("span", "vista-previa");
     if (calif.parte) previa.append(elemento("span", "que-parte", `${t("parte_archivo")[tipoDeArchivo(calif.parte)]} · `));
     previa.append(document.createTextNode(calif.turno?.pregunta || t(sinTurno(calif))));
     abajo.append(previa);
     centro.append(arriba, abajo);
+    if (calif.comentario) {
+      const comentario = elemento("span", "comentario-previa", `💬 ${calif.comentario}`);
+      comentario.title = calif.comentario;
+      centro.append(comentario);
+    }
     fila.append(elemento("div", "avatar calif", calif.emoji), centro);
     fila.addEventListener("click", () => abrirCalificacion(calif));
     caja.append(fila);
@@ -2659,83 +2704,155 @@ const claveDe = (calif) => `${calif.turno_id}|${calif.chat_id}|${calif.parte || 
 
 function cajaDeComentario(calif) {
   const clave = claveDe(calif);
-  const guardado = calif.comentario || "";
   const caja = elemento("div", "comentario-calif");
-  const id = `comentario-${Math.random().toString(36).slice(2)}`;
-  const etiqueta = elemento("label", null, calif.parte
-    ? t("comentario_titulo_archivo", t("del_archivo")[tipoDeArchivo(calif.parte)])
-    : t("comentario_titulo"));
-  etiqueta.htmlFor = id;
-  const ayuda = elemento("p", "ayuda", t("comentario_ayuda"));
-  ayuda.id = `${id}-ayuda`;
-  const texto = document.createElement("textarea");
-  texto.id = id;
-  texto.maxLength = MAX_COMENTARIO;
-  texto.placeholder = t("comentario_ejemplo");
-  texto.setAttribute("aria-describedby", ayuda.id);
-  texto.value = borradores.has(clave) ? borradores.get(clave) : guardado;
+  // Escribiendo si no hay comentario o si quedo un borrador a medias; si
+  // no, la tarjeta del guardado.
+  let editando = !calif.comentario || borradores.has(clave);
 
-  const pie = elemento("div", "pie");
-  const estado = elemento("span", "estado");
-  estado.setAttribute("role", "status");
-  estado.setAttribute("aria-live", "polite");
-  const borrar = elemento("button", null, t("comentario_borrar"));
-  borrar.type = "button";
-  const guardar = elemento("button", "guardar", t("comentario_guardar"));
-  guardar.type = "button";
-  pie.append(estado, borrar, guardar);
+  function titulo() {
+    return calif.parte
+      ? t("comentario_titulo_archivo", t("del_archivo")[tipoDeArchivo(calif.parte)])
+      : t("comentario_titulo");
+  }
 
-  let actual = guardado;
-  const pintar = (aviso) => {
-    const cambio = texto.value.trim() !== actual;
-    guardar.disabled = !cambio || !texto.value.trim();
-    borrar.hidden = !actual;
-    estado.classList.toggle("listo", Boolean(aviso));
-    estado.textContent = aviso || (cambio ? t("comentario_sin_guardar")
-      : texto.value ? t("comentario_quedan", MAX_COMENTARIO - texto.value.length) : "");
-  };
-  texto.addEventListener("input", () => {
-    if (texto.value.trim() === actual) borradores.delete(clave);
-    else borradores.set(clave, texto.value);
-    pintar();
-  });
+  function boton(texto, clase, accion) {
+    const b = elemento("button", clase, texto);
+    b.type = "button";
+    b.addEventListener("click", accion);
+    return b;
+  }
 
-  async function enviar(valor, aviso) {
-    guardar.disabled = borrar.disabled = true;
-    try {
-      const r = await pedir("/panel/calificaciones/comentario", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turno_id: calif.turno_id, chat_id: calif.chat_id, parte: calif.parte || "", texto: valor }),
-      });
-      actual = r.comentario;
-      texto.value = actual;
-      borradores.delete(clave);
-      // En la cache tambien, para que el 💬 de la lista aparezca o se vaya.
-      for (const c of cacheCalif) if (claveDe(c) === clave) c.comentario = actual;
-      calif.comentario = actual;
-      if (solapa === "calificaciones") pintarLista();
-      mostrarError("");
-      pintar(t(aviso));
-    } catch (error) {
-      mostrarError(error.message);
-      pintar();
-    } finally {
-      borrar.disabled = false;
+  async function enviar(valor) {
+    const r = await pedir("/panel/calificaciones/comentario", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turno_id: calif.turno_id, chat_id: calif.chat_id, parte: calif.parte || "", texto: valor }),
+    });
+    // Lo que quedo en la base: con esto se pinta "Guardado".
+    for (const c of [calif, ...cacheCalif.filter((c) => claveDe(c) === clave)]) {
+      c.comentario = r.comentario;
+      c.comentado = r.comentado;
+      c.lo_lee_el_bot = r.lo_lee_el_bot;
+    }
+    borradores.delete(clave);
+    mostrarError("");
+    if (solapa === "calificaciones") pintarLista();
+  }
+
+  function pintarGuardado(recien) {
+    caja.replaceChildren();
+    caja.classList.remove("con-borrador");
+    const cabeza = elemento("div", "cabeza");
+    cabeza.append(
+      elemento("span", "titulo-comentario", `💬 ${t("comentario_tuyo")}`),
+      elemento("span", "sello-guardado", t("comentario_sello",
+        calif.comentado ? `${diaLargo(calif.comentado)} ${horaCorta(calif.comentado)}` : "")),
+    );
+    const cita = elemento("p", "cita", calif.comentario);
+    const lectura = elemento("p", `lectura${calif.lo_lee_el_bot === false ? " ya-no" : ""}`,
+      t(calif.lo_lee_el_bot === false ? "comentario_ya_no" : "comentario_lo_lee"));
+    const pie = elemento("div", "pie");
+    const estado = elemento("span", "estado");
+    estado.setAttribute("role", "status");
+    estado.setAttribute("aria-live", "polite");
+    pie.append(
+      estado,
+      boton(t("comentario_borrar"), "peligro", async () => {
+        if (!confirm(t("comentario_borrar_seguro"))) return;
+        try {
+          await enviar("");
+          editando = true;
+          pintarEditor(t("comentario_borrado"));
+        } catch (error) {
+          mostrarError(error.message);
+        }
+      }),
+      boton(t("comentario_editar"), null, () => {
+        editando = true;
+        pintarEditor();
+        caja.querySelector("textarea")?.focus();
+      }),
+    );
+    caja.append(cabeza, cita, lectura, pie);
+    if (recien) {
+      caja.classList.remove("recien");
+      void caja.offsetWidth; // reinicia la animacion
+      caja.classList.add("recien");
+      estado.textContent = t("comentario_sello", "");
     }
   }
-  guardar.addEventListener("click", () => enviar(texto.value, "comentario_guardado"));
-  borrar.addEventListener("click", () => enviar("", "comentario_borrado"));
-  // Ctrl/Cmd+Enter guarda sin soltar el teclado.
-  texto.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !guardar.disabled) {
-      e.preventDefault();
-      guardar.click();
-    }
-  });
 
-  caja.append(etiqueta, ayuda, texto, pie);
-  pintar();
+  function pintarEditor(aviso) {
+    caja.replaceChildren();
+    const id = `comentario-${Math.random().toString(36).slice(2)}`;
+    const etiqueta = elemento("label", null, titulo());
+    etiqueta.htmlFor = id;
+    const ayuda = elemento("p", "ayuda", t("comentario_ayuda"));
+    ayuda.id = `${id}-ayuda`;
+    const texto = document.createElement("textarea");
+    texto.id = id;
+    texto.maxLength = MAX_COMENTARIO;
+    texto.placeholder = t("comentario_ejemplo");
+    texto.setAttribute("aria-describedby", ayuda.id);
+    texto.value = borradores.has(clave) ? borradores.get(clave) : calif.comentario || "";
+
+    const pie = elemento("div", "pie");
+    const estado = elemento("span", "estado");
+    estado.setAttribute("role", "status");
+    estado.setAttribute("aria-live", "polite");
+    const cancelar = boton(t("comentario_cancelar"), null, () => {
+      borradores.delete(clave);
+      editando = false;
+      pintarGuardado();
+    });
+    const guardar = boton(t("comentario_guardar"), "guardar", async () => {
+      guardar.disabled = cancelar.disabled = true;
+      estado.className = "estado";
+      estado.textContent = t("comentario_guardando");
+      try {
+        await enviar(texto.value);
+        editando = !calif.comentario;
+        if (calif.comentario) pintarGuardado(true);
+        else pintarEditor();
+      } catch (error) {
+        mostrarError(error.message);
+        guardar.disabled = cancelar.disabled = false;
+        actualizar();
+      }
+    });
+    // Cancelar solo tiene sentido editando uno que ya existe.
+    cancelar.hidden = !calif.comentario;
+    pie.append(estado, cancelar, guardar);
+
+    function actualizar() {
+      const cambio = texto.value.trim() !== (calif.comentario || "");
+      guardar.disabled = !cambio || !texto.value.trim();
+      caja.classList.toggle("con-borrador", cambio && Boolean(texto.value.trim()));
+      estado.className = `estado${cambio && texto.value.trim() ? " sin-guardar" : ""}`;
+      estado.textContent = cambio && texto.value.trim()
+        ? t("comentario_sin_guardar")
+        : texto.value ? t("comentario_quedan", MAX_COMENTARIO - texto.value.length) : "";
+    }
+    texto.addEventListener("input", () => {
+      if (texto.value.trim() === (calif.comentario || "")) borradores.delete(clave);
+      else borradores.set(clave, texto.value);
+      actualizar();
+    });
+    // Ctrl/Cmd+Enter guarda sin soltar el teclado.
+    texto.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !guardar.disabled) {
+        e.preventDefault();
+        guardar.click();
+      }
+    });
+
+    caja.append(etiqueta, ayuda, texto, pie);
+    actualizar();
+    if (aviso) estado.textContent = aviso;
+  }
+
+  if (editando) pintarEditor();
+  else pintarGuardado();
   return caja;
 }
 

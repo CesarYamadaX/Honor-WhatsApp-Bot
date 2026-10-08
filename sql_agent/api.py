@@ -864,8 +864,12 @@ def crear_app(
         """Las respuestas calificadas, la mas reciente primero, con su turno."""
         _solo_local()
         filas = notas.lista(valor=valor, limite=max(1, min(limite, 500)))
+        # Que comentarios lee el bot ahora (los mas recientes): el panel lo
+        # dice, para que no parezca que todo lo escrito sigue pesando.
+        leidos = {(c["turno_id"], c["chat_id"], c["parte"]) for c in notas.comentarios()}
         for fila in filas:
             fila["turno"] = diario.buscar(fila["turno_id"])
+            fila["lo_lee_el_bot"] = (fila["turno_id"], fila["chat_id"], fila["parte"]) in leidos
         return {
             "calificaciones": filas,
             **notas.cuantas(),
@@ -896,7 +900,19 @@ def crear_app(
             comentario.parte,
         )
         logger.info("Panel: comentario en %s (%d caracteres)", comentario.turno_id, len(comentario.texto.strip()))
-        return {"comentario": comentario.texto.strip()}
+        guardado = next(
+            (c for c in await run_in_threadpool(notas.comentarios)
+             if (c["turno_id"], c["chat_id"], c["parte"])
+             == (comentario.turno_id, comentario.chat_id, comentario.parte)),
+            None,
+        )
+        # Lo que quedo de verdad en la base, no el eco de lo que se mando:
+        # el panel muestra "Guardado" con esto.
+        return {
+            "comentario": guardado["texto"] if guardado else "",
+            "comentado": guardado["fecha"] if guardado else None,
+            "lo_lee_el_bot": guardado is not None,
+        }
 
     _FUENTES_DE_LOG = {"whatsapp", "api", "iniciar"}
 

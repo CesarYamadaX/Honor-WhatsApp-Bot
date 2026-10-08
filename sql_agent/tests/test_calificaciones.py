@@ -282,3 +282,23 @@ def test_una_base_vieja_se_migra_sin_perder_nada(tmp_path):
     assert notas.cuantas()["malas"] == 2
     # Abrirla otra vez no migra de nuevo.
     assert Calificaciones(archivo).cuantas()["malas"] == 2
+
+
+def test_el_panel_sabe_que_quedo_guardado_y_si_el_bot_lo_lee(todo, monkeypatch):
+    # Pedido el 9/10/2026: en el panel no se notaba si el comentario se
+    # guardo. La respuesta trae lo que quedo en la base y si el bot lo lee.
+    import calificaciones
+    cliente, _, notas = todo
+    turno = _preguntar_y_mandar(cliente)
+    _reaccionar(cliente, "wamid-1", "👎")
+    r = cliente.post("/panel/calificaciones/comentario",
+                     json={"turno_id": turno, "chat_id": AUTORIZADO, "texto": " mal el mes "}).json()
+    assert r["comentario"] == "mal el mes" and r["comentado"] and r["lo_lee_el_bot"] is True
+    assert cliente.get("/panel/calificaciones").json()["calificaciones"][0]["lo_lee_el_bot"] is True
+    # Con 15 mas recientes, este ya no lo lee.
+    for i in range(calificaciones.COMENTARIOS_PARA_EL_BOT):
+        notas.comentar(f"otro-{i}", "chat", "x")
+    assert cliente.get("/panel/calificaciones").json()["calificaciones"][0]["lo_lee_el_bot"] is False
+    borrado = cliente.post("/panel/calificaciones/comentario",
+                           json={"turno_id": turno, "chat_id": AUTORIZADO, "texto": ""}).json()
+    assert borrado == {"comentario": "", "comentado": None, "lo_lee_el_bot": False}
