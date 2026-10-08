@@ -7,6 +7,7 @@ import pandas as pd
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
+import homologacion
 from tiempo import ordenar_por_tiempo
 
 logger = logging.getLogger("sql_agent.excel_exporter")
@@ -213,9 +214,11 @@ class ExcelExporter:
         # agosto arriba y marzo al final. Ver tiempo.ordenar_por_tiempo: el
         # orden es estable, asi que dentro de cada mes se conserva el de la
         # consulta, y un resultado sin tiempo se deja como esta.
-        df = ordenar_por_tiempo(df)
+        # Y en cada hoja con descripciones de producto, su modelo homologado
+        # al lado (ver homologacion.py): pedido el 8/10/2026, SIEMPRE.
+        df = ordenar_por_tiempo(homologacion.con_modelo(df))
         contexto = {
-            nombre: ordenar_por_tiempo(ficha)
+            nombre: ordenar_por_tiempo(homologacion.con_modelo(ficha))
             for nombre, ficha in (contexto or {}).items()
         }
 

@@ -49,6 +49,7 @@ from catalogo import (
 import acceso
 from contexto import CRUDAS, contexto_del_resultado, ficha_del_archivo
 import excel_pivot
+import homologacion
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
@@ -421,6 +422,50 @@ class ConsultaCancelada(Exception):
     """El usuario mando otra pregunta (o pidio cancelar) y esta ya no importa."""
 
 
+# Las cifras de un texto: "19,999", "4 210", "23157.5". Las de menos de 10
+# no cuentan (meses, "2 carriers", dias): casan con cualquier tabla.
+_CIFRA = re.compile(r"\d{1,3}(?:[,\u00a0\u202f ]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+MAX_FILAS_PARA_CIFRAS = 50_000
+
+
+def cifras_del_texto(texto: str) -> frozenset[int]:
+    cifras = set()
+    for crudo in _CIFRA.findall(texto or ""):
+        valor = float(re.sub(r"[,\u00a0\u202f ]", "", crudo))
+        if valor >= 10:
+            cifras.add(round(valor))
+    return frozenset(cifras)
+
+
+def cifras_del_resultado(df: pd.DataFrame) -> frozenset[int]:
+    """Cada numero del resultado y el total de cada columna, redondeados."""
+    numericas = df.select_dtypes("number").head(MAX_FILAS_PARA_CIFRAS)
+    cifras = set()
+    for columna in numericas.columns:
+        valores = pd.to_numeric(numericas[columna], errors="coerce").dropna()
+        valores = valores[valores.abs() < 1e15]
+        if valores.empty:
+            continue
+        cifras.update(valores.round().astype("int64").tolist())
+        cifras.add(round(float(valores.sum())))
+    return frozenset(c for c in cifras if abs(c) >= 10)
+
+
+@dataclass
+class Reporte:
+    """Un reporte de la vuelta: sus archivos, sus cifras, y los pivots que
+    se le arman solo si es el que se entrega (ver entregar_reporte)."""
+
+    rutas: list[str]
+    cifras: frozenset[int] = frozenset()
+    # (archivo, hoja, config, nombre para la bitacora)
+    pivotes: list[tuple[str, str, dict, str]] = field(default_factory=list)
+
+    @property
+    def con_grafica(self) -> bool:
+        return any(r.lower().endswith(".png") for r in self.rutas)
+
+
 @dataclass
 class ContextoPeticion:
     """Estado de una sola pregunta: de donde se lee y que reporte se genero."""
@@ -465,8 +510,16 @@ class ContextoPeticion:
     # Lo que de verdad salio de la base en esta vuelta, como lo leyo el
     # modelo. Con esto el revisor comprueba que el mensaje diga la verdad.
     vistos: list[str] = field(default_factory=list)
+    # Todos los reportes de la vuelta, para escoger al final (entregar_reporte)
+    # el de la consulta con la que se contesto.
+    reportes: list[Reporte] = field(default_factory=list)
 
-    def registrar_reporte(self, *rutas: str | None) -> None:
+    def registrar_reporte(
+        self,
+        *rutas: str | None,
+        cifras: frozenset[int] = frozenset(),
+        pivotes: list[tuple[str, str, dict, str]] | None = None,
+    ) -> None:
         """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
 
         Una pregunta, un archivo. Antes se acumulaban y se enviaban todos: el
@@ -493,14 +546,63 @@ class ContextoPeticion:
         Y la grafica distingue bien los dos casos porque solo se dibuja
         cuando el resultado cabe entera en ella y tiene una columna
         numerica: un DISTINCT de comprobacion nunca la genera.
+
+        Esto es solo la eleccion PROVISIONAL: al final, `entregar_reporte`
+        la corrige con las cifras de la respuesta.
         """
         nuevos = [r for r in rutas if r]
         if not nuevos:
             return
+        self.reportes.append(Reporte(nuevos, cifras, list(pivotes or [])))
         trae_grafica = any(r.lower().endswith(".png") for r in nuevos)
         tiene_grafica = any(r.lower().endswith(".png") for r in self.archivos)
         if not self.archivos or (trae_grafica and not tiene_grafica):
             self.archivos[:] = nuevos
+
+    def entregar_reporte(self, respuesta: str) -> None:
+        """Escoge el reporte que se entrega y le arma sus pivots.
+
+        Visto el 8/10/2026: a "en cuanto esta el iPhone 17" el modelo hizo
+        una consulta de precios minimos historicos, la corrigio con otra de
+        precios recientes y contesto con la segunda, pero el Excel era el de
+        la primera (la regla de quedarse con el primero): precios de hace un
+        ano y modelos Pro Max que nadie pidio.
+
+        El reporte bueno es el de la consulta con la que se contesto, y eso
+        se ve en las cifras: gana el que mas cifras de la respuesta trae.
+        Entre los que empatan, el que tiene grafica y luego el mas reciente
+        -- el ultimo que leyo el modelo antes de contestar. Una comprobacion
+        (un DISTINCT, una lista de cadenas) no trae las cifras de la
+        respuesta, asi que no le puede quitar el lugar al reporte. Si la
+        respuesta no cita ninguna cifra que este en algun reporte, queda la
+        eleccion de registrar_reporte.
+        """
+        provisional = next((r for r in self.reportes if r.rutas == self.archivos), None)
+        elegido = provisional
+        citadas = cifras_del_texto(respuesta)
+        if provisional is not None and len(self.reportes) > 1 and citadas:
+            puntos = [len(citadas & r.cifras) for r in self.reportes]
+            mejor = max(puntos)
+            if mejor > 0:
+                empatados = [r for r, p in zip(self.reportes, puntos) if p == mejor]
+                con_grafica = [r for r in empatados if r.con_grafica]
+                elegido = (con_grafica or empatados)[-1]
+                if elegido is not provisional:
+                    self.archivos[:] = elegido.rutas
+                    bitacora.paso(
+                        "el archivo que se entrega es el de la consulta con la que se contesto",
+                        bitacora.NOTA,
+                    )
+        if elegido is None:
+            return
+        # El pivot va con Excel por COM sobre el archivo ya guardado, y solo
+        # al que se entrega: cada uno de mas son ~5-7 s tirados.
+        for archivo, hoja, config, nombre in elegido.pivotes:
+            bitacora.paso(f"armando el pivot de {nombre}", bitacora.NOTA)
+            if excel_pivot.agregar_pivot(archivo, hoja, **config):
+                bitacora.paso("pivot listo", bitacora.NOTA)
+            else:
+                bitacora.paso("no se pudo armar el pivot; el reporte sale sin el", bitacora.NOTA)
 
 
 _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default=None)
@@ -1901,6 +2003,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     )
     bitacora.paso(f"-> {len(df)} filas en {tardo:.0f}s", bitacora.RESULTADO)
     ctx.hubo_datos = True
+    # El modelo homologado junto a la descripcion, SIEMPRE (pedido el
+    # 8/10/2026): lo ve el modelo, va en el Excel y el pivot lo puede usar.
+    df = homologacion.con_modelo(df)
     resultado = formatear_resultado(df)
 
     # La grafica ya NO depende de que haya Excel. Antes iba dentro del `if`
@@ -1935,6 +2040,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     reporte_de_cadena = False
     con_datos = False
     zip_del_crudo = None
+    pivotes: list[tuple[str, str, dict, str]] = []
     if not df.empty and (resultado.necesita_excel or entregar_archivo):
         # La ficha de las tiendas, modelos y carriers que salieron, para que
         # el Excel se entienda solo. Son catalogos chicos; si alguno falla, el
@@ -2008,10 +2114,9 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         # usa `registrar_reporte` para decidir si este reporte reemplaza al
         # que ya habia: el primero de la vuelta, o uno que trae grafica
         # cuando el que ya se tiene no la trae.
-        sera_el_reporte_bueno = not ctx.archivos or (
-            imagen is not None
-            and not any(a.lower().endswith(".png") for a in ctx.archivos)
-        )
+        # Ya no se sabe aqui cual se entrega (lo decide entregar_reporte con
+        # la respuesta): los pivots se apuntan y se arman solo al elegido.
+        sera_el_reporte_bueno = True
         # El pivot sale de Raw_Data (lo completo); si no cupo, de Datos (lo
         # agrupado, con las columnas Tienda/Marca/Mes/Unidades).
         hoja_del_pivot = "Raw_Data" if "Raw_Data" in contexto else "Datos"
@@ -2049,15 +2154,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         ):
             config = excel_pivot.config_generica(df)
             if config:
-                bitacora.paso(
-                    f"armando el pivot de {' y '.join(map(str, config['filas']))} "
-                    f"por {' y '.join(map(str, config['columnas']))}",
-                    bitacora.NOTA,
-                )
-                if excel_pivot.agregar_pivot(excel, "Datos", **config):
-                    bitacora.paso("pivot listo", bitacora.NOTA)
-                else:
-                    bitacora.paso("no se pudo armar el pivot; el reporte sale sin el", bitacora.NOTA)
+                pivotes.append((
+                    excel, "Datos", config,
+                    f"{' y '.join(map(str, config['filas']))} por {' y '.join(map(str, config['columnas']))}",
+                ))
         if (
             sera_el_reporte_bueno
             and not crudo_partido
@@ -2066,18 +2166,13 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         ):
             config = excel_pivot.config_ventas_por_tienda(crudos)
             if config:
-                bitacora.paso("armando el pivot de tienda y mes", bitacora.NOTA)
-                if excel_pivot.agregar_pivot(excel, hoja_del_pivot, **config):
-                    bitacora.paso("pivot listo", bitacora.NOTA)
-                else:
-                    bitacora.paso(
-                        "no se pudo armar el pivot; el reporte sale sin el",
-                        bitacora.NOTA,
-                    )
+                pivotes.append((excel, hoja_del_pivot, config, "tienda y mes"))
 
     # La grafica va primero: en el chat se ve de un vistazo, y el Excel queda
     # debajo para quien quiera el detalle.
-    ctx.registrar_reporte(imagen, excel, zip_del_crudo)
+    ctx.registrar_reporte(
+        imagen, excel, zip_del_crudo, cifras=cifras_del_resultado(df), pivotes=pivotes
+    )
 
     # Que mas se puede preguntar sobre esto. Se queda con las de la PRIMERA
     # consulta, que es la que responde la pregunta: las de despues salen de
@@ -2297,6 +2392,9 @@ class SQLAgent:
 
     def __init__(self, engine: Engine | None = None):
         self.engine = engine if engine is not None else self._crear_engine()
+        # El catalogo de modelos para la columna [Modelo] de los resultados
+        # (ver homologacion.py); se lee en segundo plano.
+        homologacion.configurar(self.engine)
         self.llm = self._init_llm()
         self.historial: list[BaseMessage] = []
         # El idioma se sostiene entre turnos: los mensajes de WhatsApp son
@@ -2689,6 +2787,9 @@ class SQLAgent:
             # despues, para el usuario. Repetirsela al modelo en el siguiente
             # turno solo lo invitaria a copiarla.
             self._recordar(pregunta, texto)
+            # Con la respuesta ya escrita se sabe con que consulta se
+            # contesto: ese es el reporte que se entrega.
+            ctx.entregar_reporte(texto)
             if ctx.base_del_pronostico:
                 texto = f"{texto}\n\n{ctx.base_del_pronostico}"
             # Lo ultimo: primero la respuesta, luego de donde salio, y al

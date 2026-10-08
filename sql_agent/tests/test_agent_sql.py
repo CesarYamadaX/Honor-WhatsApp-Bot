@@ -572,10 +572,13 @@ class TestConsultarSql:
             lambda *a, **k: llamadas.append(1) or True,
         )
 
-        with contexto_peticion(engine):
+        with contexto_peticion(engine) as ctx:
             consultar_sql.invoke({"query": "SELECT * FROM ventas"})
             consultar_sql.invoke({"query": "SELECT tienda FROM ventas"})
             consultar_sql.invoke({"query": "SELECT monto FROM ventas"})
+            # Desde el 8/10/2026 se arma al entregar, cuando ya se sabe cual.
+            assert llamadas == []
+            ctx.entregar_reporte("listo")
 
         assert len(llamadas) == 1
 
@@ -2157,3 +2160,49 @@ class TestUnBotonDeDescargaInventadoNoQuedaSuelto:
         texto = "[Coppel](https://www.coppel.com/x)"
         assert self._limpiar(texto) == texto
 
+
+
+class TestElReporteEsElDeLaRespuesta:
+    """Visto el 8/10/2026: el Excel del iPhone 17 era el de la primera
+    consulta (minimos historicos) y no el de la que se uso para contestar."""
+
+    def test_entre_dos_con_las_cifras_gana_el_ultimo(self, engine):
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "minimos.xlsx", cifras=frozenset({19999, 23157, 21052}))
+            ctx.registrar_reporte(None, "recientes.xlsx", cifras=frozenset({19999, 23157, 43156}))
+            ctx.entregar_reporte("El iPhone 17 desde **$19,999** en Coppel; en Liverpool $23,157.")
+        assert ctx.archivos == ["recientes.xlsx"]
+
+    def test_gana_el_que_trae_mas_cifras_de_la_respuesta(self, engine):
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "ventas.xlsx", cifras=frozenset({160909, 4210}))
+            ctx.registrar_reporte(None, "chequeo.xlsx", cifras=frozenset({4210}))
+            ctx.entregar_reporte("Se vendieron 160 909 unidades; Coppel 4,210.")
+        assert ctx.archivos == ["ventas.xlsx"]
+
+    def test_una_comprobacion_sin_las_cifras_no_desplaza(self, engine):
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "ventas.xlsx", cifras=frozenset({160909}))
+            ctx.registrar_reporte(None, "retailers.xlsx", cifras=frozenset())
+            ctx.entregar_reporte("Se vendieron 160,909 unidades.")
+        assert ctx.archivos == ["ventas.xlsx"]
+
+    def test_sin_cifras_en_la_respuesta_queda_la_regla_de_siempre(self, engine):
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "primero.xlsx", cifras=frozenset({100}))
+            ctx.registrar_reporte(None, "segundo.xlsx", cifras=frozenset({100}))
+            ctx.entregar_reporte("Te mando el reporte.")
+        assert ctx.archivos == ["primero.xlsx"]
+
+    def test_el_pivot_va_solo_al_elegido(self, engine, monkeypatch):
+        armados = []
+        monkeypatch.setattr(modulo_agente.excel_pivot, "agregar_pivot",
+                            lambda archivo, hoja, **k: armados.append(archivo) or True)
+        with contexto_peticion(engine) as ctx:
+            ctx.registrar_reporte(None, "a.xlsx", cifras=frozenset({500}), pivotes=[("a.xlsx", "Datos", {}, "x")])
+            ctx.registrar_reporte(None, "b.xlsx", cifras=frozenset({700}), pivotes=[("b.xlsx", "Datos", {}, "x")])
+            ctx.entregar_reporte("Fueron 700 unidades.")
+        assert armados == ["b.xlsx"]
+
+    def test_las_cifras_se_leen_como_las_escribe_el_bot(self):
+        assert modulo_agente.cifras_del_texto("$19,999 · 4 210 · 1,250,000 · 12.5% · 3 meses") == {19999, 4210, 1250000, 12}
