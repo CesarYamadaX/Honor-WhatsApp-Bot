@@ -339,6 +339,12 @@
     padding: 0 6px; font-size: 14px; line-height: 22px; box-shadow: var(--sombra);
   }
   .reaccion.mala { border-color: var(--alto); }
+  /* Cada archivo de la respuesta, como en WhatsApp: su propia burbuja, que
+     se califica aparte del texto. */
+  .burbuja.archivo { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .burbuja.archivo .nombre-archivo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .burbuja.archivo.elegida { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .que-parte { color: var(--tinta-2); font-weight: 600; }
 
   /* Deslizar para actualizar: el circulo que baja con el dedo y gira al
      soltar. Fijo y no dentro de cada lista, para no mover su contenido. */
@@ -1020,6 +1026,9 @@ const TEXTOS = {
     turno_sin_registro: "Respuesta anterior al registro de mensajes (antes del 5 de octubre): no se sabe a qué pregunta fue.",
     ver_conversacion: "Ver la conversación completa",
     comentario_titulo: "¿Por qué esta calificación?",
+    comentario_titulo_archivo: (que) => `¿Por qué esta calificación ${que}?`,
+    del_archivo: { xlsx: "del Excel", png: "de la gráfica", zip: "del ZIP", otro: "del archivo" },
+    parte_archivo: { xlsx: "Excel", png: "Gráfica", zip: "ZIP", otro: "Archivo" },
     comentario_ayuda: "El bot lee los comentarios más recientes antes de cada respuesta, para no repetir el error. No los ve ningún usuario.",
     comentario_ejemplo: "Ej.: las ventas debían ser netas, sin devoluciones; o: el Excel no necesitaba la hoja de tiendas.",
     comentario_guardar: "Guardar",
@@ -1175,6 +1184,9 @@ const TEXTOS = {
     turno_sin_registro: "Answer sent before messages were recorded (before October 5): the question is unknown.",
     ver_conversacion: "See the whole conversation",
     comentario_titulo: "Why this rating?",
+    comentario_titulo_archivo: (que) => `Why this rating ${que}?`,
+    del_archivo: { xlsx: "of the Excel", png: "of the chart", zip: "of the ZIP", otro: "of the file" },
+    parte_archivo: { xlsx: "Excel", png: "Chart", zip: "ZIP", otro: "File" },
     comentario_ayuda: "The bot reads the most recent comments before every answer, so it doesn't repeat the mistake. Users never see them.",
     comentario_ejemplo: "E.g.: sales should be net of returns; or: the Excel didn't need the stores sheet.",
     comentario_guardar: "Save",
@@ -1798,6 +1810,22 @@ function botonDeTraduccion(turno, textoPregunta, textoRespuesta) {
   return boton;
 }
 
+const nombreDeArchivo = (ruta) => String(ruta || "").split(/[\\/]/).pop();
+function tipoDeArchivo(nombre) {
+  const extension = String(nombre).split(".").pop().toLowerCase();
+  return ["xlsx", "png", "zip"].includes(extension) ? extension : "otro";
+}
+
+// El globito de una reaccion colgando de su burbuja (texto o archivo).
+function ponerGlobo(burbuja, calif) {
+  const mala = Number(calif.valor) < 0;
+  const globo = elemento("span", `reaccion${mala ? " mala" : ""}`, calif.emoji);
+  globo.title = t("calificada", calif.emoji, diaLargo(calif.fecha))
+    + (calif.comentario ? `\n💬 ${calif.comentario}` : "");
+  burbuja.classList.add("con-reaccion");
+  burbuja.append(globo);
+}
+
 function burbujaDeTurno(turno) {
   const grupo = elemento("div", "turno");
 
@@ -1823,14 +1851,10 @@ function burbujaDeTurno(turno) {
   respuesta.append(textoRespuesta);
 
   const pieBot = elemento("div", "pie-burbuja");
-  if (turno.calificacion) {
-    const mala = Number(turno.calificacion.valor) < 0;
-    const globo = elemento("span", `reaccion${mala ? " mala" : ""}`, turno.calificacion.emoji);
-    globo.title = t("calificada", turno.calificacion.emoji, diaLargo(turno.calificacion.fecha))
-      + (turno.calificacion.comentario ? `\n💬 ${turno.calificacion.comentario}` : "");
-    respuesta.classList.add("con-reaccion");
-    respuesta.append(globo);
-  }
+  // La del texto; las de los archivos van en su burbuja, mas abajo.
+  const calificaciones = turno.calificaciones || (turno.calificacion ? [turno.calificacion] : []);
+  const delTexto = calificaciones.find((c) => !c.parte);
+  if (delTexto) ponerGlobo(respuesta, delTexto);
   if (turno.archivos.length) pieBot.append(elemento("span", null, `📎 ${turno.archivos.length}`));
   if (turno.idioma) pieBot.append(elemento("span", null, turno.idioma));
   pieBot.append(elemento("span", null, duracion(turno.segundos)));
@@ -1838,6 +1862,19 @@ function burbujaDeTurno(turno) {
   pieBot.append(palomas(fallo));
   respuesta.append(pieBot);
   grupo.append(respuesta);
+
+  for (const ruta of turno.archivos || []) {
+    const nombre = nombreDeArchivo(ruta);
+    const burbuja = elemento("div", "burbuja sale archivo");
+    burbuja.append(elemento("span", null, tipoDeArchivo(nombre) === "png" ? "🖼️" : "📄"));
+    const etiqueta = elemento("span", "nombre-archivo", nombre);
+    etiqueta.title = nombre;
+    burbuja.append(etiqueta);
+    const suya = calificaciones.find((c) => c.parte === nombre);
+    if (suya) ponerGlobo(burbuja, suya);
+    if (turno.parteElegida && turno.parteElegida === nombre) burbuja.classList.add("elegida");
+    grupo.append(burbuja);
+  }
 
   // Un turno en otro idioma (el bot contesta en el de quien pregunta) se
   // puede traducir al del panel, solo para revisarlo: lo que recibio el
@@ -2505,7 +2542,7 @@ async function cargarCalificaciones() {
   reaccionesQueCuentan = datos.reacciones || reaccionesQueCuentan;
   // Llego (o se quito) una reaccion: el chat abierto la muestra sin tener
   // que salir y volver a entrar.
-  const firma = cacheCalif.map((c) => `${c.turno_id}${c.emoji}${c.fecha}`).join("|");
+  const firma = cacheCalif.map((c) => `${c.turno_id}${c.parte}${c.emoji}${c.fecha}`).join("|");
   const cambio = firmaCalif !== null && firma !== firmaCalif;
   firmaCalif = firma;
   if (cambio && vista === "chat" && chatElegido) await abrirChat(chatElegido);
@@ -2552,7 +2589,7 @@ function pintarListaCalif(caja) {
   for (const calif of visibles) {
     const fila = elemento("button", "renglon");
     fila.type = "button";
-    if (califElegida?.turno_id === calif.turno_id && vista === "calificacion") {
+    if (califElegida && claveDe(califElegida) === claveDe(calif) && vista === "calificacion") {
       fila.setAttribute("aria-current", "true");
     }
     const ficha = fichaDe(calif.chat_id);
@@ -2568,7 +2605,10 @@ function pintarListaCalif(caja) {
       marca.title = t("con_comentario");
       abajo.append(marca);
     }
-    abajo.append(elemento("span", "vista-previa", calif.turno?.pregunta || t(sinTurno(calif))));
+    const previa = elemento("span", "vista-previa");
+    if (calif.parte) previa.append(elemento("span", "que-parte", `${t("parte_archivo")[tipoDeArchivo(calif.parte)]} · `));
+    previa.append(document.createTextNode(calif.turno?.pregunta || t(sinTurno(calif))));
+    abajo.append(previa);
     centro.append(arriba, abajo);
     fila.append(elemento("div", "avatar calif", calif.emoji), centro);
     fila.addEventListener("click", () => abrirCalificacion(calif));
@@ -2596,7 +2636,9 @@ function abrirCalificacion(calif) {
   caja.append(elemento("span", "dia", diaLargo(calif.turno.inicio)));
   // El turno entero, con lo que hizo el bot por dentro: es lo que hace
   // falta para entender por que contesto mal.
-  const burbuja = burbujaDeTurno({ ...calif.turno, calificacion: calif });
+  const delTurno = cacheCalif.filter((c) => c.turno_id === calif.turno_id && c.chat_id === calif.chat_id);
+  if (!delTurno.some((c) => claveDe(c) === claveDe(calif))) delTurno.push(calif);
+  const burbuja = burbujaDeTurno({ ...calif.turno, calificaciones: delTurno, parteElegida: calif.parte });
   burbuja.querySelector("details.tramoya")?.setAttribute("open", "");
   caja.append(burbuja);
   caja.append(cajaDeComentario(calif));
@@ -2613,14 +2655,16 @@ function abrirCalificacion(calif) {
 // (deslizar, cambiar de idioma) y no debe tirar un comentario a medias.
 const borradores = new Map();
 const MAX_COMENTARIO = 1000;
-const claveDe = (calif) => `${calif.turno_id}|${calif.chat_id}`;
+const claveDe = (calif) => `${calif.turno_id}|${calif.chat_id}|${calif.parte || ""}`;
 
 function cajaDeComentario(calif) {
   const clave = claveDe(calif);
   const guardado = calif.comentario || "";
   const caja = elemento("div", "comentario-calif");
   const id = `comentario-${Math.random().toString(36).slice(2)}`;
-  const etiqueta = elemento("label", null, t("comentario_titulo"));
+  const etiqueta = elemento("label", null, calif.parte
+    ? t("comentario_titulo_archivo", t("del_archivo")[tipoDeArchivo(calif.parte)])
+    : t("comentario_titulo"));
   etiqueta.htmlFor = id;
   const ayuda = elemento("p", "ayuda", t("comentario_ayuda"));
   ayuda.id = `${id}-ayuda`;
@@ -2662,7 +2706,7 @@ function cajaDeComentario(calif) {
       const r = await pedir("/panel/calificaciones/comentario", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turno_id: calif.turno_id, chat_id: calif.chat_id, texto: valor }),
+        body: JSON.stringify({ turno_id: calif.turno_id, chat_id: calif.chat_id, parte: calif.parte || "", texto: valor }),
       });
       actual = r.comentario;
       texto.value = actual;
@@ -3034,7 +3078,7 @@ async function refrescarPanel() {
   mostrarError(fallo ? fallo.reason.message : "");
   if (vista === "chat" && chatElegido) await abrirChat(chatElegido);
   else if (vista === "calificacion" && califElegida) {
-    abrirCalificacion(cacheCalif.find((c) => c.turno_id === califElegida.turno_id) || califElegida);
+    abrirCalificacion(cacheCalif.find((c) => claveDe(c) === claveDe(califElegida)) || califElegida);
   } else if (vista === "logs" && diaElegido) await cargarLog();
 }
 

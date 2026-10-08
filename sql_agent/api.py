@@ -8,7 +8,7 @@ import asyncio
 import logging
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
@@ -207,6 +207,10 @@ class Enviados(BaseModel):
     chat_id: str
     turno: str
     mensajes: list[str]
+    # De los mensajes que son un archivo, cual (su nombre). Los demas son el
+    # texto. Sin esto, un 👎 al Excel y uno al texto eran la misma
+    # calificacion y el segundo borraba el primero.
+    partes: dict[str, str] = {}
 
 
 class ParaTraducir(BaseModel):
@@ -230,6 +234,7 @@ class Comentario(BaseModel):
     turno_id: str
     chat_id: str
     texto: str = ""  # vacio = borrar el comentario
+    parte: str = ""  # "" = el texto de la respuesta; si no, el archivo
 
 
 def crear_app(
@@ -441,10 +446,30 @@ def crear_app(
         """Que mensajes de WhatsApp mando el sidecar para un turno."""
         if not autorizado(peticion.chat_id):
             raise HTTPException(status_code=403, detail="No autorizado")
+        partes = {m: PureWindowsPath(a).name for m, a in peticion.partes.items() if a}
         await run_in_threadpool(
-            notas.registrar_enviados, peticion.chat_id, peticion.turno, peticion.mensajes
+            notas.registrar_enviados, peticion.chat_id, peticion.turno, peticion.mensajes, partes
         )
         return {"ok": True}
+
+    def parte_del_mensaje(mensaje_id: str, turno_id: str, chat_id: str, parte: str) -> str:
+        """Que parte de la respuesta es un mensaje: "" el texto, o el archivo.
+
+        Los mensajes registrados antes del 8/10/2026 no lo dicen. Para esos,
+        el sidecar manda primero el texto y despues los archivos en orden,
+        asi que los ultimos N mensajes del turno son sus N archivos.
+        """
+        if parte:
+            return parte
+        mensajes = notas.mensajes_del_turno(turno_id, chat_id)
+        if any(p for _, p in mensajes):
+            return ""  # registro nuevo: sin parte es el texto
+        archivos = [PureWindowsPath(a).name for a in ((diario.buscar(turno_id) or {}).get("archivos") or [])]
+        ids = [m for m, _ in mensajes]
+        if not archivos or len(ids) < len(archivos):
+            return ""
+        cola = ids[-len(archivos):]
+        return archivos[cola.index(mensaje_id)] if mensaje_id in cola else ""
 
     @app.post("/reaccion")
     async def reaccion(peticion: Reaccion) -> dict:
@@ -457,10 +482,15 @@ def crear_app(
         """
         if not autorizado(peticion.chat_id):
             raise HTTPException(status_code=403, detail="No autorizado")
-        turno_id = await run_in_threadpool(
-            notas.turno_de, peticion.mensaje_id, peticion.chat_id
+        encontrado = await run_in_threadpool(
+            notas.mensaje, peticion.mensaje_id, peticion.chat_id
         )
-        if turno_id is None:
+        turno_id, parte = encontrado or (None, "")
+        if turno_id is not None:
+            parte = await run_in_threadpool(
+                parte_del_mensaje, peticion.mensaje_id, turno_id, peticion.chat_id, parte
+            )
+        else:
             # Un mensaje del bot que no quedo registrado: los anteriores al
             # 5/10/2026, cuando esto no existia. Visto el 7/10/2026: un 👍 a un
             # Excel del 1 de octubre se perdia como "no es una respuesta del
@@ -468,18 +498,19 @@ def crear_app(
             # en el panel sale como "respuesta anterior al registro". El
             # sidecar ya descarta las reacciones a mensajes del propio usuario.
             turno_id = f"{SIN_REGISTRO}{peticion.mensaje_id}"
+        que = f"{turno_id} ({parte})" if parte else turno_id
         if not peticion.emoji:
-            await run_in_threadpool(notas.quitar, turno_id, peticion.chat_id)
-            logger.info("%s quito su calificacion de %s", peticion.chat_id, turno_id)
-            return {"calificado": False, "turno": turno_id, "motivo": "quitada"}
+            await run_in_threadpool(notas.quitar, turno_id, peticion.chat_id, parte)
+            logger.info("%s quito su calificacion de %s", peticion.chat_id, que)
+            return {"calificado": False, "turno": turno_id, "parte": parte, "motivo": "quitada"}
         valor = valor_de(peticion.emoji)
         if valor is None:
-            return {"calificado": False, "turno": turno_id, "motivo": "esa reaccion no califica"}
+            return {"calificado": False, "turno": turno_id, "parte": parte, "motivo": "esa reaccion no califica"}
         await run_in_threadpool(
-            notas.calificar, turno_id, peticion.chat_id, valor, peticion.emoji
+            notas.calificar, turno_id, peticion.chat_id, valor, peticion.emoji, parte
         )
-        logger.info("%s califico %s con %s", peticion.chat_id, turno_id, peticion.emoji)
-        return {"calificado": True, "turno": turno_id, "valor": valor}
+        logger.info("%s califico %s con %s", peticion.chat_id, que, peticion.emoji)
+        return {"calificado": True, "turno": turno_id, "parte": parte, "valor": valor}
 
     @app.post("/transcribir")
     async def transcribir(peticion: NotaDeVoz) -> dict:
@@ -782,7 +813,11 @@ def crear_app(
         calificadas = notas.de_turnos([turno.get("id", "") for turno in pagina])
         for turno in pagina:
             if turno.get("id") in calificadas:
-                turno["calificacion"] = calificadas[turno["id"]]
+                # Todas (texto y archivos); "calificacion" es la del texto.
+                turno["calificaciones"] = calificadas[turno["id"]]
+                texto = [c for c in calificadas[turno["id"]] if not c["parte"]]
+                if texto:
+                    turno["calificacion"] = texto[0]
         return {
             "turnos": pagina,
             "salto": salto,
@@ -847,13 +882,18 @@ def crear_app(
             raise HTTPException(status_code=413, detail="Comentario demasiado largo")
         turno = await run_in_threadpool(diario.buscar, comentario.turno_id)
         actual = await run_in_threadpool(notas.de_turnos, [comentario.turno_id])
+        valor = next(
+            (c["valor"] for c in actual.get(comentario.turno_id, []) if c["parte"] == comentario.parte),
+            None,
+        )
         await run_in_threadpool(
             notas.comentar,
             comentario.turno_id,
             comentario.chat_id,
             comentario.texto,
             (turno or {}).get("pregunta", ""),
-            actual.get(comentario.turno_id, {}).get("valor"),
+            valor,
+            comentario.parte,
         )
         logger.info("Panel: comentario en %s (%d caracteres)", comentario.turno_id, len(comentario.texto.strip()))
         return {"comentario": comentario.texto.strip()}

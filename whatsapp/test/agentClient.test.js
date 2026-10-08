@@ -330,10 +330,10 @@ test("los mensajes enviados y las reacciones van al servicio", async () => {
     });
   });
   try {
-    await registrarEnviados(s.url, "chat", "t1", ["wamid-1", "wamid-2"]);
+    await registrarEnviados(s.url, "chat", "t1", ["wamid-1", "wamid-2"], { "wamid-2": "C:/x/reporte.xlsx" });
     assert.deepEqual(await reaccionar(s.url, "chat", "wamid-2", "👎"), { calificado: true });
     assert.deepEqual(recibidos, [
-      { ruta: "/enviados", cuerpo: { chat_id: "chat", turno: "t1", mensajes: ["wamid-1", "wamid-2"] } },
+      { ruta: "/enviados", cuerpo: { chat_id: "chat", turno: "t1", mensajes: ["wamid-1", "wamid-2"], partes: { "wamid-2": "C:/x/reporte.xlsx" } } },
       { ruta: "/reaccion", cuerpo: { chat_id: "chat", mensaje_id: "wamid-2", emoji: "👎" } },
     ]);
   } finally {

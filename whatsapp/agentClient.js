@@ -297,8 +297,8 @@ async function avisar(baseUrl, ruta, cuerpo) {
 }
 
 /** Que mensajes de WhatsApp forman la respuesta de un turno. */
-export function registrarEnviados(baseUrl, chatId, turno, mensajes) {
-  return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes });
+export function registrarEnviados(baseUrl, chatId, turno, mensajes, partes = {}) {
+  return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes, partes });
 }
 
 /** Una reaccion del usuario a un mensaje del bot; emoji vacio = la quito. */

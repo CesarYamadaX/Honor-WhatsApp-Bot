@@ -455,16 +455,24 @@ async function atender(mensaje) {
       // Los ids de lo que se mando, para que una reaccion a cualquiera de
       // esos mensajes (el texto, el Excel, la grafica) califique este turno.
       const ids = [];
+      // Y de los que son un archivo, cual: el Excel se califica aparte del
+      // texto (un 👎 a cada uno son dos calificaciones, no una que pisa a otra).
+      const partes = {};
       if (resultado.reply && resultado.reply.trim()) {
         ids.push(...((await enviarTexto(jid, resultado.reply)) ?? []));
         enviadoAlgo = true;
       }
       if (resultado.files.length > 0) {
-        for (const ruta of resultado.files) ids.push(...((await enviarArchivo(jid, ruta, idioma)) ?? []));
+        for (const ruta of resultado.files) {
+          for (const id of (await enviarArchivo(jid, ruta, idioma)) ?? []) {
+            ids.push(id);
+            partes[id] = ruta;
+          }
+        }
         enviadoAlgo = true;
       }
       if (resultado.turno && ids.length) {
-        await registrarEnviados(AGENT_API_URL, idAutorizacion, resultado.turno, ids);
+        await registrarEnviados(AGENT_API_URL, idAutorizacion, resultado.turno, ids, partes);
       }
       // reply en blanco (trocear lo descarta) o {reply:"", files:[]}: sin
       // esto el usuario se queda sin nada, sin saber si el bot lo escucho.

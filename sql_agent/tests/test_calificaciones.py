@@ -41,7 +41,7 @@ class TestElAlmacen:
         assert notas.turno_de("m2", "chat") == "t1"
         notas.calificar("t1", "chat", BUENA, "👍")
         notas.calificar("t1", "chat", MALA, "👎")
-        assert notas.de_turnos(["t1"])["t1"]["valor"] == MALA
+        assert notas.de_turnos(["t1"])["t1"][0]["valor"] == MALA
         assert notas.cuantas() == {"buenas": 0, "malas": 1}
         notas.quitar("t1", "chat")
         assert notas.de_turnos(["t1"]) == {}
@@ -83,7 +83,7 @@ class TestDeWhatsAppAlPanel:
         turno = _preguntar_y_mandar(cliente)
         # Reaccionar al Excel (el segundo mensaje) tambien califica.
         r = _reaccionar(cliente, "wamid-2", "👎").json()
-        assert r == {"calificado": True, "turno": turno, "valor": MALA}
+        assert r == {"calificado": True, "turno": turno, "parte": "", "valor": MALA}
 
         panel = cliente.get("/panel/calificaciones?valor=-1").json()
         assert panel["malas"] == 1 and panel["buenas"] == 0
@@ -212,3 +212,73 @@ class TestComentarios:
         assert texto.count("- Respuesta") == 3
         # El mas nuevo al final: lo ultimo que lee el modelo pesa mas.
         assert texto.index("nota 17") < texto.index("nota 18") < texto.index("nota 19")
+
+
+class TestCadaParteSeCalificaAparte:
+    """Visto el 8/10/2026: 👎 al texto y 💩 al Excel de la misma respuesta
+    eran una sola calificacion; el panel mostraba solo la ultima."""
+
+    def test_texto_y_excel_son_dos_calificaciones(self, todo):
+        cliente, _, notas = todo
+        turno = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "precio iPhone 17"}).json()["turno"]
+        cliente.post("/enviados", json={"chat_id": AUTORIZADO, "turno": turno, "mensajes": ["m-texto", "m-excel"],
+                                        "partes": {"m-excel": r"C:\bot\exports\reporte_1.xlsx"}})
+        assert _reaccionar(cliente, "m-texto", "👎").json()["parte"] == ""
+        assert _reaccionar(cliente, "m-excel", "💩").json()["parte"] == "reporte_1.xlsx"
+        assert notas.cuantas() == {"buenas": 0, "malas": 2}
+        lista = cliente.get("/panel/calificaciones").json()["calificaciones"]
+        assert {(c["parte"], c["emoji"]) for c in lista} == {("", "👎"), ("reporte_1.xlsx", "💩")}
+        # Cada una con su comentario.
+        cliente.post("/panel/calificaciones/comentario", json={
+            "turno_id": turno, "chat_id": AUTORIZADO, "parte": "reporte_1.xlsx", "texto": "trae modelos Pro"})
+        conv = cliente.get(f"/panel/conversaciones?chat_id={AUTORIZADO}").json()["turnos"][0]
+        assert conv["calificacion"]["emoji"] == "👎" and conv["calificacion"]["comentario"] == ""
+        assert [c["comentario"] for c in conv["calificaciones"] if c["parte"]] == ["trae modelos Pro"]
+        assert "- Excel de una respuesta MAL calificado" in notas.notas_para_el_bot()
+        # Quitar la del Excel no toca la del texto.
+        _reaccionar(cliente, "m-excel", "")
+        assert notas.cuantas() == {"buenas": 0, "malas": 1}
+
+    def test_los_mensajes_viejos_se_reparten_por_orden(self, tmp_path):
+        # Registrados sin parte (antes de este cambio): el texto va primero y
+        # los archivos al final, en orden.
+        class ConExcel(AgenteFalso):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+                return "texto", [str(tmp_path / "reporte_viejo.xlsx")]
+
+        notas = Calificaciones()
+        app = crear_app(_config(), lambda: ConExcel("x"), bitacora=Bitacora(tmp_path / "b"),
+                        calificaciones=notas)
+        with TestClient(app) as cliente:
+            turno = cliente.post("/ask", json={"chat_id": AUTORIZADO, "text": "hola"}).json()["turno"]
+            notas.registrar_enviados(AUTORIZADO, turno, ["t1", "t2", "x1"])
+            assert _reaccionar(cliente, "t2", "👎").json()["parte"] == ""
+            assert _reaccionar(cliente, "x1", "👎").json()["parte"] == "reporte_viejo.xlsx"
+        assert notas.cuantas()["malas"] == 2
+
+
+def test_una_base_vieja_se_migra_sin_perder_nada(tmp_path):
+    import sqlite3
+    archivo = tmp_path / "c.sqlite"
+    with sqlite3.connect(archivo) as con:
+        con.executescript("""
+            CREATE TABLE enviados (mensaje_id TEXT PRIMARY KEY, turno_id TEXT NOT NULL,
+                                   chat_id TEXT NOT NULL, fecha TEXT NOT NULL);
+            CREATE TABLE calificaciones (turno_id TEXT NOT NULL, chat_id TEXT NOT NULL, valor INTEGER NOT NULL,
+                                         emoji TEXT NOT NULL, fecha TEXT NOT NULL, PRIMARY KEY (turno_id, chat_id));
+            CREATE TABLE comentarios (turno_id TEXT NOT NULL, chat_id TEXT NOT NULL, texto TEXT NOT NULL,
+                                      pregunta TEXT NOT NULL, valor INTEGER, fecha TEXT NOT NULL,
+                                      PRIMARY KEY (turno_id, chat_id));
+            INSERT INTO enviados VALUES ('m1', 't1', 'chat', '2026-10-08T15:26:43');
+            INSERT INTO calificaciones VALUES ('t1', 'chat', -1, '💩', '2026-10-08T15:29:02');
+            INSERT INTO comentarios VALUES ('t1', 'chat', 'muy generica', 'iPhone 17', -1, '2026-10-08T16:13:01');
+        """)
+    notas = Calificaciones(archivo)
+    assert notas.mensaje("m1", "chat") == ("t1", "")
+    fila = notas.lista()[0]
+    assert (fila["emoji"], fila["parte"], fila["comentario"]) == ("💩", "", "muy generica")
+    # Y ya se puede calificar el Excel aparte.
+    notas.calificar("t1", "chat", MALA, "👎", "reporte.xlsx")
+    assert notas.cuantas()["malas"] == 2
+    # Abrirla otra vez no migra de nuevo.
+    assert Calificaciones(archivo).cuantas()["malas"] == 2
