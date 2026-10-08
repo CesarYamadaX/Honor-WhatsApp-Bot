@@ -292,6 +292,79 @@ _NO_ES_MEDIDA = re.compile(
 _PREFERIDA = (re.compile(r"total", re.IGNORECASE), re.compile(r"unidades|qty|cantidad|ventas|units", re.IGNORECASE))
 
 
+# Las dimensiones que van en filas, de la mas especifica a la mas general:
+# si el resultado trae tienda y modelo, el pivot es por tienda.
+_DIMENSIONES = (
+    re.compile(r"tienda|store|sucursal|honor name|punto de venta", re.IGNORECASE),
+    re.compile(r"^\s*(modelo|model|homologacion modelo|sku|producto)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(region|regi[oó]n|zona|estado)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(carrier|operador)\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(marca|brand|clasificacion|clasificaci[oó]n|categor[ií]a)\s*$", re.IGNORECASE),
+)
+_ES_CADENA = re.compile(r"^\s*(retail|cadena|retailer|retailname)\s*$", re.IGNORECASE)
+_ES_SEMANA = re.compile(r"^\s*(semana|week|wk)\s*$", re.IGNORECASE)
+_ES_ANIO = re.compile(r"^\s*(a[nñ]o|anio|year)\s*$", re.IGNORECASE)
+
+
+def _texto(df: pd.DataFrame, columna) -> bool:
+    return not pd.api.types.is_numeric_dtype(df[columna])
+
+
+def config_generica(df: pd.DataFrame) -> dict | None:
+    """El pivot de cualquier resultado con dimension, periodo y medida, o None.
+
+    Pedido el 7/10/2026: que no solo los reportes de una cadena lleven
+    pivot. Si el resultado trae una dimension (tienda, modelo, region,
+    carrier, marca o la cadena), un periodo con mas de un valor (mes, semana
+    o anio) y una medida que se pueda sumar, va la dimension en filas y el
+    periodo en columnas. Con la cadena y otra dimension, la cadena es el
+    primer nivel. Un periodo de un solo valor no lleva pivot: seria una sola
+    columna, lo mismo que la lista.
+    """
+    if df is None or len(df) < 2:
+        return None
+    cadena = next((c for c in df.columns if _ES_CADENA.match(str(c)) and _texto(df, c)), None)
+    dimension = None
+    for patron in _DIMENSIONES:
+        dimension = next((c for c in df.columns if patron.search(str(c)) and _texto(df, c)), None)
+        if dimension is not None:
+            break
+    filas = [c for c in (cadena, dimension) if c is not None]
+    if not filas:
+        return None
+
+    mes = next((c for c in df.columns if _ES_MES.match(str(c).strip())), None)
+    semana = next((c for c in df.columns if _ES_SEMANA.match(str(c))), None)
+    anio = next((c for c in df.columns if _ES_ANIO.match(str(c))), None)
+    varios = lambda c: c is not None and df[c].nunique(dropna=True) > 1  # noqa: E731
+    if varios(mes) or varios(semana):
+        periodo = mes if varios(mes) else semana
+        columnas = [anio, periodo] if varios(anio) else [periodo]
+    elif varios(anio):
+        columnas = [anio]
+    else:
+        return None
+
+    usadas = set(filas) | set(columnas) | {mes, semana, anio}
+    medidas = [c for c in df.columns if c not in usadas and pd.api.types.is_numeric_dtype(df[c])
+               and not _NO_ES_MEDIDA.search(str(c))]
+    for patron in _PREFERIDA:
+        elegida = next((c for c in medidas if patron.search(str(c))), None)
+        if elegida is not None:
+            break
+    else:
+        elegida = medidas[0] if len(medidas) == 1 else None
+    if elegida is None:
+        return None
+    return {
+        "filas": filas,
+        "columnas": columnas,
+        "medida": elegida,
+        "nombre_medida": str(elegida),
+        "con_share": False,
+    }
+
+
 def config_por_tienda_y_mes(df: pd.DataFrame) -> dict | None:
     """Pivot de tiendas por mes para el resultado de una consulta, o None.
 

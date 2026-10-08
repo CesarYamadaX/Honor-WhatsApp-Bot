@@ -1589,6 +1589,20 @@ def pidio_desglose(pregunta: str) -> bool:
     return bool(_PIDE_DESGLOSE.search(pregunta or ""))
 
 
+# Las hojas extra de un reporte ("Ventas por tienda" y las fichas de
+# tiendas, regiones y carriers) son de TIENDAS: solo si se pidieron tiendas o
+# regiones. Visto el 7/10/2026: "por cadena y por mes" salio con "Ventas por
+# tienda", que nadie pidio, porque bastaba cualquier desglose.
+_PIDE_TIENDAS = re.compile(
+    r"tienda|sucursal|punto de venta|regi[oó]n|zona|\bstores?\b|\bregions?\b|门店|地区",
+    re.IGNORECASE,
+)
+
+
+def pidio_detalle_de_tiendas(pregunta: str) -> bool:
+    return bool(_PIDE_TIENDAS.search(pregunta or ""))
+
+
 @tool
 def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     """El inventario de Telcel: cuanto hay, a que fecha y para cuanto alcanza.
@@ -1933,7 +1947,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
             contexto = contexto_del_resultado(
                 df, ctx.engine, query, queda, cadenas=ctx.cadenas,
-                extras=pidio_desglose(ctx.pregunta),
+                extras=pidio_detalle_de_tiendas(ctx.pregunta),
             )
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
@@ -1964,8 +1978,11 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 and pidio_desglose(ctx.pregunta)
             ):
                 contexto["Consulta"] = df
-            con_datos = not reporte_de_cadena and not (
-                contexto and len(df) <= MAX_ROWS_AS_TEXT
+            # Si el resultado lleva pivot (ver config_generica), la hoja Datos
+            # va siempre: es de donde sale.
+            con_datos = not reporte_de_cadena and (
+                not (contexto and len(df) <= MAX_ROWS_AS_TEXT)
+                or excel_pivot.config_generica(df) is not None
             )
             excel = ExcelExporter.export_to_excel(
                 revision.df,
@@ -2019,9 +2036,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                 "el crudo ocupa varias hojas; va sin pivot para no resumir solo una",
                 bitacora.NOTA,
             )
-        # Un reporte que no es de cadena (unas tiendas, una region): si el
-        # resultado es tiendas por mes, el mismo pivot que armo a mano el
-        # usuario el 7/10/2026 sobre la hoja Datos.
+        # Un reporte que no es de una cadena entera: si el resultado trae una
+        # dimension (tienda, modelo, region, cadena...), un periodo y una
+        # medida, su pivot sobre la hoja Datos -- como el de tiendas por mes
+        # que armo a mano el usuario el 7/10/2026 (ver config_generica).
         if (
             sera_el_reporte_bueno
             and crudos is None
@@ -2029,10 +2047,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             and con_datos
             and len(df) <= MAX_FILAS_POR_HOJA_DE_EXCEL
         ):
-            config = excel_pivot.config_por_tienda_y_mes(df)
+            config = excel_pivot.config_generica(df)
             if config:
-                bitacora.paso("armando el pivot de tiendas por mes", bitacora.NOTA)
-                excel_pivot.agregar_pivot(excel, "Datos", **config)
+                bitacora.paso(
+                    f"armando el pivot de {' y '.join(map(str, config['filas']))} "
+                    f"por {' y '.join(map(str, config['columnas']))}",
+                    bitacora.NOTA,
+                )
+                if excel_pivot.agregar_pivot(excel, "Datos", **config):
+                    bitacora.paso("pivot listo", bitacora.NOTA)
+                else:
+                    bitacora.paso("no se pudo armar el pivot; el reporte sale sin el", bitacora.NOTA)
         if (
             sera_el_reporte_bueno
             and not crudo_partido
