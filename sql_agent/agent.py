@@ -485,6 +485,9 @@ class ContextoPeticion:
     # La pega `responder` al final del mensaje: que aparezca no puede depender
     # de que el modelo se acuerde de contarlo.
     base_del_pronostico: str = ""
+    # Se uso el scraping de internet: la respuesta lleva al pie de donde
+    # salio (ver idioma "fuente_internet").
+    de_internet: bool = False
     # Que mas se puede preguntar sobre lo que se acaba de entregar. Claves de
     # sugerencias.py; el texto lo arma `responder` en el idioma del usuario.
     sugerencias: list[str] = field(default_factory=list)
@@ -1483,6 +1486,7 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
         )
 
     ctx.hubo_datos = True
+    ctx.de_internet = True
     fecha = filas[0][4]
     lineas = [f"Precios publicados en las tiendas en linea el {fecha}:"]
     for retail, carrier, nombre, precio, _, url in filas:
@@ -1493,7 +1497,8 @@ def precio_en_internet(modelo: str, retailer: str = "") -> str:
     modelos = {fila[2] for fila in filas}
     lineas.append(
         "AL RESPONDER: di que es el precio publicado en internet ese dia (no "
-        "el precio interno), y para cada renglon incluye SIEMPRE el NOMBRE "
+        "el precio interno) -- la nota de la fuente la agrega el sistema al "
+        "final, no la copies --, y para cada renglon incluye SIEMPRE el NOMBRE "
         "COMPLETO del modelo tal como aparece arriba, el carrier y la liga. "
         "Sin el carrier no se sabe si el precio es con plan o libre, y sin la "
         "liga el usuario no puede verificarlo."
@@ -2792,6 +2797,10 @@ class SQLAgent:
             ctx.entregar_reporte(texto)
             if ctx.base_del_pronostico:
                 texto = f"{texto}\n\n{ctx.base_del_pronostico}"
+            # Lo mismo con el scraping: que es de internet no puede depender
+            # de que el modelo se acuerde de decirlo.
+            if ctx.de_internet:
+                texto = f"{texto}\n\n{idiomas.texto('fuente_internet', self.idioma)}"
             # Lo ultimo: primero la respuesta, luego de donde salio, y al
             # final lo que se puede preguntar despues.
             ofrecimiento = idiomas.sugerencias(self.idioma, ctx.sugerencias)

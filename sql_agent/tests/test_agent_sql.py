@@ -2206,3 +2206,33 @@ class TestElReporteEsElDeLaRespuesta:
 
     def test_las_cifras_se_leen_como_las_escribe_el_bot(self):
         assert modulo_agente.cifras_del_texto("$19,999 · 4 210 · 1,250,000 · 12.5% · 3 meses") == {19999, 4210, 1250000, 12}
+
+
+class TestFuenteDeInternet:
+    """Pedido el 8/10/2026: una respuesta con precios del scraping dice
+    siempre que es informacion de internet, de las paginas oficiales."""
+
+    class _UsaElScraping(_EjecutorEspia):
+        def __init__(self, respuesta, usa=True):
+            super().__init__(respuesta)
+            self.usa = usa
+
+        def invoke(self, payload, config=None, **kwargs):
+            if self.usa:
+                modulo_agente._contexto_actual().de_internet = True
+            return super().invoke(payload, config, **kwargs)
+
+    def test_la_nota_va_al_pie_en_el_idioma_de_la_pregunta(self, engine, monkeypatch):
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.agent_executor = self._UsaElScraping("Magic 8 Lite: $8,589 en Coppel.")
+        texto, _ = agente.responder("precio del magic 8 lite en internet")
+        assert texto.startswith("Magic 8 Lite: $8,589 en Coppel.")
+        assert "páginas oficiales" in texto and "No es el precio interno" in texto
+        texto, _ = agente.responder("what is the price of the magic 8 lite online?")
+        assert "official website" in texto
+
+    def test_sin_scraping_no_hay_nota(self, engine, monkeypatch):
+        agente = _agente_espiado(engine, monkeypatch)
+        agente.agent_executor = self._UsaElScraping("El iPhone 17 esta en $19,999.", usa=False)
+        texto, _ = agente.responder("en cuanto esta el iphone 17")
+        assert "internet" not in texto

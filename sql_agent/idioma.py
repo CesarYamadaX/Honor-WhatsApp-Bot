@@ -143,6 +143,22 @@ TEXTOS = {
             "请告诉 lauragabrielacastellanos 或 GTM Mexico 团队的同事。"
         ),
     },
+    # Al pie de toda respuesta que uso el scraping (precio_en_internet).
+    # Pedido el 8/10/2026: que quede claro que es informacion de internet,
+    # de las paginas oficiales de las tiendas, y no el precio interno.
+    "fuente_internet": {
+        ESPANOL: (
+            "🌐 Fuente: información sacada de internet, de las páginas "
+            "oficiales de cada tienda, en la fecha indicada. No es el precio "
+            "interno."
+        ),
+        INGLES: (
+            "🌐 Source: information taken from the internet, from each "
+            "retailer's official website, on the date shown. It is not the "
+            "internal price."
+        ),
+        CHINO: "🌐 来源：信息取自互联网上各零售商的官方网站，日期如上所示。这不是内部价格。",
+    },
     # El agente agoto sus pasos sin llegar a una respuesta. No dice por que
     # -- eso ya lo sabe el log -- pero si que no es culpa de quien pregunta, y
     # que hacer.

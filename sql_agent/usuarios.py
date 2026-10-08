@@ -24,6 +24,7 @@ confirma a quien escribe que hay un bot del otro lado.
 
 import json
 import threading
+import time
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,9 @@ import acceso
 ACTIVO = "activo"
 SUSPENDIDO = "suspendido"
 ESTADOS = (ACTIVO, SUSPENDIDO)
+
+# Cuantas veces se reintenta reemplazar el archivo (ver _guardar): ~4.5 s en total.
+REINTENTOS_AL_GUARDAR = 10
 
 # Como se llamaba antes lo que hoy es `suspendido`.
 _ESTADO_VIEJO = "bloqueado"
@@ -134,7 +138,19 @@ class RegistroUsuarios:
         # bueno sigue entero. Perder el registro es quedarse sin allowlist.
         temporal = self._archivo.with_suffix(self._archivo.suffix + ".tmp")
         temporal.write_text(contenido, encoding="utf-8")
-        temporal.replace(self._archivo)
+        # En Windows el reemplazo falla con "Access is denied" si otro
+        # proceso (el antivirus, el indexador) tiene el archivo abierto en
+        # ese instante. Visto el 8/10/2026: un alta desde el panel dio 500
+        # aunque el usuario si quedo en memoria. Dura milisegundos: se
+        # reintenta antes de rendirse.
+        for intento in range(REINTENTOS_AL_GUARDAR):
+            try:
+                temporal.replace(self._archivo)
+                return
+            except PermissionError:
+                if intento == REINTENTOS_AL_GUARDAR - 1:
+                    raise
+                time.sleep(0.1 * (intento + 1))
 
     def _sembrar(self, semilla: Iterable[str]) -> None:
         """Da de alta los numeros del .env que todavia no esten en el registro.

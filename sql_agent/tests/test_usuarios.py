@@ -182,3 +182,25 @@ class TestPersistencia:
         assert registro.puede_usar(NUMERO)
         registro.suspender(NUMERO)
         assert not registro.puede_usar(NUMERO)
+
+
+def test_guardar_reintenta_si_windows_tiene_el_archivo_abierto(tmp_path, monkeypatch):
+    # Visto el 8/10/2026: "Access is denied" al reemplazar usuarios.json y un
+    # 500 en el panel aunque el alta si habia quedado.
+    import usuarios as modulo
+    from pathlib import Path
+    monkeypatch.setattr(modulo.time, "sleep", lambda s: None)
+    original = Path.replace
+    fallos = []
+
+    def replace_que_falla(self, destino):
+        if len(fallos) < 2:
+            fallos.append(1)
+            raise PermissionError(5, "Access is denied")
+        return original(self, destino)
+
+    monkeypatch.setattr(Path, "replace", replace_que_falla)
+    registro = modulo.RegistroUsuarios(tmp_path / "usuarios.json")
+    registro.agregar("5215512345678", "Ana")
+    assert len(fallos) == 2
+    assert modulo.RegistroUsuarios(tmp_path / "usuarios.json").obtener("5215512345678").nombre == "Ana"
