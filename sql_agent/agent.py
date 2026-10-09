@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Iterator
 
 import pandas as pd
@@ -416,6 +417,110 @@ _OFRECIMIENTO_FINAL = re.compile(
 # Hasta donde se considera "la despedida" y no contenido. Un parrafo largo
 # que casualmente termine en pregunta es una respuesta, no un ofrecimiento.
 MAX_LARGO_DEL_OFRECIMIENTO = 220
+
+
+_MESES_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+             "agosto", "septiembre", "octubre", "noviembre", "diciembre")
+_TODAS_LAS_CADENAS = re.compile(r"ETL_Consolidado_B2B|vw_ETL_Con_Modelo", re.IGNORECASE)
+_FILTRA_CADENA = re.compile(r"\[?Retail\]?\s*(?:=|LIKE|IN\b|<>)", re.IGNORECASE)
+_ANIO_IGUAL = re.compile(r"\[?Year\]?\s*=\s*(\d{4})", re.IGNORECASE)
+_MES_IGUAL = re.compile(r"\[?Month\]?\s*=\s*(\d{1,2})\b", re.IGNORECASE)
+_MES_EN = re.compile(r"\[?Month\]?\s+IN\s*\(([\d,\s]+)\)", re.IGNORECASE)
+_MES_ENTRE = re.compile(r"\[?Month\]?\s+BETWEEN\s+(\d{1,2})\s+AND\s+(\d{1,2})", re.IGNORECASE)
+
+
+def cadenas_sin_el_periodo(query: str) -> str:
+    """El aviso de que un total de TODAS las cadenas deja fuera a alguna que
+    aun no carga ese mes, o "".
+
+    Visto el 9/10/2026: "cuantas unidades vendio Honor en septiembre" dio
+    113 790 sin decir que Liverpool y Movistar todavia no tenian septiembre
+    -- el total parecia completo y le faltaban dos cadenas. Solo para una
+    consulta de todas las cadenas (la consolidada o la vista con modelo, sin
+    filtrar [Retail]) y de un ano con meses concretos; lo demas no se
+    adivina.
+    """
+    if not _TODAS_LAS_CADENAS.search(query or "") or _FILTRA_CADENA.search(query):
+        return ""
+    anios = set(_ANIO_IGUAL.findall(query))
+    if len(anios) != 1:
+        return ""
+    meses: set[int] = {int(m) for m in _MES_IGUAL.findall(query)}
+    for lista in _MES_EN.findall(query):
+        meses.update(int(m) for m in re.findall(r"\d+", lista))
+    for desde, hasta in _MES_ENTRE.findall(query):
+        meses.update(range(int(desde), int(hasta) + 1))
+    meses = {m for m in meses if 1 <= m <= 12}
+    if not meses:
+        return ""
+    cargados = resumen_local.meses_por_cadena()
+    if not cargados:
+        return ""
+    anio = int(anios.pop())
+    faltan = {}
+    for cadena, tiene in sorted(cargados.items()):
+        sin = sorted(m for m in meses if (anio, m) not in tiene)
+        if sin and tiene:
+            ultimo = max(tiene)
+            faltan[cadena] = (sin, ultimo)
+    if not faltan:
+        return ""
+    detalle = "; ".join(
+        f"{cadena} no tiene {', '.join(_MESES_ES[m - 1] for m in sin)} de {anio} "
+        f"(lo mas reciente: {_MESES_ES[ultimo[1] - 1]} de {ultimo[0]})"
+        for cadena, (sin, ultimo) in faltan.items()
+    )
+    return (
+        f"OJO: este resultado NO incluye todas las cadenas: {detalle}. Al "
+        "responder dilo en una frase ('sin Liverpool ni Movistar, que aun no "
+        "cargan ese mes'), o el total parece completo y no lo es. Si es un "
+        "periodo anterior a que esa cadena empezara a reportar, di que no hay "
+        "datos de ella para ese periodo."
+    )
+
+
+# Las cadenas que cargan UN dato al mes, en una sola semana (medido el
+# 9/10/2026: 2026 tiene las semanas 5, 9, 14, 18, 23, 27, 31, 36, 40).
+_MENSUALES = {
+    "vw_ETL_Sears": "Sears", "SEARS_B2B": "Sears",
+    "vw_ETL_Movistar_CAC": "Movistar", "MVS_B2B": "Movistar",
+    "vw_ETL_COPPEL_IOT": "Coppel IOT",
+}
+_PIDE_RETAIL_MENSUAL = re.compile(r"\[?Retail\]?\s*(?:=|LIKE)\s*N?'(SEARS|MOVISTAR)", re.IGNORECASE)
+_SEMANA_IGUAL = re.compile(r"\[?WEEK\]?\s*=\s*(\d{1,2})\b", re.IGNORECASE)
+
+
+def semana_de_cadena_mensual(query: str) -> str:
+    """El aviso de que se pidio UNA semana de una cadena que reporta por mes.
+
+    Visto el 9/10/2026: "Samsung en Sears en la semana 38" se contesto "no
+    tengo dato de esa semana", y la nota del catalogo no alcanzo: Sears
+    manda un dato al mes, y el de septiembre esta en la semana 40.
+    """
+    semanas = _SEMANA_IGUAL.findall(query or "")
+    if len(semanas) != 1:
+        return ""
+    cadenas = {c for objeto, c in _MENSUALES.items() if objeto.lower() in query.lower()}
+    retail = _PIDE_RETAIL_MENSUAL.search(query)
+    if retail:
+        cadenas.add(retail.group(1).title())
+    if not cadenas:
+        return ""
+    semana = int(semanas[0])
+    anios = _ANIO_IGUAL.findall(query)
+    anio = int(anios[0]) if len(anios) == 1 else datetime.now().year
+    try:
+        mes = date.fromisocalendar(anio, semana, 4).month
+    except ValueError:
+        return ""
+    quienes = " y ".join(sorted(cadenas))
+    return (
+        f"OJO: {quienes} NO reporta por semana: carga un solo dato al mes, en "
+        "una sola semana. Por eso la semana pedida puede salir vacia o sin "
+        f"sentido. La semana {semana} de {anio} cae en {_MESES_ES[mes - 1]}: "
+        f"consulta [Month] = {mes} (y [Year] = {anio}) y al responder explica "
+        f"que {quienes} reporta por mes y da la cifra de {_MESES_ES[mes - 1]}."
+    )
 
 
 class ConsultaCancelada(Exception):
@@ -1755,7 +1860,10 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
             ctx.archivos.append(ExcelExporter.export_to_excel(resultado.tabla))
         except Exception:  # noqa: BLE001 - el texto ya trae el total y los principales
             logger.exception("No se pudo armar el Excel de semanas de inventario")
-    ctx.vistos.append(f"Semanas de inventario de Telcel:\n{texto}")
+    # Con lo que se pidio: visto el 9/10/2026, el revisor rechazo una
+    # respuesta correcta del X6c porque los datos no decian de que modelo eran.
+    pedido = " ".join(x for x in ((marca or "").strip(), (modelo or "").strip()) if x) or "todos los modelos"
+    ctx.vistos.append(f"Semanas de inventario de Telcel, pedido: {pedido}:\n{texto}")
     return texto
 
 
@@ -2084,11 +2192,17 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             reporte_de_cadena = "Datos" in contexto or solo_crudos
             if (
                 reporte_de_cadena
-                and not solo_crudos
                 and len(df) > 1
                 and pidio_desglose(ctx.pregunta)
             ):
-                contexto["Consulta"] = df
+                if solo_crudos:
+                    # Con solo el crudo, el desglose que se pidio va PRIMERO:
+                    # visto el 9/10/2026, "Honor por tienda en Elektra" llego
+                    # sin la tabla por tienda, solo con el crudo -- y detras
+                    # de cientos de miles de filas nadie la encontraria.
+                    contexto = {"Consulta": df, **contexto}
+                else:
+                    contexto["Consulta"] = df
             # Si el resultado lleva pivot (ver config_generica), la hoja Datos
             # va siempre: es de donde sale.
             con_datos = not reporte_de_cadena and (
@@ -2262,6 +2376,26 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     sin_modelo = _venta_sin_modelo(df)
     if sin_modelo:
         partes.append(sin_modelo)
+
+    sin_cargar = cadenas_sin_el_periodo(query)
+    if sin_cargar:
+        partes.append(sin_cargar)
+    por_mes = semana_de_cadena_mensual(query)
+    if por_mes:
+        partes.append(por_mes)
+    # Visto el 9/10/2026, en espanol y en ingles: "12 unidades sin cadena" y
+    # un share de 20% para ellas. Son de AT&T; la nota del catalogo no basto.
+    if any(
+        df[c].astype(str).str.strip().str.lower().eq("unknown").any()
+        for c in df.columns
+        if re.search(r"retail|cadena", str(c), re.IGNORECASE)
+        and not pd.api.types.is_numeric_dtype(df[c])
+    ):
+        partes.append(
+            "OJO: 'Unknown' en [Retail] son ventas de AT&T sin canal. Sumalas a "
+            "AT&T al responder y NO las presentes como otra cadena ni les "
+            "calcules share aparte."
+        )
 
     incompleto = tiempo.ultimo_periodo_incompleto(df)
     if incompleto:

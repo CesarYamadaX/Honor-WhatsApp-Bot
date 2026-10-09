@@ -66,7 +66,10 @@ def sugerir(pregunta: str, df: pd.DataFrame, query: str) -> list[str]:
     Se devuelven claves y no texto porque el texto depende del idioma del
     usuario; lo arma `idioma.sugerencias`.
     """
-    if df is None or df.empty:
+    # Un SUM sobre cero filas devuelve UNA fila con NULL: no hubo datos, y
+    # ofrecer "que share fue eso" despues de "no encontre ventas de ayer"
+    # (visto el 9/10/2026) no tiene sentido.
+    if df is None or df.empty or bool(df.isna().all().all()):
         return []
 
     pregunta, query = pregunta or "", query or ""

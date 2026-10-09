@@ -165,6 +165,12 @@ Revisa:
 4. El mensaje contesta como una persona, con cifras de negocio: no habla de filas, registros,
    hojas, columnas, Excel, ZIP ni del archivo adjunto.
 
+Un error es algo que los DATOS CONTRADICEN, no algo que no repiten: una herramienta o consulta
+que se pidio para un modelo, cadena o periodo ya viene filtrada a eso aunque cada renglon no lo
+diga. Si las cifras del borrador estan en los DATOS y nada en ellos dice que sean de otra cosa,
+esta bien. Ante la duda, {{"ok": true}}: cambiar una respuesta correcta por "no puedo confirmar"
+es peor que dejarla.
+
 Contesta SOLO con un objeto JSON, sin nada mas:
 - Si todo esta bien: {{"ok": true}}
 - Si algo esta mal: {{"ok": false, "problemas": ["..."], "respuesta": "..."}}

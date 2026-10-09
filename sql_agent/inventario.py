@@ -219,6 +219,12 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
     semanas = f"{r.semanas:.1f}" if r.semanas is not None else "sin venta, no se puede calcular"
     lineas = [
         f"Semanas de inventario en Telcel: {semanas}.",
+        # Que modelos cubre la cuenta, dicho: sin esto el revisor no sabia
+        # que "1 079 unidades" eran del X6c que se pregunto (9/10/2026).
+        "Modelos que cubre: " + (
+            ", ".join(map(str, r.tabla["Modelo"].head(5)))
+            + (f" y {len(r.tabla) - 5} mas" if len(r.tabla) > 5 else "")
+        ) + ".",
         f"Stock: {_numero(r.stock)} unidades en la foto del {r.foto:%d/%m/%Y} "
         "(almacenes y tiendas de Telcel).",
         f"Venta semanal promedio: {_numero(r.venta_semanal)} unidades, de todos los "

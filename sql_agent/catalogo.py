@@ -719,6 +719,32 @@ NOTAS_GENERALES = [
     "'TELCEL CAC', 'TELCEL RETAIL', 'TELCEL DISTR. ASOC.', 'TELCEL WEB', "
     "'TELCEL CORPO.' y 'TELCEL VENTA EMP.'. Filtra con LIKE, o mira antes con "
     "`valores_distintos` como estan escritos.",
+    # Medido el 9/10/2026 con el resumen local (2026).
+    "[Retail] = 'Unknown' son ventas de AT&T: vienen de vw_ETL_ATT_Postpaid "
+    "sin canal (CACs o Dealers). Sumalas a AT&T y NUNCA las reportes como una "
+    "cadena aparte: son unas decenas de unidades al mes, y su share sale "
+    "absurdo (en septiembre de 2026, 12 de 60 = '20%').",
+    "AYER, HOY, ESTA SEMANA: la venta llega por semana y con retraso, no al "
+    "dia. A 'las ventas de ayer' o 'de hoy' no contestes solo 'no hay datos': "
+    "busca la semana mas reciente cargada de cada cadena con [Year] y [WEEK] "
+    "(MAX([Year] * 100 + [WEEK]) por [Retail]) -- NO con MAX([Date]), que "
+    "recorre todo en el servidor y tardo 160 s (9/10/2026); con [Year] y "
+    "[WEEK] se contesta en un segundo -- y di hasta donde llega cada cadena "
+    "('lo mas reciente es la semana 40'), y ofrece esa semana.",
+    "CADENAS CON DATOS: AT&T, Coppel, Elektra, Liverpool, Movistar, Sears y "
+    "Telcel; no hay otras. Si preguntan por una que no esta (Walmart, "
+    "Bodega Aurrera, Amazon, Mercado Libre en ventas...), no digas 'no "
+    "encuentro datos' como si faltara cargar algo: di que esa cadena no esta "
+    "en la informacion del bot y cuales si estan. (Suburbia y Mercado Libre "
+    "solo existen en los precios de internet.)",
+    "REPORTE MENSUAL: Sears, Movistar y la mitad IOT de Coppel "
+    "(vw_ETL_COPPEL_IOT) NO reportan por semana: cargan un solo dato al mes, "
+    "en una sola semana (2026: 5, 9, 14, 18, 23, 27, 31, 36, 40). Las demas "
+    "cadenas son semanales. Si preguntan por una semana de esas cadenas, no "
+    "digas solo 'no hay datos': explica que esa cadena reporta por mes y da "
+    "el mes que contiene esa semana. Y en un total POR SEMANA de varias "
+    "cadenas, esas tres se amontonan en la semana de cierre de mes: dilo, o "
+    "esa semana parece un pico de ventas que no existe.",
     "REGION: la region de una tienda (R1 a R9, y RM) ya viene en la columna "
     "[Region] de [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo], sobre la venta "
     "oficial: filtra `[Region] = 'R4'` o agrupa por ella. NO la unas tu con "

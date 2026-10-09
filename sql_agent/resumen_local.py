@@ -43,6 +43,12 @@ ARCHIVO = Path(__file__).resolve().parent / "datos" / "resumen_ventas.sqlite"
 # servidor; el bot corre de dia, asi que con esto se refresca un par de veces
 # por jornada ademas de al arrancar.
 HORAS_ENTRE_REFRESCOS = float(os.getenv("RESUMEN_CADA_HORAS", "3"))
+# Mas viejo que esto no se usa: la consulta va al servidor. Visto el 9/10/2026:
+# al arrancar, mientras se reconstruye (~7 min), se contestaba con el resumen
+# de hace dos dias -- el total de septiembre salio de ahi y el top de modelos,
+# en vivo, con datos mas nuevos: dos respuestas que no cuadraban entre si. En
+# produccion pasa cada manana, con el resumen de la tarde anterior.
+MAX_HORAS_DE_ATRASO = HORAS_ENTRE_REFRESCOS * 2
 
 VISTAS = _VISTAS_DE_LA_CONSOLIDADA
 CONSOLIDADA = "ETL_Consolidado_B2B"
@@ -165,6 +171,9 @@ def consultar(query: str, archivo: Path | None = None) -> tuple[pd.DataFrame, st
     archivo = Path(archivo or ARCHIVO)
     if not archivo.exists():
         return None
+    horas = _horas_desde_la_ultima(archivo)
+    if horas is None or horas > MAX_HORAS_DE_ATRASO:
+        return None
     local = traducir(query)
     if local is None:
         return None
@@ -178,6 +187,37 @@ def consultar(query: str, archivo: Path | None = None) -> tuple[pd.DataFrame, st
         logger.warning("El resumen local no pudo con la consulta; va al servidor: %s",
                        " ".join(local.split())[:300], exc_info=True)
         return None
+
+
+# La cadena de cada vista, para decir quien no ha cargado un mes.
+_CADENA_DE_LA_VISTA = {
+    "vw_ETL_ATT_Postpaid": "AT&T", "vw_ETL_COPPEL": "Coppel", "vw_ETL_COPPEL_IOT": "Coppel",
+    "vw_ETL_Elektra": "Elektra", "vw_ETL_Liverpool": "Liverpool", "vw_ETL_Liverpool_IOT": "Liverpool",
+    "vw_ETL_Movistar_CAC": "Movistar", "vw_ETL_Sears": "Sears", "vw_ETL_TELCEL_B2B": "Telcel",
+}
+
+
+def meses_por_cadena(archivo: Path | None = None) -> dict[str, set[tuple[int, int]]] | None:
+    """Que (ano, mes) tiene cargados cada cadena, o None si no hay resumen
+    vigente. Es lo que permite avisar "Liverpool aun no carga septiembre"."""
+    archivo = Path(archivo or ARCHIVO)
+    if not archivo.exists():
+        return None
+    horas = _horas_desde_la_ultima(archivo)
+    if horas is None or horas > MAX_HORAS_DE_ATRASO:
+        return None
+    meses: dict[str, set[tuple[int, int]]] = {}
+    try:
+        with closing(_abrir(archivo)) as conexion:
+            for vista, cadena in _CADENA_DE_LA_VISTA.items():
+                filas = conexion.execute(
+                    f"SELECT DISTINCT [Year], [Month] FROM [{vista}] WHERE [QTY] > 0"
+                ).fetchall()
+                meses.setdefault(cadena, set()).update((int(a), int(m)) for a, m in filas if a and m)
+    except Exception:  # noqa: BLE001 - sin esto solo no hay aviso
+        logger.warning("No se pudieron leer los meses del resumen", exc_info=True)
+        return None
+    return meses
 
 
 def estado(archivo: Path | None = None) -> dict:

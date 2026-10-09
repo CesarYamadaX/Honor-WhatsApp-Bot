@@ -42,7 +42,7 @@ import os
 import re
 from datetime import timedelta
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pandas as pd
 
@@ -221,10 +221,27 @@ class Cruda:
     # vista (y en agosto, 118 758 = 118 758). Las otras cinco cadenas ya
     # cuadran exactas con unidades >= 1.
     filtro: str = ""
+    # Las marcas a las que se acota el reporte (las de la consulta). Visto el
+    # 9/10/2026: "el excel de ventas de Honor por tienda en Elektra" salio con
+    # 363 294 filas de TODAS las marcas en Raw_Data. Vacio = todas.
+    marcas: tuple[str, ...] = ()
+
+
+def _en_marcas(columna: str, marcas: tuple[str, ...]) -> str:
+    valores = ", ".join("'" + m.upper().replace("'", "''") + "'" for m in marcas)
+    return f" AND UPPER(LTRIM(RTRIM({columna}))) IN ({valores})"
 
 
 def _filtro_de(cruda: "Cruda") -> str:
-    return f" AND ({cruda.filtro})" if cruda.filtro else ""
+    filtro = f" AND ({cruda.filtro})" if cruda.filtro else ""
+    if cruda.marcas:
+        filtro += _en_marcas(f"v.[{cruda.marca}]", cruda.marcas)
+    return filtro
+
+
+def _filtro_iot(cruda: "Cruda", alias: str = "") -> str:
+    """Lo mismo para la mitad IOT, que nombra la marca [Brand]."""
+    return _en_marcas(f"{alias}[Brand]", cruda.marcas) if cruda.marcas else ""
 
 
 # Medido en agosto de 2026: las seis consultan en 3 segundos o menos.
@@ -768,7 +785,7 @@ _MITAD_IOT = """
               ON cs.[Coppel Name] = w.[Store] AND cs.[RetailName] = ?
             GROUP BY TRY_CONVERT(int, LEFT(w.[Store], CHARINDEX(' ', w.[Store] + ' ') - 1))
         ) p ON p.[numero] = TRY_CONVERT(int, i.[Store])
-        WHERE i.[Date] >= ? AND i.[Date] < ? AND i.[QTY] >= 1
+        WHERE i.[Date] >= ? AND i.[Date] < ? AND i.[QTY] >= 1{filtro_iot}
 """
 
 
@@ -889,7 +906,7 @@ def _tamano_del_crudo(conexion, cruda: Cruda, desde: str, hasta: str) -> tuple[l
     if cruda.vista_iot:
         filas += conexion.exec_driver_sql(
             f"SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}] "
-            "WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1",
+            "WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1" + _filtro_iot(cruda),
             (desde, hasta),
         ).scalar() or 0
     return columnas, filas
@@ -950,7 +967,7 @@ def _trozos_del_crudo(conexion, cruda: Cruda, desde: str, hasta: str,
     cursor = conexion.exec_driver_sql(f"""
         SELECT [Store], [Brand], [Material_Description], [Carrier], [Date], [QTY]
         FROM [RAW_DATA_B2B].dbo.[{cruda.vista_iot}]
-        WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1""", (desde, hasta))
+        WHERE [Date] >= ? AND [Date] < ? AND [QTY] >= 1{_filtro_iot(cruda)}""", (desde, hasta))
     nombres = list(cursor.keys())
     while True:
         lote = cursor.fetchmany(tamano)
@@ -1180,6 +1197,7 @@ def ventas_crudas(conexion, cruda: Cruda, desde: str, hasta: str):
             principal=cruda.vista_iot[: -len("_IOT")],
             normalizado_catalogo=_NORMALIZAR.format(expr="[Coppel Name]"),
             normalizado_iot=_NORMALIZAR.format(expr="i.[Store]"),
+            filtro_iot=_filtro_iot(cruda, "i."),
         ))
         parametros.extend(
             [cruda.retail_en_catalogo] * 3 + [desde, hasta]
@@ -1371,6 +1389,9 @@ def contexto_del_resultado(
         if cadenas and cadena not in cadenas:
             return hojas
         cruda = CRUDAS.get(cadena or "")
+        marcas = acotado_del_resultado(df, query).get("Brand")
+        if cruda and marcas:
+            cruda = replace(cruda, marcas=tuple(marcas))
 
         # Reporte de UNA cadena: tres hojas y nada mas (pedido el 5/10/2026,
         # viendo el de "las ventas de Elektra de enero"): el PIVOT (lo arma
