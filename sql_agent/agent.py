@@ -556,6 +556,36 @@ def cifras_del_resultado(df: pd.DataFrame) -> frozenset[int]:
     return frozenset(c for c in cifras if abs(c) >= 10)
 
 
+# Que columna es "la cifra" de un resultado: unidades antes que un total
+# (en un share, "Unidades totales" es el mercado entero), y nunca un precio,
+# un share, un ano o un numero de tienda.
+_MEDIDA_PRINCIPAL = (
+    re.compile(r"unidades|qty|cantidad|ventas|units|piezas|equipos|stock", re.IGNORECASE),
+    re.compile(r"total", re.IGNORECASE),
+)
+_NO_ES_CIFRA_PRINCIPAL = re.compile(
+    r"^(a[nñ]o|anio|year|mes|month|semana|week|dia|day)$|precio|price|share|%|"
+    r"participaci|promedio|capa|maximo|numero|n[uú]m\b|id\b|sku|codigo|c[oó]digo",
+    re.IGNORECASE,
+)
+
+
+def cifra_principal(df: pd.DataFrame) -> tuple[str, float] | None:
+    """(columna, total) de la medida principal del resultado, o None."""
+    if df is None or df.empty:
+        return None
+    candidatas = [
+        c for c in df.columns
+        if pd.api.types.is_numeric_dtype(df[c]) and not _NO_ES_CIFRA_PRINCIPAL.search(str(c))
+    ]
+    for patron in _MEDIDA_PRINCIPAL:
+        for columna in candidatas:
+            if patron.search(str(columna)):
+                total = pd.to_numeric(df[columna], errors="coerce").sum()
+                return (str(columna), float(total)) if total else None
+    return None
+
+
 @dataclass
 class Reporte:
     """Un reporte de la vuelta: sus archivos, sus cifras, y los pivots que
@@ -565,6 +595,9 @@ class Reporte:
     cifras: frozenset[int] = frozenset()
     # (archivo, hoja, config, nombre para la bitacora)
     pivotes: list[tuple[str, str, dict, str]] = field(default_factory=list)
+    # (columna, total) de lo que trae: lo que se dice si el mensaje no da
+    # ninguna cifra (ver responder).
+    principal: tuple[str, float] | None = None
 
     @property
     def con_grafica(self) -> bool:
@@ -627,6 +660,7 @@ class ContextoPeticion:
         *rutas: str | None,
         cifras: frozenset[int] = frozenset(),
         pivotes: list[tuple[str, str, dict, str]] | None = None,
+        principal: tuple[str, float] | None = None,
     ) -> None:
         """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
 
@@ -661,7 +695,7 @@ class ContextoPeticion:
         nuevos = [r for r in rutas if r]
         if not nuevos:
             return
-        self.reportes.append(Reporte(nuevos, cifras, list(pivotes or [])))
+        self.reportes.append(Reporte(nuevos, cifras, list(pivotes or []), principal))
         trae_grafica = any(r.lower().endswith(".png") for r in nuevos)
         tiene_grafica = any(r.lower().endswith(".png") for r in self.archivos)
         if not self.archivos or (trae_grafica and not tiene_grafica):
@@ -1329,7 +1363,13 @@ def _presupuesto_de_tiempo(conexion, segundos: int) -> Iterator[None]:
     try:
         yield
     finally:
-        bruta.timeout = anterior
+        try:
+            bruta.timeout = anterior
+        except Exception:  # noqa: BLE001
+            # Tras un HYT00 la conexion ya esta cerrada y no hay nada que
+            # restaurar; sin esto el "Attempt to use a closed connection"
+            # tapaba el error de verdad (visto el 9/10/2026).
+            pass
 
 
 @tool
@@ -2289,8 +2329,10 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
 
     # La grafica va primero: en el chat se ve de un vistazo, y el Excel queda
     # debajo para quien quiera el detalle.
+    principal = cifra_principal(df) if excel else None
     ctx.registrar_reporte(
-        imagen, excel, zip_del_crudo, cifras=cifras_del_resultado(df), pivotes=pivotes
+        imagen, excel, zip_del_crudo, cifras=cifras_del_resultado(df), pivotes=pivotes,
+        principal=principal,
     )
 
     # Que mas se puede preguntar sobre esto. Se queda con las de la PRIMERA
@@ -2380,6 +2422,16 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     sin_cargar = cadenas_sin_el_periodo(query)
     if sin_cargar:
         partes.append(sin_cargar)
+    if principal:
+        # Visto el 9/10/2026: el Excel de Honor por tienda en Elektra se
+        # entrego con "Ya quedo: ventas de Honor por tienda...", sin una cifra.
+        partes.append(
+            f"La cifra principal de este resultado es {principal[1]:,.0f} "
+            f"(total de [{principal[0]}]). Si este es el reporte que entregas, "
+            "empieza el mensaje con ella y lo mas importante (la tienda, el "
+            "modelo o el mes que mas pesa); un mensaje que solo dice que el "
+            "reporte esta listo no sirve."
+        )
     por_mes = semana_de_cadena_mensual(query)
     if por_mes:
         partes.append(por_mes)
@@ -2929,6 +2981,17 @@ class SQLAgent:
             # Con la respuesta ya escrita se sabe con que consulta se
             # contesto: ese es el reporte que se entrega.
             ctx.entregar_reporte(texto)
+            # Si aun asi el mensaje no da ninguna cifra, va la principal del
+            # reporte que se entrega. La red de seguridad del aviso de arriba.
+            entregado = next((r for r in ctx.reportes if r.rutas == ctx.archivos), None)
+            if entregado and entregado.principal and not cifras_del_texto(texto):
+                medida, total = entregado.principal
+                texto = (
+                    f"{texto}\n\n"
+                    + idiomas.texto("cifra_principal", self.idioma).format(
+                        total=f"{total:,.0f}", medida=medida
+                    )
+                )
             if ctx.base_del_pronostico:
                 texto = f"{texto}\n\n{ctx.base_del_pronostico}"
             # Lo mismo con el scraping: que es de internet no puede depender

@@ -33,10 +33,17 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+import homologacion
+
 INVENTARIO = "[RAW_INV_B2B].dbo.[TELCEL_INV_B2B]"
 VENTA = "[RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B]"
 HOMOLOGACION = "[GTM BI Database].dbo.[UNICOS$]"
 SEMANAS_DE_PROMEDIO = 4
+# Lo que se agrega al nombre de un modelo que UNICOS$ no tiene. Pedido el
+# 9/10/2026: el modelo va SIEMPRE por su nombre homologado; uno que no esta en
+# el catalogo no se disfraza de homologado ("HONOR X6E 128GB 4G" armado del
+# texto de Telcel), se dice.
+SIN_HOMOLOGAR = " (sin homologar)"
 
 _SKU_DE_LA_VENTA = "LEFT([Material_Description], CHARINDEX(' ', [Material_Description] + ' ') - 1)"
 
@@ -51,6 +58,9 @@ class Resultado:
     venta_semanal: float
     sin_venta: list[str] = field(default_factory=list)
     recortada: bool = False
+    # Los modelos que no estan en UNICOS$, con su stock: van con el nombre
+    # de Telcel y marcados SIN_HOMOLOGAR.
+    sin_homologar: list[str] = field(default_factory=list)
 
     @property
     def semanas(self) -> float | None:
@@ -142,13 +152,15 @@ def calcular(engine, texto: str = "", marca: str = "HONOR",
             FROM {HOMOLOGACION} WHERE [Retail] IN ('TELCEL', 'TELCEL CAC')""")
 
     resultado = armar(stock, venta, homologado, foto, desde,
-                      hasta_exclusivo - timedelta(days=1), semanas, recortada, texto)
+                      hasta_exclusivo - timedelta(days=1), semanas, recortada, texto,
+                      catalogo=homologacion.catalogo())
     return resultado if resultado.stock > 0 or resultado.venta_semanal > 0 else None
 
 
 def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
           foto: date, desde: date, hasta: date, semanas: int = SEMANAS_DE_PROMEDIO,
-          recortada: bool = False, texto: str = "") -> Resultado:
+          recortada: bool = False, texto: str = "",
+          catalogo: "homologacion.Catalogo | None" = None) -> Resultado:
     """La cuenta, separada de la base para poder probarla."""
     venta = venta if not venta.empty else pd.DataFrame(columns=["sku", "descripcion_venta", "venta"])
     juntos = stock.merge(venta, on="sku", how="outer")
@@ -158,11 +170,16 @@ def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
     sin_sku = juntos["descripcion_venta"].fillna("").str.replace(r"^\S+\s+", "", regex=True)
     juntos["descripcion"] = juntos["descripcion"].fillna(sin_sku)
 
-    # Agrupado por modelo homologado ('HONOR X6C 256GB 4G'); si el catalogo
-    # todavia no lo tiene (X6E y X7E no estaban en octubre de 2026), por la
-    # descripcion de Telcel.
+    # Agrupado por modelo homologado ('HONOR X6C 256GB 4G'): la descripcion
+    # del inventario contra UNICOS$ tal cual, luego normalizada (el mismo
+    # catalogo que la columna [Modelo] del Excel), luego la de la venta del
+    # mismo SKU. Si el catalogo no lo tiene (X6E y X7E no estaban en octubre
+    # de 2026), el nombre de Telcel marcado SIN_HOMOLOGAR.
     nombres = dict(zip(homologado["descripcion"], homologado["modelo"])) if not homologado.empty else {}
-    juntos["Modelo"] = [nombre_de_modelo(d, nombres) for d in juntos["descripcion"]]
+    juntos["Modelo"] = [
+        nombre_de_modelo(d, nombres, catalogo, v)
+        for d, v in zip(juntos["descripcion"], juntos["descripcion_venta"])
+    ]
     # "X6C" tambien aparece en la descripcion de un combo del HONOR 400 que
     # regala un X6C: si se pidio un modelo, se queda lo que ES ese modelo.
     for token in _tokens(texto):
@@ -179,11 +196,12 @@ def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
     tabla = tabla.sort_values("Stock", ascending=False).reset_index(drop=True)
 
     sin_venta = tabla.loc[(tabla["Stock"] > 0) & (tabla[f"Venta {semanas} semanas"] <= 0), "Modelo"].tolist()
+    sin_homologar = [m for m in tabla["Modelo"] if str(m).endswith(SIN_HOMOLOGAR)]
     return Resultado(
         foto=foto, desde=desde, hasta=hasta, tabla=tabla,
         stock=float(tabla["Stock"].sum()),
         venta_semanal=float(tabla["Venta semanal"].sum()),
-        sin_venta=sin_venta, recortada=recortada,
+        sin_venta=sin_venta, recortada=recortada, sin_homologar=sin_homologar,
     )
 
 
@@ -195,13 +213,23 @@ _DESCRIPCION_DE_TELCEL = re.compile(
 )
 
 
-def nombre_de_modelo(descripcion: str, homologado: dict) -> str:
+def nombre_de_modelo(descripcion: str, homologado: dict, catalogo=None,
+                     descripcion_venta: str | None = None) -> str:
+    """El [HOMOLOGACION MODELO] de UNICOS$, o el nombre de Telcel marcado."""
     if descripcion in homologado and homologado[descripcion]:
         return homologado[descripcion]
+    if catalogo is not None:
+        for texto in (descripcion, descripcion_venta):
+            modelo = catalogo.buscar(texto) if isinstance(texto, str) else None
+            if modelo:
+                return modelo
+    descripcion = descripcion if isinstance(descripcion, str) else str(descripcion_venta or "")
     m = _DESCRIPCION_DE_TELCEL.match(descripcion or "")
     if not m:
-        return descripcion
-    return f"{m['marca']} {m['modelo']} {m['memoria'].replace(' ', '')} {m['red']}".upper()
+        return f"{descripcion}{SIN_HOMOLOGAR}"
+    # Los colores del mismo telefono juntos ('X6E 128GB NEGRO' y 'DORADO'),
+    # pero dicho: no es el nombre del catalogo.
+    return f"{m['marca']} {m['modelo']} {m['memoria'].replace(' ', '')} {m['red']}".upper() + SIN_HOMOLOGAR
 
 
 def _numero(x: float) -> str:
@@ -237,6 +265,13 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
         "del ultimo mes (unos <venta semanal> a la semana) le alcanzan para "
         "unas <semanas> semanas.\" Con las cifras de arriba.",
     ]
+    if r.sin_homologar:
+        lineas.append(
+            "OJO: estos modelos NO estan en UNICOS$ (el catalogo de homologacion) "
+            f"y van con el nombre de Telcel: {', '.join(r.sin_homologar)}. Al "
+            "responder nombralos asi, di que todavia no estan homologados y que "
+            "hay que darlos de alta en UNICOS$."
+        )
     if r.recortada:
         lineas.append(
             "OJO: la venta todavia no llega a la fecha de la foto; la ventana "

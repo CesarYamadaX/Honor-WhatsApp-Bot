@@ -143,6 +143,14 @@ TEXTOS = {
             "请告诉 lauragabrielacastellanos 或 GTM Mexico 团队的同事。"
         ),
     },
+    # Cuando el mensaje de un reporte no trae ninguna cifra ("Ya quedo: ventas
+    # de Honor por tienda..."), la principal se agrega al final. Pedido el
+    # 9/10/2026. {total} y {medida} los pone agent.py.
+    "cifra_principal": {
+        ESPANOL: "Total: **{total}** ({medida}).",
+        INGLES: "Total: **{total}** ({medida}).",
+        CHINO: "合计：**{total}**（{medida}）。",
+    },
     # Al pie de toda respuesta que uso el scraping (precio_en_internet).
     # Pedido el 8/10/2026: que quede claro que es informacion de internet,
     # de las paginas oficiales de las tiendas, y no el precio interno.

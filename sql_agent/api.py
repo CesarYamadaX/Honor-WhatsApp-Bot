@@ -988,6 +988,11 @@ def main() -> None:
 
     resumen_local.mantener_al_dia(lambda: motor)
     limpieza.mantener_limpia()
+    # La prueba semanal: preguntas reales contra cifras de los datos (ver
+    # regresion.py). Su resumen sale en el log; REGRESION=0 la apaga.
+    import regresion
+
+    regresion.mantener_semanal(lambda: motor, lambda: SQLAgent(engine=motor))
 
     if config.api_host in ("127.0.0.1", "localhost", "::1"):
         logger.info(

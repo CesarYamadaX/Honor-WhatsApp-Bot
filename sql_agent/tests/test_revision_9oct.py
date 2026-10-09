@@ -70,3 +70,38 @@ def test_una_semana_de_una_cadena_mensual_dice_el_mes():
     assert "Sears NO reporta por semana" in aviso and "[Month] = 9" in aviso
     assert agent.semana_de_cadena_mensual(
         "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B] WHERE [Year] = 2026 AND [WEEK] = 38") == ""
+
+
+class TestLaCifraPrincipalDelReporte:
+    """Pedido el 9/10/2026: el mensaje de un Excel siempre da la cifra."""
+
+    def test_elige_las_unidades_y_nunca_un_numero_de_tienda_o_un_precio(self):
+        assert agent.cifra_principal(pd.DataFrame(
+            {"Numero de tienda": [9797, 6570], "Unidades Honor": [342.0, 191.0]})) == ("Unidades Honor", 533.0)
+        assert agent.cifra_principal(pd.DataFrame({"Retail": ["Coppel"], "Precio Venta": [19999]})) is None
+        assert agent.cifra_principal(pd.DataFrame(
+            {"Participacion %": [5.0], "Unidades Honor": [10.0], "Unidades totales": [100.0]}))[0] == "Unidades Honor"
+
+    def _responder(self, monkeypatch, respuesta):
+        from tests.test_agent_sql import _EjecutorEspia, _crear_engine_con_datos
+
+        class ConReporte(_EjecutorEspia):
+            def invoke(self, payload, config=None, **kwargs):
+                agent._contexto_actual().registrar_reporte(
+                    None, "honor_elektra.xlsx", cifras=frozenset({533}),
+                    principal=("Unidades Honor", 533.0))
+                return super().invoke(payload, config, **kwargs)
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+        agente = agent.SQLAgent(engine=_crear_engine_con_datos("cifra", filas=3))
+        agente.agent_executor = ConReporte(respuesta)
+        return agente.responder("mandame el excel de Honor por tienda en Elektra")
+
+    def test_si_el_mensaje_no_da_cifras_se_agrega_el_total(self, monkeypatch):
+        texto, archivos = self._responder(monkeypatch, "Ya quedó: ventas de Honor por tienda en Elektra.")
+        assert archivos == ["honor_elektra.xlsx"]
+        assert "Total: **533** (Unidades Honor)." in texto
+
+    def test_si_ya_la_da_no_se_repite(self, monkeypatch):
+        texto, _ = self._responder(monkeypatch, "Honor vendió **533 unidades** en Elektra.")
+        assert "Total:" not in texto
