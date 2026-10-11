@@ -50,6 +50,7 @@ from catalogo import (
 import acceso
 from contexto import CRUDAS, contexto_del_resultado, ficha_del_archivo
 import excel_pivot
+import proveedor
 import homologacion
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
@@ -2606,25 +2607,24 @@ class SQLAgent:
         return create_engine(db_uri, pool_pre_ping=True)
 
     def _init_llm(self) -> ChatOpenAI:
-        """Inicializa el modelo de lenguaje usando OpenRouter."""
-        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        if not openrouter_api_key:
-            raise ValueError("La variable de entorno OPENROUTER_API_KEY no esta configurada.")
+        """Inicializa el modelo de lenguaje del proveedor en uso (ver proveedor.py)."""
+        api_key = proveedor.clave()
+        if not api_key:
+            raise ValueError(
+                f"La variable de entorno {proveedor.nombre_de_la_clave()} no esta configurada."
+            )
 
-        model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-6-luna")
+        model_name = proveedor.modelo("MODEL", "openai/gpt-6-luna")
         return ChatOpenAI(
             temperature=0,
             model=model_name,
-            api_key=openrouter_api_key,
-            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            base_url=proveedor.base_url(),
             # Ver stream_runnable en _create_agent. Sin streaming, el cliente
             # de openai reintenta solo si la conexion se cae.
             disable_streaming=True,
             max_retries=3,
-            default_headers={
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "SQL Agent",
-            },
+            default_headers={k: v for k, v in proveedor.encabezados().items() if k != "Authorization"},
         )
 
     def _create_agent(self) -> Any:

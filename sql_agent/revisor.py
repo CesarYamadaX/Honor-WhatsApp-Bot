@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass, field
 
 import httpx
+
+import proveedor
 import pandas as pd
 
 import acceso
@@ -39,8 +41,7 @@ import acceso
 logger = logging.getLogger("sql_agent.revisor")
 
 ACTIVO = os.getenv("REVISOR", "1").strip() not in ("0", "no", "false", "")
-MODELO = os.getenv("OPENROUTER_REVISOR_MODEL") or os.getenv("OPENROUTER_MODEL", "openai/gpt-6-luna")
-URL = "https://openrouter.ai/api/v1/chat/completions"
+MODELO = proveedor.modelo("REVISOR_MODEL") or proveedor.modelo("MODEL", "openai/gpt-6-luna")
 SEGUNDOS_DE_PLAZO = 45
 # Lo que se le muestra al revisor de cada resultado y en total: los datos
 # que vio el modelo que contesto, no mas (un Raw_Data entero no cabe ni hace
@@ -210,8 +211,7 @@ def revisar_respuesta(pregunta: str, vistos: list[str], borrador: str, cadenas=N
     """Si el borrador dice la verdad sobre los datos, y si no, corregido."""
     if not ACTIVO or not vistos or not (borrador or "").strip():
         return RevisionDeRespuesta(ok=True)
-    clave = os.getenv("OPENROUTER_API_KEY")
-    if not clave:
+    if not proveedor.clave():
         return RevisionDeRespuesta(ok=True)
     permitidas = acceso.normalizar(cadenas)
     regla_de_acceso = (
@@ -233,12 +233,8 @@ def revisar_respuesta(pregunta: str, vistos: list[str], borrador: str, cadenas=N
     }
     try:
         respuesta = httpx.post(
-            URL, json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
-            headers={
-                "Authorization": f"Bearer {clave}",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "SQL Agent",
-            },
+            proveedor.url_chat(), json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
+            headers=proveedor.encabezados(),
         )
         respuesta.raise_for_status()
         veredicto = _objeto_de_la_respuesta(respuesta.json()["choices"][0]["message"]["content"])

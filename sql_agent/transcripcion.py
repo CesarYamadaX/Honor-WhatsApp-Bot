@@ -21,10 +21,11 @@ import os
 
 import httpx
 
+import proveedor
+
 logger = logging.getLogger("sql_agent.transcripcion")
 
-MODELO = os.getenv("OPENROUTER_AUDIO_MODEL", "google/gemini-3.1-flash-lite")
-URL = "https://openrouter.ai/api/v1/chat/completions"
+MODELO = proveedor.modelo("AUDIO_MODEL", "google/gemini-3.1-flash-lite")
 SEGUNDOS_DE_PLAZO = 60
 
 # El vocabulario va en la instruccion: sin el, "Telcel" sale "tel cel",
@@ -51,9 +52,8 @@ class TranscripcionFallida(Exception):
 def transcribir(audio: bytes, formato: str = "ogg") -> str:
     """El texto de la nota de voz. Cadena vacia si no se entendio nada."""
 
-    clave = os.getenv("OPENROUTER_API_KEY")
-    if not clave:
-        raise TranscripcionFallida("OPENROUTER_API_KEY no esta configurada")
+    if not proveedor.clave():
+        raise TranscripcionFallida(f"{proveedor.nombre_de_la_clave()} no esta configurada")
     cuerpo = {
         "model": MODELO,
         "temperature": 0,
@@ -70,12 +70,8 @@ def transcribir(audio: bytes, formato: str = "ogg") -> str:
     }
     try:
         respuesta = httpx.post(
-            URL, json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
-            headers={
-                "Authorization": f"Bearer {clave}",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "SQL Agent",
-            },
+            proveedor.url_chat(), json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
+            headers=proveedor.encabezados(),
         )
     except httpx.HTTPError as error:
         raise TranscripcionFallida(f"sin conexion con OpenRouter: {error}") from error

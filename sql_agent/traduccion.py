@@ -21,10 +21,11 @@ from collections import OrderedDict
 
 import httpx
 
+import proveedor
+
 logger = logging.getLogger("sql_agent.traduccion")
 
-MODELO = os.getenv("OPENROUTER_TRADUCCION_MODEL", "google/gemini-3.1-flash-lite")
-URL = "https://openrouter.ai/api/v1/chat/completions"
+MODELO = proveedor.modelo("TRADUCCION_MODEL", "google/gemini-3.1-flash-lite")
 SEGUNDOS_DE_PLAZO = 60
 DESTINOS = {"es": "espanol de Mexico", "en": "ingles"}
 # Cuantas traducciones se recuerdan. Un turno son dos textos; esto cubre
@@ -88,9 +89,8 @@ def traducir(textos: list[str], destino: str = "es") -> list[str]:
     if not pendientes:
         return resultado  # type: ignore[return-value]
 
-    clave = os.getenv("OPENROUTER_API_KEY")
-    if not clave:
-        raise TraduccionFallida("OPENROUTER_API_KEY no esta configurada")
+    if not proveedor.clave():
+        raise TraduccionFallida(f"{proveedor.nombre_de_la_clave()} no esta configurada")
     cuerpo = {
         "model": MODELO,
         "temperature": 0,
@@ -101,12 +101,8 @@ def traducir(textos: list[str], destino: str = "es") -> list[str]:
     }
     try:
         respuesta = httpx.post(
-            URL, json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
-            headers={
-                "Authorization": f"Bearer {clave}",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "SQL Agent",
-            },
+            proveedor.url_chat(), json=cuerpo, timeout=SEGUNDOS_DE_PLAZO,
+            headers=proveedor.encabezados(),
         )
     except httpx.HTTPError as error:
         raise TraduccionFallida(f"sin conexion con OpenRouter: {error}") from error
