@@ -17,6 +17,16 @@ un requisito.
 El SQL que escribe el modelo es de SQL Server. Lo que se traduce es poco y
 mecanico (TOP -> LIMIT, ISNULL, LEN, N'...'); lo que podria dar OTRO numero
 sin dar error no se traduce, se manda al servidor (ver `_NO_SE_TRADUCE`).
+
+Desde el 12/10/2026 (pedido del usuario) tambien van, COPIADAS FILA POR FILA
+y no agrupadas, la promotoria ([HCReport]) y los precios internos ([Prices]),
+con las dos tablas con las que el bot siempre las cruza: [CustomerStores]
+(region y cadena de la tienda) y [UNICOS$] (el modelo homologado). Medido en
+la bitacora: 23 de 24 consultas de promotoria unen HCReport con
+CustomerStores, y las 9 de precios unen Prices con UNICOS$; sin esas dos,
+casi nada se contestaria aqui. Como son las filas de verdad, en ellas si se
+puede contar, promediar y tomar minimos (ver `_NO_SE_TRADUCE_EN_COPIAS`).
+Bajarlas tarda ~90 s mas (HCReport 11 s, Prices 77 s).
 """
 
 from __future__ import annotations
@@ -52,6 +62,38 @@ MAX_HORAS_DE_ATRASO = HORAS_ENTRE_REFRESCOS * 2
 
 VISTAS = _VISTAS_DE_LA_CONSOLIDADA
 CONSOLIDADA = "ETL_Consolidado_B2B"
+
+# Las tablas de [GTM BI Database] que se copian tal cual, fila por fila.
+COPIAS = ("HCReport", "Prices", "CustomerStores", "UNICOS$")
+# Columnas que NO se copian: las llaves de texto de Prices (hasta 4000
+# caracteres) pesan 600 MB y el bot no contesta con ellas. Si una consulta
+# las nombra, va al servidor.
+_SIN_COPIAR = {"Prices": ("KEY PRICES", "key2")}
+_COLUMNA_QUE_NO_SE_COPIO = re.compile(r"\[\s*(KEY\s+PRICES|key2)\s*\]", re.IGNORECASE)
+# Indices: por donde filtra el bot (la semana de promotoria, la fecha y la
+# cadena de un precio, la descripcion contra el catalogo).
+# Medido el 12/10/2026: sin el de CustomerStores([ID]), la promotoria de
+# Sears de un ano tardaba 190 s (cada fila de HCReport recorria el catalogo
+# entero); con el, 0.05 s. Sin ANALYZE: con estadisticas, SQLite elegia un
+# plan peor para los precios (20 s contra 7.8 s).
+_INDICES = {
+    "HCReport": (("YEAR", "Week"), ("ID",)),
+    "CustomerStores": (("ID",), ("RetailName",)),
+    "Prices": (("Día/Periodo",), ("Retail",), ("Material Description",)),
+    "UNICOS$": (("DESCRIPCION",), ("MATERIAL DESCRIPTION FINAL",)),
+}
+# Lo maximo que puede tardar aqui una consulta sobre las copias antes de
+# cortarla y mandarla al servidor. El servidor contesta promotoria y precios
+# en 0.2-1.5 s (las ventas no: 100-400 s), y el optimizador de SQLite es mas
+# simple: el precio actual de un modelo por cadena tardaba aqui 7.8 s contra
+# 1.2 s alla. Con el tope, lo peor es perder estos segundos, no minutos.
+MAX_SEGUNDOS_EN_COPIAS = 5
+_NOMBRA_UNA_COPIA = re.compile(
+    "|".join(rf"\[{re.escape(c)}\]" for c in COPIAS), re.IGNORECASE
+)
+_TIPOS_DE_TEXTO = ("char", "varchar", "nchar", "nvarchar", "text", "ntext")
+_TIPOS_ENTEROS = ("int", "bigint", "smallint", "tinyint", "bit")
+_TIPOS_DE_FECHA = ("date", "datetime", "datetime2", "smalldatetime")
 _TEXTO = ("Retail", "Brand", "Material_Description", "Carrier")
 _NUMERO = ("Year", "Month", "WEEK")
 COLUMNAS = _TEXTO + _NUMERO + ("QTY",)
@@ -80,6 +122,91 @@ _NO_SE_TRADUCE = re.compile(
     re.IGNORECASE,
 )
 
+# En las copias las filas son las de verdad: COUNT, AVG, MIN y MAX dan lo
+# mismo que en el servidor. Lo que sigue sin traducirse es lo que SQLite no
+# tiene o hace distinto: fechas y conversiones de SQL Server, concatenar
+# texto con `+` (en SQLite suma) y los CAST a texto, fecha o decimal.
+# LEFT, RIGHT, CHARINDEX y el `+` de texto pegado a una comilla SI se
+# traducen (ver `_traducir_funciones`): la promotoria real saca la cadena del
+# nombre de la tienda con LEFT(h.[NAME], CHARINDEX(' ', h.[NAME] + ' ') - 1).
+_NO_SE_TRADUCE_EN_COPIAS = re.compile(
+    r"\b(STDEV\w*|VAR\w*|PERCENTILE_\w+|CHECKSUM_AGG)\s*\("
+    r"|\bAS\s+(N?(VAR)?CHAR|DATE|DATETIME2?|SMALLDATETIME|TIME|DECIMAL|NUMERIC|MONEY)\b"
+    r"|\b(DATEPART|DATENAME|DATEFROMPARTS|DATEADD|DATEDIFF|EOMONTH|GETDATE|SYSDATETIME"
+    r"|FORMAT|CONVERT|TRY_CONVERT|TRY_CAST|TRY_PARSE|PARSE|STRING_AGG|CONCAT_WS"
+    r"|PATINDEX|STUFF)\s*\("
+    r"|\b(OFFSET|FETCH|PERCENT|ROLLUP|CUBE|GROUPING\s+SETS|PIVOT|UNPIVOT|APPLY|INTO|DECLARE)\b"
+    r"|[@#]",
+    re.IGNORECASE,
+)
+_SIN_NOLOCK = re.compile(r"\bWITH\s*\(\s*NOLOCK\s*\)|\(\s*NOLOCK\s*\)", re.IGNORECASE)
+_PREFIJO_GTM = re.compile(
+    r"\[GTM BI Database\]\s*\.\s*\[?dbo\]?\s*\.\s*", re.IGNORECASE
+)
+_FUNCION_A_TRADUCIR = re.compile(r"(?<![\w\[.])(LEFT|RIGHT|CHARINDEX)\s*\(", re.IGNORECASE)
+_MAS_DE_TEXTO = re.compile(r"(?<=')\s*\+(?!\+)|\+(?=\s*N?')")
+
+
+def _argumentos(texto: str, abre: int) -> tuple[list[str], int] | None:
+    """Los argumentos de la llamada cuyo parentesis abre en `abre`, y donde
+    cierra. Separa por las comas de primer nivel, respetando parentesis y
+    comillas. None si no cierra."""
+    nivel, comillas, inicio, partes = 0, False, abre + 1, []
+    i = abre
+    while i < len(texto):
+        c = texto[i]
+        if c == "'":
+            comillas = not comillas
+        elif not comillas:
+            if c == "(":
+                nivel += 1
+            elif c == ")":
+                nivel -= 1
+                if nivel == 0:
+                    partes.append(texto[inicio:i])
+                    return partes, i
+            elif c == "," and nivel == 1:
+                partes.append(texto[inicio:i])
+                inicio = i + 1
+        i += 1
+    return None
+
+
+def _traducir_funciones(texto: str) -> str | None:
+    """LEFT, RIGHT y CHARINDEX de SQL Server en su forma de SQLite, tambien
+    anidadas. None si alguna no se puede traducir igual (CHARINDEX con
+    posicion de inicio, o un numero de argumentos que no es el suyo)."""
+    salida, posicion = [], 0
+    while True:
+        m = _FUNCION_A_TRADUCIR.search(texto, posicion)
+        if not m:
+            salida.append(texto[posicion:])
+            return "".join(salida)
+        llamada = _argumentos(texto, m.end() - 1)
+        if llamada is None:
+            return None
+        partes, cierra = llamada
+        if len(partes) != 2:
+            return None
+        a, b = (_traducir_funciones(p.strip()) for p in partes)
+        if a is None or b is None:
+            return None
+        funcion = m.group(1).upper()
+        if funcion == "LEFT":
+            nuevo = f"SUBSTR({a}, 1, {b})"
+        elif funcion == "RIGHT":
+            # SUBSTR(x, -0) devuelve todo; RIGHT(x, 0) de SQL Server, nada.
+            nuevo = f"(CASE WHEN ({b}) > 0 THEN SUBSTR({a}, -({b})) ELSE '' END)"
+        else:
+            nuevo = f"INSTR({b}, {a})"
+        salida.append(texto[posicion:m.start()] + nuevo)
+        posicion = cierra + 1
+
+
+# Una fecha guardada como texto ('2026-10-04'): al devolverla vuelve a ser
+# fecha, como la devuelve SQL Server.
+_ES_FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$")
+
 _OBJETO_EN_FROM = re.compile(
     r"\b(?:FROM|JOIN)\s+((?:\[[^\]]+\]|\w+)(?:\s*\.\s*(?:\[[^\]]*\]|\w*))*)",
     re.IGNORECASE,
@@ -102,11 +229,12 @@ def traducir(query: str) -> str | None:
         return None
 
     permitidos = {v.casefold() for v in VISTAS} | {CONSOLIDADA.casefold()}
+    copias = {c.casefold() for c in COPIAS}
     ctes = {n.strip("[]").casefold() for n in _NOMBRE_DE_CTE.findall(texto)}
     nombrados = _OBJETO_EN_FROM.findall(texto)
     if not nombrados:
         return None
-    usa_ventas = False
+    usa_ventas = usa_copias = False
     for completo in nombrados:
         if completo.startswith("("):
             continue
@@ -114,17 +242,30 @@ def traducir(query: str) -> str | None:
         nombre = partes[-1].strip("[]").casefold()
         if nombre in ctes:
             continue
-        if nombre not in permitidos:
+        # Una tabla de otra base con el mismo nombre no es la misma tabla.
+        base = partes[0].strip("[]").casefold() if len(partes) > 1 else None
+        if nombre in permitidos and base in (None, "raw_data_b2b"):
+            usa_ventas = True
+        elif nombre in copias and base in (None, "gtm bi database"):
+            usa_copias = True
+        else:
             return None
-        # Una tabla de otra base con el mismo nombre no es la vista.
-        if len(partes) > 1 and partes[0].strip("[]").casefold() != "raw_data_b2b":
-            return None
-        usa_ventas = True
-    if not usa_ventas:
+    # Las ventas estan agrupadas y las copias no: mezclarlas daria otra
+    # cuenta. Y una consulta sin ninguna de las dos no es para aqui.
+    if usa_ventas == usa_copias:
         return None
 
-    if _COLUMNA_QUE_NO_ESTA.search(texto) or _NO_SE_TRADUCE.search(texto):
+    if usa_ventas and (_COLUMNA_QUE_NO_ESTA.search(texto) or _NO_SE_TRADUCE.search(texto)):
         return None
+    if usa_copias:
+        texto = _SIN_NOLOCK.sub("", texto)
+        if _COLUMNA_QUE_NO_SE_COPIO.search(texto) or _NO_SE_TRADUCE_EN_COPIAS.search(texto):
+            return None
+        texto = _traducir_funciones(texto)
+        if texto is None:
+            return None
+        # `+` junto a un texto entre comillas es concatenar (en SQLite, `||`).
+        texto = _MAS_DE_TEXTO.sub("||", texto)
 
     limite = None
     inicial = _TOP_INICIAL.match(texto)
@@ -146,6 +287,7 @@ def traducir(query: str) -> str | None:
         )
 
     texto = _PREFIJO_DEL_SERVIDOR.sub("", texto)
+    texto = _PREFIJO_GTM.sub("", texto)
     texto = re.sub(r"\bISNULL\s*\(", "IFNULL(", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\bLEN\s*\(", "LENGTH(", texto, flags=re.IGNORECASE)
     texto = re.sub(r"\bN'", "'", texto)
@@ -156,10 +298,23 @@ def traducir(query: str) -> str | None:
 
 # --- Consultar ------------------------------------------------------------
 
+def _parte_de_fecha(desde: int, hasta: int):
+    def parte(valor):
+        texto = str(valor or "")
+        return int(texto[desde:hasta]) if len(texto) >= hasta and texto[desde:hasta].isdigit() else None
+    return parte
+
+
 def _abrir(archivo: Path, solo_lectura: bool = True) -> sqlite3.Connection:
     if solo_lectura:
-        return sqlite3.connect(f"file:{archivo.as_posix()}?mode=ro", uri=True, timeout=5)
-    return sqlite3.connect(archivo, timeout=30)
+        conexion = sqlite3.connect(f"file:{archivo.as_posix()}?mode=ro", uri=True, timeout=5)
+    else:
+        conexion = sqlite3.connect(archivo, timeout=30)
+    # YEAR(), MONTH() y DAY() de SQL Server sobre las fechas de las copias
+    # ('2026-10-04'): el bot las usa con los precios, y SQLite no las tiene.
+    for nombre, desde, hasta in (("YEAR", 0, 4), ("MONTH", 5, 7), ("DAY", 8, 10)):
+        conexion.create_function(nombre, 1, _parte_de_fecha(desde, hasta), deterministic=True)
+    return conexion
 
 
 def consultar(query: str, archivo: Path | None = None) -> tuple[pd.DataFrame, str] | None:
@@ -179,10 +334,27 @@ def consultar(query: str, archivo: Path | None = None) -> tuple[pd.DataFrame, st
         return None
     try:
         with closing(_abrir(archivo)) as conexion:
+            if _NOMBRA_UNA_COPIA.search(local):
+                limite = time.monotonic() + MAX_SEGUNDOS_EN_COPIAS
+                # Devolver algo distinto de cero interrumpe la consulta.
+                conexion.set_progress_handler(lambda: int(time.monotonic() > limite), 10_000)
             cursor = conexion.execute(local)
             columnas = [d[0] for d in cursor.description]
             filas = cursor.fetchall()
-        return pd.DataFrame.from_records(filas, columns=columnas), local
+        df = pd.DataFrame.from_records(filas, columns=columnas)
+        for columna in df.columns:
+            valores = df[columna].dropna()
+            if len(valores) and valores.map(lambda v: isinstance(v, str) and bool(_ES_FECHA.match(v))).all():
+                df[columna] = pd.to_datetime(df[columna], errors="coerce")
+        return df, local
+    except sqlite3.OperationalError as error:
+        if "interrupted" not in str(error):
+            logger.warning("El resumen local no pudo con la consulta; va al servidor: %s",
+                           " ".join(local.split())[:300], exc_info=True)
+            return None
+        # El tope de MAX_SEGUNDOS_EN_COPIAS: esperado, no es una falla.
+        logger.info("Resumen local: la consulta paso de %ss; va al servidor", MAX_SEGUNDOS_EN_COPIAS)
+        return None
     except Exception:  # noqa: BLE001 - el servidor la contesta igual
         logger.warning("El resumen local no pudo con la consulta; va al servidor: %s",
                        " ".join(local.split())[:300], exc_info=True)
@@ -284,6 +456,17 @@ def construir(engine, archivo: Path | None = None) -> dict:
             meta[f"unidades {vista}"] = f"{unidades:.0f}"
             logger.info("Resumen local: %s, %d filas", vista, filas)
 
+        for tabla in COPIAS:
+            # Que falle una copia no cuesta el resumen: sus consultas van al
+            # servidor como antes.
+            try:
+                filas = _copiar(engine, destino, tabla)
+                meta[f"filas {tabla}"] = str(filas)
+                logger.info("Resumen local: %s, %d filas (copia)", tabla, filas)
+            except Exception:  # noqa: BLE001
+                logger.exception("Resumen local: no se pudo copiar %s; va al servidor", tabla)
+                destino.execute(f"DROP TABLE IF EXISTS [{tabla}]")
+
         union = " UNION ALL ".join(f"SELECT * FROM [{v}]" for v in VISTAS)
         destino.execute(f"CREATE VIEW [{CONSOLIDADA}] AS {union}")
         meta["construido"] = datetime.now().isoformat(timespec="seconds")
@@ -294,6 +477,66 @@ def construir(engine, archivo: Path | None = None) -> dict:
     _poner_en_su_lugar(temporal, archivo)
     logger.info("Resumen local listo en %ss", meta["segundos"])
     return meta
+
+
+def _como_texto_de_fecha(valor):
+    if valor is None or not hasattr(valor, "isoformat"):
+        return valor
+    if hasattr(valor, "hour") and (valor.hour, valor.minute, valor.second) != (0, 0, 0):
+        return valor.strftime("%Y-%m-%d %H:%M:%S")
+    return valor.strftime("%Y-%m-%d")
+
+
+def _copiar(engine, destino: sqlite3.Connection, tabla: str) -> int:
+    """Copia una tabla de [GTM BI Database] fila por fila. Devuelve las filas.
+
+    Los textos sin espacios al final (SQL Server los ignora al comparar y
+    SQLite no) y sin distinguir mayusculas, como en el servidor. Las fechas
+    como texto 'AAAA-MM-DD' (Prices: todas a medianoche, medido el
+    12/10/2026), que compara igual que SQL Server contra '2026-10-04'.
+    """
+    crudo = engine.raw_connection()
+    try:
+        cursor = crudo.cursor()
+        cursor.execute(
+            "SELECT COLUMN_NAME, DATA_TYPE FROM [GTM BI Database].INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            (tabla,),
+        )
+        fuera = {c.casefold() for c in _SIN_COPIAR.get(tabla, ())}
+        columnas = [(n, t.lower()) for n, t in cursor.fetchall() if n.casefold() not in fuera]
+        if not columnas:
+            raise ValueError(f"{tabla} no tiene columnas visibles")
+        definicion, seleccion = [], []
+        for nombre, tipo in columnas:
+            if tipo in _TIPOS_DE_TEXTO:
+                definicion.append(f"[{nombre}] TEXT COLLATE NOCASE")
+                seleccion.append(f"RTRIM([{nombre}])")
+            elif tipo in _TIPOS_ENTEROS:
+                definicion.append(f"[{nombre}] INTEGER")
+                seleccion.append(f"[{nombre}]")
+            elif tipo in _TIPOS_DE_FECHA:
+                definicion.append(f"[{nombre}] TEXT")
+                seleccion.append(f"[{nombre}]")
+            else:
+                definicion.append(f"[{nombre}] REAL")
+                seleccion.append(f"[{nombre}]")
+        destino.execute(f"CREATE TABLE [{tabla}] ({', '.join(definicion)})")
+        cursor.execute(f"SELECT {', '.join(seleccion)} FROM [GTM BI Database].dbo.[{tabla}] WITH (NOLOCK)")
+        insertar = f"INSERT INTO [{tabla}] VALUES ({', '.join('?' * len(columnas))})"
+        filas = 0
+        while True:
+            lote = cursor.fetchmany(50_000)
+            if not lote:
+                break
+            destino.executemany(insertar, [tuple(_como_texto_de_fecha(v) for v in f) for f in lote])
+            filas += len(lote)
+    finally:
+        crudo.close()
+    for i, columnas_del_indice in enumerate(_INDICES.get(tabla, ())):
+        lista = ", ".join(f"[{c}]" for c in columnas_del_indice)
+        destino.execute(f"CREATE INDEX [ix_{tabla}_{i}] ON [{tabla}] ({lista})")
+    return filas
 
 
 def _poner_en_su_lugar(temporal: Path, archivo: Path, intentos: int = 60) -> None:
