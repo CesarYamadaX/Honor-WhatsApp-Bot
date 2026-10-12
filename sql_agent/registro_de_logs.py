@@ -49,7 +49,10 @@ _FUENTE = re.compile(r"^\[(whatsapp|api|iniciar)\]")
 _ES_ERROR = re.compile(
     r"\b(ERROR|CRITICAL)\b|Traceback|Exception|excepcion no capturada|"
     r"rechazo no manejado|\b[Ff]allo\b|\b[Mm]urio\b|\" 5\d\d\b|termino \(codigo|"
-    r"^\S+(Error|Exception):"
+    r"^\S+(Error|Exception):|"
+    # Lo que une dos tracebacks encadenados: sin esto cada falla contaba
+    # como tres errores (12/10/2026).
+    r"^(The above exception was the direct cause|During handling of the above exception)"
 )
 _ES_AVISO = re.compile(
     r"\bWARNING\b|desconectado|reintentando|no se pudo|sin conexion|"
@@ -147,6 +150,27 @@ def _leer_lineas(archivo: Path) -> list[dict]:
     return lineas
 
 
+def _incidentes(lineas: list[dict]) -> int:
+    """Cuantos errores hubo, no cuantas lineas de error.
+
+    Un traceback son decenas de lineas seguidas ("  File ...", "raise ..."),
+    y cada una se clasifica como error para que se vea en rojo. Contarlas
+    todas decia "1 360 errores" el 12/10/2026 por 11 fallas de conexion
+    (cada una, tres tracebacks encadenados de ~40 lineas). Un bloque de
+    lineas de error seguidas es UN error.
+    """
+    incidentes, previa = 0, False
+    for linea in lineas:
+        # Las lineas en blanco entre tracebacks encadenados no cortan el error.
+        if not _FUENTE.sub("", linea["texto"]).strip():
+            continue
+        es_error = linea["nivel"] == "error"
+        if es_error and not previa:
+            incidentes += 1
+        previa = es_error
+    return incidentes
+
+
 def dias(carpeta: Path = CARPETA_POR_DEFECTO) -> list[dict]:
     """Los dias que tienen log, el mas reciente primero, con sus problemas."""
     resultado = []
@@ -158,7 +182,7 @@ def dias(carpeta: Path = CARPETA_POR_DEFECTO) -> list[dict]:
         resultado.append({
             "dia": coincidencia.group(1),
             "lineas": len(lineas),
-            "errores": sum(1 for l in lineas if l["nivel"] == "error"),
+            "errores": _incidentes(lineas),
             "avisos": sum(1 for l in lineas if l["nivel"] == "aviso"),
             "ultima": lineas[-1]["hora"] if lineas else None,
         })

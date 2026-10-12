@@ -182,3 +182,18 @@ class TestEndpoints:
         cliente = TestClient(crear_app(_config("0.0.0.0"), lambda: None, carpeta_logs=con_logs))
         assert cliente.get("/panel/logs/dias").status_code == 403
         assert cliente.get("/panel/logs", params={"dia": "2026-10-01"}).status_code == 403
+
+
+def test_un_traceback_es_un_error_no_cuarenta(tmp_path):
+    # El 12/10/2026 el panel decia "1 360 errores" por 11 fallas de conexion.
+    (tmp_path / "bot-2026-10-12.log").write_text(
+        "2026-10-12 10:29:29 [api] ERROR:sql_agent.regresion:el caso fallo\n"
+        "2026-10-12 10:29:29 [api] Traceback (most recent call last):\n"
+        '2026-10-12 10:29:29 [api]   File "x.py", line 1, in f\n'
+        "2026-10-12 10:29:29 [api]     raise ConnectError\n"
+        "2026-10-12 10:29:29 [api] httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED]\n"
+        "2026-10-12 10:29:30 [api] INFO: siguiente caso\n"
+        "2026-10-12 10:29:33 [api] ERROR:sql_agent.regresion:otro caso fallo\n",
+        encoding="utf-8",
+    )
+    assert logs.dias(tmp_path)[0]["errores"] == 2
