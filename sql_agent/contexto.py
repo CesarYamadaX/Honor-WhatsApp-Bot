@@ -1339,7 +1339,7 @@ def ficha_del_archivo(contexto: dict) -> dict | None:
 
 def contexto_del_resultado(
     df: pd.DataFrame, engine, query: str = "", segundos: int | None = None,
-    cadenas=None, extras: bool = True,
+    cadenas=None, extras: bool = True, de_cadena: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """Hojas de contexto para el resultado, vacio si no hay nada que agregar.
 
@@ -1355,6 +1355,9 @@ def contexto_del_resultado(
     `extras` en False deja fuera "Ventas por tienda" y las fichas de
     catalogo (Tiendas, Regiones, Carriers): pedido el 7/10/2026, un reporte
     trae lo que se pidio y esas hojas solo si se pidio un desglose.
+
+    `de_cadena` en False no arma el reporte de la cadena entera (Datos y
+    Raw_Data): solo cuando se pidio un archivo (ver agent.pidio_archivo).
     """
     if df is None or df.empty:
         return {}
@@ -1400,7 +1403,7 @@ def contexto_del_resultado(
         # por tienda", las fichas de catalogo y la hoja del resultado se
         # quedan fuera -- el pivot ya cubre la tienda -- salvo que el usuario
         # pida un desglose (eso lo decide agent.py, que tiene la pregunta).
-        if cruda:
+        if cruda and de_cadena:
             reporte = _datos_y_raw(engine, cruda, rango, plazo)
             if reporte:
                 return reporte

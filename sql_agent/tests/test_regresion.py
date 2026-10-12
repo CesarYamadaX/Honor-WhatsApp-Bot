@@ -88,3 +88,28 @@ def test_un_caso_que_truena_no_tumba_los_demas(tmp_path, monkeypatch):
     informe = regresion.correr(None, Agente, casos)
     assert informe["bien"] == 1 and informe["total"] == 2
     assert list(tmp_path.glob("*.json"))
+
+
+def test_si_todo_falla_por_error_no_cuenta_como_la_corrida_de_la_semana(tmp_path, monkeypatch):
+    monkeypatch.setattr(regresion, "CARPETA", tmp_path)
+
+    class SinConexion:
+        def responder(self, pregunta, cadenas=None):
+            raise ConnectionError("Connection error.")
+
+    casos = [regresion.Caso("uno", "a", lambda t, a: []), regresion.Caso("dos", "b", lambda t, a: [])]
+    regresion.correr(None, SinConexion, casos)
+    assert [p.name for p in tmp_path.glob("*.json")][0].endswith("_sin_probar.json")
+    assert regresion.ultima_corrida() is None  # se vuelve a intentar
+
+
+def test_un_informe_viejo_donde_todo_fallo_no_cuenta(tmp_path, monkeypatch):
+    # El de produccion del 12/10/2026 (0 de 11 por un certificado) quedo con
+    # el nombre normal: no debe esperar 7 dias para reintentar.
+    import json
+    monkeypatch.setattr(regresion, "CARPETA", tmp_path)
+    (tmp_path / "2026-10-12_1029.json").write_text(json.dumps(
+        {"resultados": [{"problemas": ["error: Connection error."]}, {"problemas": ["error: Connection error."]}]}))
+    assert regresion.ultima_corrida() is None
+    (tmp_path / "2026-10-05_1000.json").write_text(json.dumps({"resultados": [{"problemas": []}]}))
+    assert regresion.ultima_corrida().day == 5

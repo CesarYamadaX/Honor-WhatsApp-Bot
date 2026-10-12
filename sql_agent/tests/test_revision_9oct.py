@@ -105,3 +105,45 @@ class TestLaCifraPrincipalDelReporte:
     def test_si_ya_la_da_no_se_repite(self, monkeypatch):
         texto, _ = self._responder(monkeypatch, "Honor vendió **533 unidades** en Elektra.")
         assert "Total:" not in texto
+
+
+def test_las_semanas_de_las_cadenas_mensuales_son_de_su_mes():
+    # Sears 2026: un dato por mes en las semanas 5..40 (enero a septiembre).
+    # La 40 es septiembre, no octubre (visto el 12/10/2026).
+    semanas = (5, 9, 14, 18, 23, 27, 31, 36, 40)
+    assert [agent.mes_de_la_semana_mensual(2026, s) for s in semanas] == list(range(1, 10))
+
+
+def test_una_semana_de_cierre_de_todas_las_cadenas_avisa_que_va_inflada():
+    aviso = agent.semana_de_cadena_mensual(
+        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] WHERE [Brand] = 'HONOR' AND [Year] = 2026 AND [WEEK] = 40")
+    assert "cierra septiembre" in aviso and "Sears y Movistar" in aviso
+    assert agent.semana_de_cadena_mensual(
+        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B] WHERE [Year] = 2026 AND [WEEK] = 38") == ""
+
+
+def test_el_reporte_de_la_cadena_solo_si_se_pidio_un_archivo(monkeypatch):
+    assert agent.pidio_archivo("mandame el excel de ventas de Honor en Elektra")
+    assert agent.pidio_archivo("reporte de ventas de Coppel de enero")
+    assert not agent.pidio_archivo("que marca vende mas en Telcel en septiembre 2026")
+
+    def no_debe_llamarse(*a, **k):
+        raise AssertionError("armo el reporte de la cadena sin que se pidiera")
+
+    monkeypatch.setattr(contexto, "_datos_y_raw", no_debe_llamarse)
+    df = pd.DataFrame({"Brand": ["SAMSUNG", "HONOR"], "Year": [2026, 2026], "Month": [9, 9], "Unidades": [372436, 73628]})
+    contexto.contexto_del_resultado(
+        df, None, "SELECT [Brand], SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B] WHERE [Year] = 2026 AND [Month] = 9 GROUP BY [Brand]",
+        cadenas=None, extras=False, de_cadena=False)
+
+
+def test_no_busca_el_modelo_por_texto_en_la_vista_con_modelo():
+    lenta = ("SELECT [Modelo], SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo] "
+             "WHERE [Retail] = 'Coppel' AND [Material_Description] LIKE '%X9D%' GROUP BY [Modelo]")
+    assert "No la ejecute" in agent._like_en_la_vista_con_modelo(lenta)
+    buena = ("SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Con_Modelo] "
+             "WHERE [Retail] = 'Coppel' AND [Modelo] = 'HONOR X9D 6 78 4G'")
+    assert agent._like_en_la_vista_con_modelo(buena) == ""
+    # En otra vista no aplica (ahi el texto es la unica forma).
+    assert agent._like_en_la_vista_con_modelo(
+        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE [Material_Description] LIKE '%X9D%'") == ""

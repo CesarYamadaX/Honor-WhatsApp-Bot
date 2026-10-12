@@ -37,6 +37,7 @@ hoy; sin el, esos minutos todo va al servidor.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -375,15 +376,40 @@ _CADENA_DE_LA_VISTA = {
 }
 
 
+# Cuanto vale la copia de los meses por cadena cuando no hay resumen (al
+# arrancar, mientras se construye): los meses solo crecen, asi que una de
+# ayer a lo mas avisa de mas por un dia.
+MAX_HORAS_DE_LOS_MESES = 48
+
+
+def _archivo_de_meses(archivo: Path) -> Path:
+    # Junto al resumen y con otro nombre: `borrar` no lo toca.
+    return archivo.with_name("meses_por_cadena.json")
+
+
+def _meses_guardados(archivo: Path) -> dict[str, set[tuple[int, int]]] | None:
+    try:
+        datos = json.loads(_archivo_de_meses(archivo).read_text(encoding="utf-8"))
+        guardado = datetime.fromisoformat(datos["guardado"])
+    except (OSError, ValueError, KeyError):
+        return None
+    if (datetime.now() - guardado).total_seconds() / 3600 > MAX_HORAS_DE_LOS_MESES:
+        return None
+    return {c: {tuple(m) for m in meses} for c, meses in datos["meses"].items()}
+
+
 def meses_por_cadena(archivo: Path | None = None) -> dict[str, set[tuple[int, int]]] | None:
-    """Que (ano, mes) tiene cargados cada cadena, o None si no hay resumen
-    vigente. Es lo que permite avisar "Liverpool aun no carga septiembre"."""
+    """Que (ano, mes) tiene cargados cada cadena, o None si no se sabe.
+
+    Es lo que permite avisar "Liverpool aun no carga septiembre". Del resumen
+    si esta vigente; si no (al arrancar el bot se borra y tarda minutos en
+    volver), de la copia que deja cada construccion. Visto el 12/10/2026: sin
+    esa copia, en esos minutos el total de septiembre salio sin el aviso.
+    """
     archivo = Path(archivo or ARCHIVO)
-    if not archivo.exists():
-        return None
-    horas = _horas_desde_la_ultima(archivo)
+    horas = _horas_desde_la_ultima(archivo) if archivo.exists() else None
     if horas is None or horas > MAX_HORAS_DE_ATRASO:
-        return None
+        return _meses_guardados(archivo)
     meses: dict[str, set[tuple[int, int]]] = {}
     try:
         with closing(_abrir(archivo)) as conexion:
@@ -481,6 +507,16 @@ def construir(engine, archivo: Path | None = None) -> dict:
         destino.executemany("INSERT INTO resumen_meta VALUES (?, ?)", list(meta.items()))
         destino.commit()
     _poner_en_su_lugar(temporal, archivo)
+    # La copia de los meses por cadena que sobrevive al borrado del arranque.
+    meses = meses_por_cadena(archivo)
+    if meses:
+        try:
+            _archivo_de_meses(archivo).write_text(json.dumps({
+                "guardado": datetime.now().isoformat(timespec="seconds"),
+                "meses": {c: sorted(m) for c, m in meses.items()},
+            }), encoding="utf-8")
+        except OSError:
+            logger.warning("No se pudo guardar la copia de los meses por cadena", exc_info=True)
     logger.info("Resumen local listo en %ss", meta["segundos"])
     return meta
 

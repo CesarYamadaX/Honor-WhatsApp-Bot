@@ -310,6 +310,13 @@ def correr(engine, fabrica_agente: Callable[[], object], casos_a_correr: list[Ca
         logger.info("[regresion] %s: %s (%.0fs)", caso.clave, "bien" if r.ok else "; ".join(r.problemas), r.segundos)
 
     bien = sum(r.ok for r in resultados)
+    # Si TODOS fallaron por error (sin conexion con el modelo, la base caida)
+    # no se probo el bot: no cuenta como la corrida de la semana y se
+    # reintenta en el siguiente ciclo. Visto el 12/10/2026: 0 de 11 por un
+    # certificado, y la siguiente habria sido hasta dentro de 7 dias.
+    sin_probar = bool(resultados) and all(
+        r.problemas and r.problemas[0].startswith("error:") for r in resultados
+    )
     informe = {
         "fecha": comenzo.isoformat(timespec="seconds"),
         "bien": bien,
@@ -317,9 +324,14 @@ def correr(engine, fabrica_agente: Callable[[], object], casos_a_correr: list[Ca
         "resultados": [asdict(r) for r in resultados],
     }
     CARPETA.mkdir(parents=True, exist_ok=True)
-    (CARPETA / f"{comenzo:%Y-%m-%d_%H%M}.json").write_text(
+    nombre = f"{comenzo:%Y-%m-%d_%H%M}" + ("_sin_probar" if sin_probar else "")
+    (CARPETA / f"{nombre}.json").write_text(
         json.dumps(informe, ensure_ascii=False, indent=1), encoding="utf-8")
     fallaron = [r.clave for r in resultados if not r.ok]
+    if sin_probar:
+        logger.error("[regresion] no se pudo probar: todos los casos dieron error (%s); se reintenta",
+                     resultados[0].problemas[0])
+        return informe
     nivel = logging.INFO if not fallaron else logging.WARNING
     logger.log(nivel, "[regresion] %d de %d bien%s", bien, len(resultados),
                f"; fallaron: {', '.join(fallaron)}" if fallaron else "")
@@ -332,9 +344,17 @@ def ultima_corrida() -> datetime | None:
     fechas = []
     for archivo in CARPETA.glob("*.json"):
         try:
-            fechas.append(datetime.strptime(archivo.stem, "%Y-%m-%d_%H%M"))
-        except ValueError:
+            fecha = datetime.strptime(archivo.stem, "%Y-%m-%d_%H%M")
+            resultados = json.loads(archivo.read_text(encoding="utf-8")).get("resultados", [])
+        except (ValueError, OSError):
             continue
+        # Una corrida donde todo dio error no probo nada (ver correr): las de
+        # antes del 12/10/2026 se guardaron con el nombre normal.
+        if resultados and all(
+            (r.get("problemas") or [""])[0].startswith("error:") for r in resultados
+        ):
+            continue
+        fechas.append(fecha)
     return max(fechas) if fechas else None
 
 

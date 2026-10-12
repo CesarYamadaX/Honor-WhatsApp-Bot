@@ -30,3 +30,7 @@ pywin32==312
 # Llama a OpenRouter para transcribir notas de voz (transcripcion.py). Ya
 # entraba como dependencia de openai; se declara porque ahora se usa directo.
 httpx==0.28.1
+# Que Python confie en los certificados de Windows (proveedor.py): la red de
+# la empresa intercepta el HTTPS con un certificado suyo, y sin esto toda
+# llamada a OpenRouter fallaba con CERTIFICATE_VERIFY_FAILED (12/10/2026).
+truststore==0.10.4

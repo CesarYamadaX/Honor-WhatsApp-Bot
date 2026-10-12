@@ -56,6 +56,21 @@ def test_los_precios_ya_no_se_contestan_aqui():
     assert r.traducir(f"SELECT COUNT(*) FROM {G}.[UNICOS$]") is None
 
 
+def test_sin_resumen_los_meses_salen_de_la_copia(tmp_path):
+    # Al arrancar el resumen se borra; el aviso de "esa cadena aun no carga
+    # el mes" sigue funcionando con la copia que dejo la construccion.
+    import json
+    resumen = tmp_path / "resumen.sqlite"
+    (tmp_path / "meses_por_cadena.json").write_text(json.dumps({
+        "guardado": datetime.now().isoformat(), "meses": {"Liverpool": [[2026, 8]], "Coppel": [[2026, 9]]}}))
+    r.borrar(resumen)
+    assert (tmp_path / "meses_por_cadena.json").exists()
+    assert r.meses_por_cadena(resumen) == {"Liverpool": {(2026, 8)}, "Coppel": {(2026, 9)}}
+    (tmp_path / "meses_por_cadena.json").write_text(json.dumps({
+        "guardado": "2026-01-01T00:00:00", "meses": {"Coppel": [[2026, 1]]}}))
+    assert r.meses_por_cadena(resumen) is None  # demasiado vieja
+
+
 def test_al_arrancar_se_borra_el_resumen(tmp_path):
     viejo = tmp_path / "resumen.sqlite"
     viejo.write_bytes(b"de ayer")

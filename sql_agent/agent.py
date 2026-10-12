@@ -441,8 +441,21 @@ def cadenas_sin_el_periodo(query: str) -> str:
     filtrar [Retail]) y de un ano con meses concretos; lo demas no se
     adivina.
     """
-    if not _TODAS_LAS_CADENAS.search(query or "") or _FILTRA_CADENA.search(query):
-        return ""
+    # De que cadenas es la consulta. Visto el 12/10/2026: "cuanto vendio
+    # Honor en Liverpool en septiembre" tardo 106 s y contesto "no pude
+    # confirmar": el aviso solo miraba las consultas de todas las cadenas.
+    query = query or ""
+    if _TODAS_LAS_CADENAS.search(query) and not _FILTRA_CADENA.search(query):
+        de_la_consulta = None  # todas
+    else:
+        de_la_consulta = {
+            cadena for vista, cadena in resumen_local._CADENA_DE_LA_VISTA.items()
+            if re.search(rf"(?<![\w]){re.escape(vista)}(?![\w])", query, re.IGNORECASE)
+        }
+        if _FILTRA_CADENA.search(query):
+            de_la_consulta |= {c.title() if c != "AT&T" else c for c in acceso.cadenas_en(query)}
+        if not de_la_consulta:
+            return ""
     anios = set(_ANIO_IGUAL.findall(query))
     if len(anios) != 1:
         return ""
@@ -458,14 +471,34 @@ def cadenas_sin_el_periodo(query: str) -> str:
     if not cargados:
         return ""
     anio = int(anios.pop())
+    revisadas = {
+        c: tiene for c, tiene in cargados.items()
+        if de_la_consulta is None or c.casefold() in {x.casefold() for x in de_la_consulta}
+    }
     faltan = {}
-    for cadena, tiene in sorted(cargados.items()):
+    for cadena, tiene in sorted(revisadas.items()):
         sin = sorted(m for m in meses if (anio, m) not in tiene)
         if sin and tiene:
             ultimo = max(tiene)
             faltan[cadena] = (sin, ultimo)
     if not faltan:
         return ""
+    pedido = f"{', '.join(_MESES_ES[m - 1] for m in sorted(meses))} de {anio}"
+    # Ninguna cadena lo tiene (diciembre de 2026, pedido en octubre): no es
+    # que falten "Liverpool y Movistar", es que ese periodo no ha llegado o
+    # no se ha cargado. Visto el 12/10/2026.
+    if len(faltan) == len([t for t in revisadas.values() if t]) and all(
+        set(sin) == meses for sin, _ in faltan.values()
+    ):
+        ultimo = max(u for _, u in faltan.values())
+        return (
+            f"OJO: no hay datos de {pedido} en "
+            f"{'ninguna cadena' if de_la_consulta is None else ' ni '.join(sorted(faltan))}: "
+            "todavia no se carga" + (" (o aun no llega)" if (anio, max(meses)) > (date.today().year, date.today().month) else "")
+            + f". Lo mas reciente es {_MESES_ES[ultimo[1] - 1]} de {ultimo[0]}. Al responder dilo "
+            "asi -- no 'no pude confirmar' ni 'la consulta no devolvio datos' -- y ofrece el "
+            "ultimo mes cargado."
+        )
     detalle = "; ".join(
         f"{cadena} no tiene {', '.join(_MESES_ES[m - 1] for m in sin)} de {anio} "
         f"(lo mas reciente: {_MESES_ES[ultimo[1] - 1]} de {ultimo[0]})"
@@ -491,6 +524,23 @@ _PIDE_RETAIL_MENSUAL = re.compile(r"\[?Retail\]?\s*(?:=|LIKE)\s*N?'(SEARS|MOVIST
 _SEMANA_IGUAL = re.compile(r"\[?WEEK\]?\s*=\s*(\d{1,2})\b", re.IGNORECASE)
 
 
+def mes_de_la_semana_mensual(anio: int, semana: int) -> int:
+    """De que mes es el dato que una cadena mensual carga en esa semana.
+
+    Cargan cada mes en la semana donde cae su ULTIMO dia (2026: septiembre en
+    la 40, que va del 28/09 al 4/10). Tomar el mes del jueves decia "octubre"
+    para la semana 40 (visto el 12/10/2026).
+
+    Las semanas de estos datos van de DOMINGO a sabado: la 23 de 2026 es del
+    31/05 al 6/06 y en ella cae mayo. Con el domingo de cada semana cuadran
+    los nueve meses de Sears de 2026 (semanas 5, 9, 14, 18, 23, 27, 31, 36 y
+    40 = enero a septiembre, medido). En los dos casos -- una semana que
+    cierra un mes o una que cae entera dentro de uno -- es el mes de su
+    domingo.
+    """
+    return date.fromordinal(date.fromisocalendar(anio, semana, 1).toordinal() - 1).month
+
+
 def semana_de_cadena_mensual(query: str) -> str:
     """El aviso de que se pidio UNA semana de una cadena que reporta por mes.
 
@@ -501,6 +551,28 @@ def semana_de_cadena_mensual(query: str) -> str:
     semanas = _SEMANA_IGUAL.findall(query or "")
     if len(semanas) != 1:
         return ""
+    # Un total de TODAS las cadenas en una semana de cierre de mes: ahi caen
+    # los datos mensuales de Sears y Movistar. Visto el 12/10/2026: "cuanto
+    # vendio Honor la semana 40" dio 45 471 sin decir que 3 602 eran todo
+    # septiembre de Sears (lo explico solo al comparar con la 39).
+    if _TODAS_LAS_CADENAS.search(query) and not _FILTRA_CADENA.search(query):
+        semana = int(semanas[0])
+        anios = _ANIO_IGUAL.findall(query)
+        anio = int(anios[0]) if len(anios) == 1 else datetime.now().year
+        try:
+            domingo = date.fromordinal(date.fromisocalendar(anio, semana, 1).toordinal() - 1)
+        except ValueError:
+            return ""
+        sabado = date.fromordinal(domingo.toordinal() + 6)
+        if domingo.month == sabado.month:
+            return ""
+        return (
+            f"OJO: la semana {semana} cierra {_MESES_ES[domingo.month - 1]}, y en ella "
+            f"caen los datos de TODO {_MESES_ES[domingo.month - 1]} de Sears y Movistar "
+            "(reportan por mes, en una sola semana). Por eso esta semana sale inflada "
+            "frente a las demas: dilo al responder y, si comparas semanas, separa o "
+            "quita esas dos cadenas."
+        )
     cadenas = {c for objeto, c in _MENSUALES.items() if objeto.lower() in query.lower()}
     retail = _PIDE_RETAIL_MENSUAL.search(query)
     if retail:
@@ -511,7 +583,7 @@ def semana_de_cadena_mensual(query: str) -> str:
     anios = _ANIO_IGUAL.findall(query)
     anio = int(anios[0]) if len(anios) == 1 else datetime.now().year
     try:
-        mes = date.fromisocalendar(anio, semana, 4).month
+        mes = mes_de_la_semana_mensual(anio, semana)
     except ValueError:
         return ""
     quienes = " y ".join(sorted(cadenas))
@@ -897,6 +969,33 @@ _UNION_CON_HOMOLOGACION = re.compile(
     r"(?P<resto>.*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bJOIN\b|\bUNION\b|$)",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+_LIKE_EN_DESCRIPCION_CON_MODELO = re.compile(
+    r"\[?Material_Description\]?\s+(NOT\s+)?LIKE\b", re.IGNORECASE
+)
+
+
+def _like_en_la_vista_con_modelo(sql: str) -> str:
+    """Si busca el modelo por texto en vw_ETL_Con_Modelo, por que no, o "".
+
+    Visto el 12/10/2026: "cuanto vendio el honor x9d en coppel" termino con
+    `[Material_Description] LIKE '%X9D%'` sobre la vista con modelo: 267 s
+    para no encontrar nada (el X9D esta en el catalogo pero no tiene
+    ventas). La vista ya trae [Modelo] homologado; buscar en el texto
+    recorre la venta de todas las cadenas uniendola con el catalogo.
+    """
+    if not re.search(rf"(?<!\w){ventas_con_modelo.NOMBRE}(?!\w)", sql, re.IGNORECASE):
+        return ""
+    if not _LIKE_EN_DESCRIPCION_CON_MODELO.search(sql):
+        return ""
+    return (
+        f"No la ejecute: buscar el modelo con LIKE sobre [Material_Description] en "
+        f"{ventas_con_modelo.NOMBRE} tarda minutos (267 s medido) y no agrega nada: filtra "
+        "por [Modelo], que es el nombre homologado (como lo escribe `buscar_modelos`). Si "
+        "con [Modelo] no sale nada, ESA es la respuesta: ese modelo no tiene ventas ahi en "
+        "el periodo (o no esta homologado); dilo asi."
+    )
 
 
 def _homologacion_por_like(sql: str) -> str:
@@ -1852,6 +1951,22 @@ _PIDE_TIENDAS = re.compile(
 )
 
 
+# Que se pidio un archivo. Visto el 12/10/2026: "que marca vende mas en
+# Telcel y que lugar tiene Honor" (22 marcas, no caben en un mensaje) armo el
+# reporte entero de Telcel -- 406 048 filas de Raw_Data, 209 s -- que nadie
+# pidio. El reporte de la cadena (Datos, Raw_Data, PIVOT) es para quien pide
+# el archivo; lo demas lleva solo su resultado.
+_PIDE_ARCHIVO = re.compile(
+    r"excel|archivo|reporte|report|descarg|m[aá]nd(a|e)me|env[ií]a(me)?|xlsx|"
+    r"\bfile\b|spreadsheet|download|报表|表格|文件|导出",
+    re.IGNORECASE,
+)
+
+
+def pidio_archivo(pregunta: str) -> bool:
+    return bool(_PIDE_ARCHIVO.search(pregunta or ""))
+
+
 def pidio_detalle_de_tiendas(pregunta: str) -> bool:
     return bool(_PIDE_TIENDAS.search(pregunta or ""))
 
@@ -1934,6 +2049,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
         _tabla_cruda_para_responder(query)
         or _homologacion_mal_unida(query)
         or _homologacion_por_like(query)
+        or _like_en_la_vista_con_modelo(query)
         or _tiendas_sin_normalizar(query)
         or _crudo_con_devoluciones(query)
     )
@@ -2208,6 +2324,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
             contexto = contexto_del_resultado(
                 df, ctx.engine, query, queda, cadenas=ctx.cadenas,
                 extras=pidio_detalle_de_tiendas(ctx.pregunta),
+                de_cadena=entregar_archivo or pidio_archivo(ctx.pregunta),
             )
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo armar el contexto; va solo la tabla")
@@ -2704,6 +2821,12 @@ class SQLAgent:
              "El Magic 8 Lite de 256GB esta en $7,499 en Coppel, segun su
               pagina al 6 de octubre."
            Resalta en negritas solo la cifra principal.
+           Si la consulta salio bien y no trajo nada, ESO es la respuesta:
+           "no hay ventas del Honor X9D en Coppel en 2026", "Liverpool
+           todavia no carga septiembre". "No pude confirmar" o "no pude
+           obtener" es solo para cuando algo fallo de verdad (un error, un
+           tiempo agotado): dicho de un vacio, el usuario cree que el bot se
+           descompuso.
            No cierres ofreciendo mas datos ("¿quieres que lo abra por
            tienda?", "¿te lo comparo con el ano pasado?"): al final del
            mensaje se agregan solas, y en el idioma del usuario, dos cosas

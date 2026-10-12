@@ -20,7 +20,26 @@ clave de uno nunca viaja a la direccion del otro.
 
 from __future__ import annotations
 
+import logging
 import os
+
+# Las conexiones HTTPS confian en los certificados de WINDOWS, no solo en la
+# lista propia de Python (certifi). Visto el 12/10/2026: la red de la empresa
+# intercepta el HTTPS con un certificado suyo ("self-signed certificate in
+# certificate chain"); el revisor, la traduccion y las notas de voz fallaban
+# en esta compu, y en la del bot (openai 2.54) fallaba hasta el agente: la
+# prueba semanal dio 0 de 11 por "Connection error". El certificado de la
+# empresa esta en el almacen de Windows; truststore hace que Python lo use.
+# Se hace aqui porque todo lo que sale a internet importa este modulo antes
+# de abrir conexiones.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except Exception:  # noqa: BLE001 - sin el, como antes: certifi
+    logging.getLogger("sql_agent.proveedor").warning(
+        "No se pudo usar el almacen de certificados de Windows (truststore)", exc_info=True
+    )
 
 OPENROUTER = "https://openrouter.ai/api/v1"
 
