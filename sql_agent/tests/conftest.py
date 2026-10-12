@@ -23,6 +23,14 @@ def _sin_homologacion_real(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _sin_bienvenida(monkeypatch):
+    # Muchas pruebas mandan "hola" o miran la respuesta exacta del primer
+    # mensaje. Las de la bienvenida (test_bienvenida.py) la encienden.
+    import bienvenida
+    monkeypatch.setattr(bienvenida, "ACTIVA", False)
+
+
+@pytest.fixture(autouse=True)
 def _sin_revisor(monkeypatch):
     # El revisor de respuestas llama a un modelo por internet: en las pruebas
     # no se sale a la red. Sus pruebas (test_revisor.py) lo encienden con el

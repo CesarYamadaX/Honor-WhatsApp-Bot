@@ -108,3 +108,14 @@ def test_una_consulta_lenta_sobre_las_copias_se_corta_y_va_al_servidor(archivo, 
     consulta = f"SELECT COUNT(*) AS n FROM {G}.[HCReport] a JOIN {G}.[HCReport] b ON a.[Week] = b.[Week]"
     assert r.traducir(consulta) is not None
     assert r.consultar(consulta, archivo) is None
+
+
+def test_el_anio_y_el_mes_de_la_fecha_se_contestan_con_year_y_month():
+    # Medido: en las nueve vistas [Year]/[Month] = YEAR/MONTH([Date]) siempre.
+    q = ("SELECT YEAR([Date]) AS a, MONTH(v.[Date]) AS m, SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] v "
+         "WHERE DATEPART(year, v.[Date]) = 2026 GROUP BY YEAR([Date]), MONTH(v.[Date])")
+    local = r.traducir(q)
+    assert local is not None and "Date" not in local
+    assert "v.[Month]" in local and "v.[Year] = 2026" in local
+    # La fecha usada para otra cosa (un dia) sigue yendo al servidor.
+    assert r.traducir("SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE [Date] >= '2026-09-01'") is None

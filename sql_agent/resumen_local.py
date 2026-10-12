@@ -111,6 +111,26 @@ _COLUMNA_QUE_NO_ESTA = re.compile(
     r"(?<![\w\[])\[?(Store|Date|Day|Key\s+prices)\]?(?![\w])", re.IGNORECASE
 )
 
+# YEAR([Date]) y MONTH([Date]) son [Year] y [Month], que el resumen si tiene.
+# Medido el 12/10/2026 en las nueve vistas (30 millones de filas): [Year] y
+# [Month] coinciden SIEMPRE con el ano y el mes de [Date], y no hay [Date]
+# nula. Antes, siete consultas lentas de la bitacora iban al servidor solo
+# por pedir el ano o el mes asi (hasta 52 s).
+_PARTE_DE_LA_FECHA = re.compile(
+    r"\b(?:(YEAR|MONTH)\s*\(\s*((?:\w+\.)?)\[?Date\]?\s*\)"
+    r"|DATEPART\s*\(\s*(year|yyyy|yy|month|mm|m)\s*,\s*((?:\w+\.)?)\[?Date\]?\s*\))",
+    re.IGNORECASE,
+)
+
+
+def _sin_partes_de_la_fecha(texto: str) -> str:
+    def cambiar(m: re.Match) -> str:
+        funcion = (m.group(1) or m.group(3)).lower()
+        alias = m.group(2) or m.group(4) or ""
+        return f"{alias}[{'Year' if funcion.startswith('y') else 'Month'}]"
+    return _PARTE_DE_LA_FECHA.sub(cambiar, texto)
+
+
 # Lo que no se traduce porque daria otro numero o porque SQLite no lo tiene.
 # Una fila del resumen es un GRUPO, no una venta: contar filas, promediar o
 # tomar el minimo de [QTY] ya no significa lo mismo. Y `+` entre textos en
@@ -262,6 +282,8 @@ def traducir(query: str) -> str | None:
     if usa_ventas == usa_copias:
         return None
 
+    if usa_ventas:
+        texto = _sin_partes_de_la_fecha(texto)
     if usa_ventas and (_COLUMNA_QUE_NO_ESTA.search(texto) or _NO_SE_TRADUCE.search(texto)):
         return None
     if usa_copias:

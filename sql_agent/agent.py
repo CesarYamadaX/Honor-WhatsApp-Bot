@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterator
 
 import pandas as pd
@@ -50,6 +50,7 @@ from catalogo import (
 import acceso
 from contexto import CRUDAS, contexto_del_resultado, ficha_del_archivo
 import excel_pivot
+import promotoria
 import proveedor
 import homologacion
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
@@ -2023,6 +2024,64 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     return texto
 
 
+# Telcel tarda ~135 s en el servidor (su vista es la mas grande): mas que el
+# tope normal de una herramienta, pero sin pasarse de lo que queda.
+PLAZO_DE_PROMOTORIA = 180
+
+
+@tool
+def promotoria_contra_ventas(cadena: str, anio: int = 0, semana: int = 0, mes: int = 0) -> str:
+    """Venden mas las tiendas CON promotor que las SIN promotor? La comparacion
+    de la venta de Honor por tienda, ya hecha y siempre igual.
+
+    Usala SIEMPRE que pregunten si la promotoria se nota, si las tiendas con
+    promotor venden mas, el efecto o el impacto de los promotores, en
+    cualquier idioma. No armes el cruce con `consultar_sql`: ligar la
+    promotoria con la venta por tienda tiene reglas por cadena (nombres,
+    prefijos de Telcel, numeros de Elektra) que aqui ya estan, y el cruce a
+    mano llego a dar cifras 10 veces mas altas (12/10/2026).
+
+    `cadena`: COPPEL, TELCEL, LIVERPOOL, ELEKTRA, AT&T o SEARS (Movistar no
+    se puede: su venta no viene por tienda). `anio`, y `semana` o `mes`; sin
+    periodo, el mes pasado. Sears reporta por mes: se compara por mes.
+    """
+    ctx = _contexto_actual()
+    clave = (cadena or "").strip().upper()
+    clave = {"ATT": "AT&T", "AT T": "AT&T"}.get(clave, clave)
+    if ctx.cadenas and clave in acceso.CADENAS and clave not in ctx.cadenas:
+        return _sin_permiso(ctx, acceso.Acotada("", fuera=[clave]))
+    hoy = datetime.now().date()
+    if not semana and not mes:
+        mes_pasado = hoy.replace(day=1) - timedelta(days=1)
+        anio, mes = (anio or mes_pasado.year), mes_pasado.month
+    anio = anio or hoy.year
+    bitacora.paso(f"comparando tiendas con y sin promotor en {clave} ({anio}, "
+                  f"{'semana ' + str(semana) if semana else 'mes ' + str(mes)})", bitacora.NOTA)
+    queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - MARGEN_DE_ENTREGA)
+    try:
+        resultado = promotoria.comparar(
+            ctx.engine, clave, anio, semana=semana or None, mes=mes or None,
+            plazo=max(1, min(PLAZO_DE_PROMOTORIA, queda)),
+        )
+    except ValueError as error:
+        return str(error)
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo la comparacion de promotoria")
+        return f"No pude comparar la promotoria con la venta: {error}"
+    if resultado.con.tiendas + resultado.sin.tiendas == 0:
+        return (f"No hay promotoria registrada de {clave} en ese periodo ({resultado.periodo}). "
+                "Dilo asi y ofrece el periodo mas reciente con datos.")
+    ctx.hubo_datos = True
+    texto = promotoria.como_texto(resultado)
+    if pidio_archivo(ctx.pregunta):
+        try:
+            ctx.registrar_reporte(None, ExcelExporter.export_to_excel(resultado.tabla))
+        except Exception:  # noqa: BLE001 - el texto ya trae la comparacion
+            logger.exception("No se pudo armar el Excel de promotoria")
+    ctx.vistos.append(f"Promotoria contra venta, pedido: {clave} {resultado.periodo}:\n{texto}")
+    return texto
+
+
 @tool
 def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     """Ejecuta una consulta SELECT y devuelve los resultados al usuario.
@@ -2781,6 +2840,9 @@ class SQLAgent:
            Cualquier pregunta del inventario de Telcel (cuanto hay, como
            esta, semanas, cobertura, "para cuanto le alcanza"), en cualquier
            idioma: `semanas_de_inventario`, nunca un SELECT propio.
+           Si preguntan si las tiendas con promotor venden mas (el efecto o
+           el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
+           cruce propio de HCReport con la venta.
            Para explorar tienes tres herramientas que NO generan reporte:
            `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
            celular) y `valores_distintos` (como estan escritos los valores de una
@@ -2934,6 +2996,7 @@ class SQLAgent:
             pronosticar_ventas,
             precio_en_internet,
             semanas_de_inventario,
+            promotoria_contra_ventas,
         ]
         agente = RunnableMultiActionAgent(
             runnable=create_openai_tools_agent(self.llm, herramientas, prompt),

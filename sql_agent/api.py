@@ -19,6 +19,7 @@ from pydantic import BaseModel
 import base64
 import binascii
 
+import bienvenida
 import idioma as idiomas
 import registro_de_logs
 import resumen_local
@@ -282,21 +283,36 @@ def crear_app(
         # expira, asyncio cancela la espera pero el hilo sigue corriendo, y
         # soltar el lock antes dejaria entrar una segunda consulta del mismo
         # chat mientras la primera todavia golpea la base.
+        numero = normalizar_chat_id(chat_id)
+        cadenas_del_usuario = usuarios.cadenas_de(numero) if numero else None
+        # Antes de anotar este turno: si no tiene ninguno, es su primera vez.
+        primera_vez = diario.cuantos(chat_id) == 0
         turno = diario.comenzar(chat_id, pregunta)
         comenzo = time.monotonic()
+        # Un saludo o un "que puedes hacer?": la bienvenida con ejemplos, al
+        # instante y sin el modelo (ver bienvenida.py).
+        if bienvenida.ACTIVA and bienvenida.es_saludo(pregunta):
+            idioma_saludo = idiomas.detectar(pregunta) or idioma
+            texto = bienvenida.texto(idioma_saludo, cadenas_del_usuario)
+            diario.terminar(turno, respuesta=texto, idioma=idioma_saludo,
+                            segundos=time.monotonic() - comenzo)
+            return Respuesta(reply=texto, files=[], idioma=idioma_saludo, turno=turno.id)
         try:
             # Las cadenas se leen en cada pregunta, no al abrir la sesion:
             # un cambio en el panel vale desde el siguiente mensaje.
-            numero = normalizar_chat_id(chat_id)
             texto, archivos = sesion.agente.responder(
                 pregunta,
                 cancelacion=sesion.cancelacion,
-                cadenas=usuarios.cadenas_de(numero) if numero else None,
+                cadenas=cadenas_del_usuario,
                 # Se leen en cada pregunta: un comentario nuevo en el panel
                 # vale desde el siguiente mensaje, como las cadenas.
                 notas=notas.notas_para_el_bot(),
             )
             idioma_usado = getattr(sesion.agente, "idioma", idioma)
+            # Su primera pregunta: la respuesta y, al pie, que mas se puede
+            # preguntar. Una sola vez.
+            if primera_vez and bienvenida.ACTIVA:
+                texto = f"{texto}\n\n{bienvenida.consejo(idioma_usado, cadenas_del_usuario)}"
             diario.terminar(
                 turno,
                 respuesta=texto,
