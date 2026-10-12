@@ -45,18 +45,24 @@ def test_la_cadena_sale_del_nombre_como_en_el_servidor(archivo):
 
 
 def test_en_las_copias_si_se_cuenta_y_se_promedia(archivo):
-    df, _ = r.consultar(f"SELECT COUNT(*) AS n, AVG([Precio Venta]) AS p FROM {G}.[Prices]", archivo)
-    assert df.iloc[0].tolist() == [2, 5149.0]
+    df, _ = r.consultar(f"SELECT COUNT(*) AS n, AVG([FIXED PROMOTER]) AS p FROM {G}.[HCReport]", archivo)
+    assert df.iloc[0].tolist() == [3, 1 / 3]
 
 
-def test_las_fechas_comparan_y_vuelven_como_fechas(archivo):
-    df, _ = r.consultar(f"SELECT MAX([Día/Periodo]) AS f FROM {G}.[Prices] WHERE [Día/Periodo] >= '2026-10-01'", archivo)
-    assert pd.api.types.is_datetime64_any_dtype(df["f"]) and df["f"].iloc[0] == pd.Timestamp("2026-10-04")
-    df, _ = r.consultar(f"SELECT COUNT(*) AS n FROM {G}.[Prices] WHERE [Día/Periodo] = '2026-10-04'", archivo)
-    assert df["n"].iloc[0] == 1
-    df, _ = r.consultar(f"SELECT YEAR([Día/Periodo]) AS a, MONTH([Día/Periodo]) AS m FROM {G}.[Prices] "
-                        "GROUP BY YEAR([Día/Periodo]), MONTH([Día/Periodo])", archivo)
-    assert sorted(df["m"]) == [9, 10] and set(df["a"]) == {2026}
+def test_los_precios_ya_no_se_contestan_aqui():
+    # Se probaron el 12/10/2026 y se quitaron: el servidor ya es rapido con
+    # ellos y aqui el precio actual por modelo tardaba 4-8 s.
+    assert r.traducir(f"SELECT MAX([Día/Periodo]) FROM {G}.[Prices]") is None
+    assert r.traducir(f"SELECT COUNT(*) FROM {G}.[UNICOS$]") is None
+
+
+def test_al_arrancar_se_borra_el_resumen(tmp_path):
+    viejo = tmp_path / "resumen.sqlite"
+    viejo.write_bytes(b"de ayer")
+    (tmp_path / "resumen.construyendo").write_bytes(b"a medias")
+    r.borrar(viejo)
+    assert not viejo.exists() and not (tmp_path / "resumen.construyendo").exists()
+    r.borrar(viejo)  # sin nada que borrar, tampoco truena
 
 
 @pytest.mark.parametrize("consulta", [
@@ -73,8 +79,8 @@ def test_lo_que_daria_otra_cosa_va_al_servidor(consulta):
 
 
 def test_right_de_cero_es_vacio_como_en_sql_server(archivo):
-    df, _ = r.consultar(f"SELECT RIGHT([Retail], 0) AS a, RIGHT([Retail], 3) AS b FROM {G}.[Prices]", archivo)
-    assert df.iloc[0].tolist() == ["", "pel"]
+    df, _ = r.consultar(f"SELECT RIGHT([RetailName], 0) AS a, RIGHT([RetailName], 3) AS b FROM {G}.[CustomerStores]", archivo)
+    assert df.iloc[0].tolist() == ["", "PEL"]
 
 
 def test_una_consulta_lenta_sobre_las_copias_se_corta_y_va_al_servidor(archivo, monkeypatch):
@@ -82,8 +88,8 @@ def test_una_consulta_lenta_sobre_las_copias_se_corta_y_va_al_servidor(archivo, 
     # tardo 7.8 s (12/10/2026). Con el tope, se corta y la contesta el servidor.
     monkeypatch.setattr(r, "MAX_SEGUNDOS_EN_COPIAS", -1)
     with sqlite3.connect(archivo) as c:
-        c.executemany("INSERT INTO [Prices] VALUES ('2026-10-04', 'X', ?, 'Coppel', 'Open Market')",
-                      [(i,) for i in range(300)])
-    consulta = f"SELECT COUNT(*) AS n FROM {G}.[Prices] a JOIN {G}.[Prices] b ON a.[Retail] = b.[Retail]"
+        c.executemany("INSERT INTO [HCReport] VALUES (?, 'COPPEL X', 1, 0, 'W40', 2026)",
+                      [(f"B{i}",) for i in range(300)])
+    consulta = f"SELECT COUNT(*) AS n FROM {G}.[HCReport] a JOIN {G}.[HCReport] b ON a.[Week] = b.[Week]"
     assert r.traducir(consulta) is not None
     assert r.consultar(consulta, archivo) is None

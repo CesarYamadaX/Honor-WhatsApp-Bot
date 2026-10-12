@@ -18,15 +18,21 @@ El SQL que escribe el modelo es de SQL Server. Lo que se traduce es poco y
 mecanico (TOP -> LIMIT, ISNULL, LEN, N'...'); lo que podria dar OTRO numero
 sin dar error no se traduce, se manda al servidor (ver `_NO_SE_TRADUCE`).
 
-Desde el 12/10/2026 (pedido del usuario) tambien van, COPIADAS FILA POR FILA
-y no agrupadas, la promotoria ([HCReport]) y los precios internos ([Prices]),
-con las dos tablas con las que el bot siempre las cruza: [CustomerStores]
-(region y cadena de la tienda) y [UNICOS$] (el modelo homologado). Medido en
-la bitacora: 23 de 24 consultas de promotoria unen HCReport con
-CustomerStores, y las 9 de precios unen Prices con UNICOS$; sin esas dos,
-casi nada se contestaria aqui. Como son las filas de verdad, en ellas si se
-puede contar, promediar y tomar minimos (ver `_NO_SE_TRADUCE_EN_COPIAS`).
-Bajarlas tarda ~90 s mas (HCReport 11 s, Prices 77 s).
+Desde el 12/10/2026 (pedido del usuario) tambien va, COPIADA FILA POR FILA
+y no agrupada, la promotoria ([HCReport]) con la tabla con la que el bot
+siempre la cruza, [CustomerStores] (region y cadena de la tienda): 23 de 24
+consultas de promotoria en la bitacora las unen. Como son las filas de
+verdad, en ellas si se puede contar, promediar y tomar minimos (ver
+`_NO_SE_TRADUCE_EN_COPIAS`). Bajarlas tarda ~12 s.
+
+Los precios ([Prices], con [UNICOS$]) se probaron aqui el mismo dia y se
+quitaron: daban lo mismo que el servidor, pero el servidor ya los contesta
+en 0.2-1.5 s y el precio actual por modelo tardaba aqui 4-8 s; ademas
+pesaban ~460 MB y 77 s de construccion. Siguen yendo al servidor.
+
+El resumen se BORRA cada vez que arranca el bot (ver mantener_al_dia): un
+resumen de ayer contestaria con cifras de ayer mientras se construye el de
+hoy; sin el, esos minutos todo va al servidor.
 """
 
 from __future__ import annotations
@@ -64,7 +70,7 @@ VISTAS = _VISTAS_DE_LA_CONSOLIDADA
 CONSOLIDADA = "ETL_Consolidado_B2B"
 
 # Las tablas de [GTM BI Database] que se copian tal cual, fila por fila.
-COPIAS = ("HCReport", "Prices", "CustomerStores", "UNICOS$")
+COPIAS = ("HCReport", "CustomerStores")
 # Columnas que NO se copian: las llaves de texto de Prices (hasta 4000
 # caracteres) pesan 600 MB y el bot no contesta con ellas. Si una consulta
 # las nombra, va al servidor.
@@ -562,11 +568,32 @@ def _horas_desde_la_ultima(archivo: Path) -> float | None:
     return (datetime.now() - datetime.fromisoformat(construido)).total_seconds() / 3600
 
 
+def borrar(archivo: Path | None = None) -> None:
+    """Borra el resumen y lo que haya quedado de una construccion a medias."""
+    archivo = Path(archivo or ARCHIVO)
+    for ruta in (archivo, archivo.with_suffix(".construyendo"),
+                 archivo.with_name(archivo.name + "-journal"),
+                 archivo.with_suffix(".construyendo-journal")):
+        try:
+            ruta.unlink(missing_ok=True)
+        except OSError:
+            # Abierto por otro proceso (otro bot en la misma maquina): se
+            # queda; la construccion lo reemplaza al terminar.
+            logger.warning("No se pudo borrar %s; se reemplazara al construir", ruta)
+    logger.info("Resumen local borrado al arrancar; mientras se construye, todo va al servidor")
+
+
 def mantener_al_dia(crear_engine, archivo: Path | None = None,
                     detener: threading.Event | None = None) -> threading.Thread:
-    """Un hilo que lo construye al arrancar (si hace falta) y cada pocas horas."""
+    """Un hilo que lo construye al arrancar y cada pocas horas.
+
+    Al arrancar, primero borra el que habia (pedido el 12/10/2026): el bot se
+    apaga de noche y a la manana el resumen es del dia anterior. Mientras se
+    construye el nuevo, las consultas van al servidor.
+    """
     archivo = Path(archivo or ARCHIVO)
     detener = detener or threading.Event()
+    borrar(archivo)
 
     def ciclo():
         while not detener.is_set():
