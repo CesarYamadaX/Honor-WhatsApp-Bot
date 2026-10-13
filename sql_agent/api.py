@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import base64
+import hashlib
 import json
 import binascii
 
@@ -871,10 +872,19 @@ def crear_app(
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 
+    # La version del panel: un resumen de su pagina al arrancar el servicio.
+    # Si cambia (un git pull y un reinicio), la ventana del panel se recarga
+    # sola: la de modo aplicacion se queda abierta entre reinicios y seguia
+    # con la pagina vieja (visto el 13/10/2026 con las fotos de WhatsApp).
+    pagina_del_panel = Path(__file__).resolve().parent / "panel" / "index.html"
+    version_del_panel = (
+        hashlib.sha1(pagina_del_panel.read_bytes()).hexdigest()[:12] if pagina_del_panel.exists() else ""
+    )
+
     @app.get("/panel/actividad")
     async def actividad() -> dict:
         _solo_local()
-        return {"en_curso": diario.en_curso(), "sesiones": len(registro)}
+        return {"en_curso": diario.en_curso(), "sesiones": len(registro), "version": version_del_panel}
 
     @app.get("/panel/ultimos")
     async def ultimos(limite: int = 6) -> dict:

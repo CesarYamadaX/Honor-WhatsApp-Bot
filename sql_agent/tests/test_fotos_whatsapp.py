@@ -92,3 +92,9 @@ def test_la_pagina_del_panel_no_se_queda_en_cache(todo):
     # pagina vieja, que no sabia mostrar las fotos de WhatsApp.
     cliente, _, _ = todo
     assert cliente.get("/panel").headers["cache-control"] == "no-cache"
+
+
+def test_el_panel_sabe_su_version_para_recargarse_solo(todo):
+    cliente, _, _ = todo
+    version = cliente.get("/panel/actividad").json()["version"]
+    assert len(version) == 12

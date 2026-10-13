@@ -3162,10 +3162,19 @@ $("volver").addEventListener("click", () => {
   location.hash = "";
 });
 
+// La version del panel con la que se cargo esta pagina (la da el servicio).
+let versionDelPanel = null;
+
 async function latido() {
   if (document.hidden) return;
   try {
     const datos = await pedir("/panel/actividad");
+    // El servicio arranco con otra version del panel (un git pull y un
+    // reinicio): se recarga sola, sin que haya que hacer Ctrl+Shift+R.
+    if (datos.version) {
+      if (versionDelPanel === null) versionDelPanel = datos.version;
+      else if (datos.version !== versionDelPanel) { location.reload(); return; }
+    }
     $("foco").className = "foco vivo";
     $("texto-estado").textContent = t("en_linea", datos.sesiones);
 
