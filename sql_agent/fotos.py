@@ -18,6 +18,10 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 LADO = 256
+# La foto de perfil de WhatsApp: 640 px es la que guarda WhatsApp, asi que
+# mandarle mas no se veria mejor y mandarle la miniatura del panel se veria
+# borrosa en el telefono.
+LADO_DE_PERFIL = 640
 CALIDAD = 85
 # Tope de lo que se acepta recibir. Una foto de telefono ronda los 3 MB; mas
 # que esto es casi seguro un archivo que no tiene nada que hacer aqui.
@@ -52,36 +56,7 @@ class AlmacenDeFotos:
         """
         if self.carpeta is None:
             raise ErrorDeFoto("No hay carpeta donde guardar las fotos.")
-        if not datos:
-            raise ErrorDeFoto("No llego ninguna imagen.")
-        if len(datos) > MAX_BYTES:
-            raise ErrorDeFoto(
-                f"La imagen pesa {len(datos) / 1024 / 1024:.1f} MB y el tope son "
-                f"{MAX_BYTES // 1024 // 1024} MB."
-            )
-
-        try:
-            imagen = Image.open(io.BytesIO(datos))
-            imagen.load()
-        except (UnidentifiedImageError, OSError, ValueError) as error:
-            raise ErrorDeFoto("Ese archivo no es una imagen que pueda leer.") from error
-
-        cuadrada = _recortar_al_centro(imagen).resize((LADO, LADO), Image.LANCZOS)
-        # JPEG no tiene transparencia: lo transparente se compone sobre
-        # blanco en vez de salir negro, que es lo que hace la conversion
-        # directa a RGB.
-        if cuadrada.mode in ("RGBA", "LA", "P"):
-            cuadrada = cuadrada.convert("RGBA")
-            fondo = Image.new("RGB", cuadrada.size, (255, 255, 255))
-            fondo.paste(cuadrada, mask=cuadrada.split()[-1])
-            cuadrada = fondo
-        else:
-            cuadrada = cuadrada.convert("RGB")
-
-        buffer = io.BytesIO()
-        cuadrada.save(buffer, format="JPEG", quality=CALIDAD, optimize=True)
-        contenido = buffer.getvalue()
-
+        contenido = cuadrada_en_jpeg(datos, LADO)
         nombre = f"{numero}-{hashlib.sha256(contenido).hexdigest()[:8]}.jpg"
         self.carpeta.mkdir(parents=True, exist_ok=True)
         (self.carpeta / nombre).write_bytes(contenido)
@@ -102,6 +77,43 @@ class AlmacenDeFotos:
         archivo = self.ruta(nombre)
         if archivo is not None:
             archivo.unlink(missing_ok=True)
+
+
+def cuadrada_en_jpeg(datos: bytes, lado: int) -> bytes:
+    """Valida la imagen, la recorta al cuadrado del centro y la da en JPEG.
+
+    Lo usan las miniaturas del panel (`LADO`) y la foto de perfil que se le
+    pone al bot en WhatsApp (`LADO_DE_PERFIL`).
+    """
+    if not datos:
+        raise ErrorDeFoto("No llego ninguna imagen.")
+    if len(datos) > MAX_BYTES:
+        raise ErrorDeFoto(
+            f"La imagen pesa {len(datos) / 1024 / 1024:.1f} MB y el tope son "
+            f"{MAX_BYTES // 1024 // 1024} MB."
+        )
+
+    try:
+        imagen = Image.open(io.BytesIO(datos))
+        imagen.load()
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise ErrorDeFoto("Ese archivo no es una imagen que pueda leer.") from error
+
+    cuadrada = _recortar_al_centro(imagen).resize((lado, lado), Image.LANCZOS)
+    # JPEG no tiene transparencia: lo transparente se compone sobre
+    # blanco en vez de salir negro, que es lo que hace la conversion
+    # directa a RGB.
+    if cuadrada.mode in ("RGBA", "LA", "P"):
+        cuadrada = cuadrada.convert("RGBA")
+        fondo = Image.new("RGB", cuadrada.size, (255, 255, 255))
+        fondo.paste(cuadrada, mask=cuadrada.split()[-1])
+        cuadrada = fondo
+    else:
+        cuadrada = cuadrada.convert("RGB")
+
+    buffer = io.BytesIO()
+    cuadrada.save(buffer, format="JPEG", quality=CALIDAD, optimize=True)
+    return buffer.getvalue()
 
 
 def _recortar_al_centro(imagen: Image.Image) -> Image.Image:

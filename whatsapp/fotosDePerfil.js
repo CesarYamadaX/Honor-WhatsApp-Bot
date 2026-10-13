@@ -6,7 +6,13 @@
 // dice que no hay foto -- no tiene, o solo la ven sus contactos -- se manda
 // sin imagen y el servicio borra la que hubiera. Una falla de red no manda
 // nada: se reintenta en la siguiente vuelta.
-import { enviarFotoDelBot, enviarFotoDePerfil, fotosPendientes } from "./agentClient.js";
+import {
+  avisarCambioDeFoto,
+  cambioDeFotoDelBot,
+  enviarFotoDelBot,
+  enviarFotoDePerfil,
+  fotosPendientes,
+} from "./agentClient.js";
 
 const PAUSA_ENTRE_FOTOS_MS = 1500; // no pedirle a WhatsApp decenas de golpe
 
@@ -37,6 +43,26 @@ export function numeroDelBot(sock) {
   const id = sock?.user?.id ?? "";
   const numero = id.split("@")[0].split(":")[0];
   return /^\d{6,20}$/.test(numero) ? numero : null;
+}
+
+// Ponerle al bot la foto que se eligio en el panel (pedido el 13/10/2026).
+// La imagen ya llega cuadrada y en 640 px; Baileys la vuelve a pasar por
+// sharp antes de subirla. Devuelve true si WhatsApp la acepto.
+export async function aplicarCambioDeFoto(sock, baseUrl) {
+  const cambio = await cambioDeFotoDelBot(baseUrl);
+  if (!cambio) return false;
+  const propio = numeroDelBot(sock);
+  let error = null;
+  try {
+    if (!propio) throw new Error("todavia no se sabe el numero del bot");
+    await sock.updateProfilePicture(`${propio}@s.whatsapp.net`, Buffer.from(cambio.imagen, "base64"));
+    console.log("[whatsapp] foto de perfil del bot cambiada desde el panel");
+  } catch (falla) {
+    error = falla?.message || String(falla);
+    console.error(`[whatsapp] no pude cambiar la foto del bot: ${error}`);
+  }
+  await avisarCambioDeFoto(baseUrl, cambio.id, propio ?? "", error);
+  return error === null;
 }
 
 export async function actualizarFotos(sock, baseUrl, { pausaMs = PAUSA_ENTRE_FOTOS_MS, descargar = fetch } = {}) {

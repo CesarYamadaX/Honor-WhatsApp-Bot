@@ -29,7 +29,7 @@ import { aFormatoWhatsApp } from "./markdown.js";
 import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio, tipoDeDocumento } from "./notasDeVoz.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 import { sinLlaves } from "./silenciar.js";
-import { actualizarFotos } from "./fotosDePerfil.js";
+import { actualizarFotos, aplicarCambioDeFoto } from "./fotosDePerfil.js";
 
 // Antes de conectar: libsignal vuelca sesiones con llaves privadas por consola
 // y la consola termina en el log (ver silenciar.js).
@@ -507,16 +507,36 @@ async function atender(mensaje) {
 }
 
 const CADA_CUANTO_FOTOS_MS = 6 * 60 * 60 * 1000;
+// Cada cuanto se pregunta si el panel pidio cambiar la foto del bot. Es una
+// llamada local y casi siempre vacia; 5 s es lo que tarda en sentirse lento.
+const CADA_CUANTO_CAMBIO_DE_FOTO_MS = 5000;
 let relojDeFotos = null;
+let relojDelCambioDeFoto = null;
 
 function programarFotos(sock) {
   if (relojDeFotos) clearInterval(relojDeFotos);
+  if (relojDelCambioDeFoto) clearInterval(relojDelCambioDeFoto);
   const correr = () =>
     actualizarFotos(sock, AGENT_API_URL).catch((error) =>
       console.error(`[whatsapp] no se pudieron revisar las fotos de perfil: ${error.message}`),
     );
   setTimeout(correr, 30_000); // despues de que termine de sincronizar
   relojDeFotos = setInterval(correr, CADA_CUANTO_FOTOS_MS);
+
+  // Una subida a la vez: si WhatsApp tarda, la siguiente vuelta no empieza
+  // otra encima.
+  let cambiando = false;
+  relojDelCambioDeFoto = setInterval(async () => {
+    if (cambiando) return;
+    cambiando = true;
+    try {
+      await aplicarCambioDeFoto(sock, AGENT_API_URL);
+    } catch (error) {
+      console.error(`[whatsapp] no se pudo revisar el cambio de foto del bot: ${error.message}`);
+    } finally {
+      cambiando = false;
+    }
+  }, CADA_CUANTO_CAMBIO_DE_FOTO_MS);
 }
 
 // Reintenta arrancar() con backoff exponencial, protegido con su propio

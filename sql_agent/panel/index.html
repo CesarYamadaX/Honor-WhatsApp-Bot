@@ -212,6 +212,14 @@
   .avatar.acento { background: var(--acento); color: #fff; }
   .avatar.marca { background: var(--marca); }
   .avatar.marca.con-foto { background: var(--barra); }
+  /* Mientras WhatsApp cambia la foto del bot: un anillo que gira. */
+  #avatar-marca.cambiando::before {
+    content: ""; position: absolute; inset: -4px; border-radius: 50%;
+    border: 2px solid transparent; border-top-color: var(--acento);
+    animation: girar-recarga .9s linear infinite;
+  }
+  #avatar-marca.cambiando:hover::after { content: none; }
+  @media (prefers-reduced-motion: reduce) { #avatar-marca.cambiando::before { animation: none; border-color: var(--acento); } }
 
   /* --- buscador y solapas --- */
   .herramientas { padding: 8px 12px; display: flex; flex-direction: column; gap: 9px; flex: none; }
@@ -781,15 +789,15 @@
   <aside class="lateral">
     <div class="barra">
       <div class="marca">
-        <div class="avatar marca" id="avatar-marca" aria-hidden="true">
-          <svg width="27" height="27" viewBox="0 0 200 200">
+        <button type="button" class="avatar marca" id="avatar-marca">
+          <svg width="27" height="27" viewBox="0 0 200 200" aria-hidden="true">
             <path d="M62 148 L58 186 L104 156 Z" fill="#fff"/>
             <circle cx="100" cy="92" r="72" fill="#fff"/>
             <circle cx="68" cy="92" r="11" fill="#00B1FF"/>
             <circle cx="100" cy="92" r="11" fill="#00B1FF"/>
             <circle cx="132" cy="92" r="11" fill="#00B1FF"/>
           </svg>
-        </div>
+        </button>
         <div style="min-width:0">
           <div class="nombre" data-t="marca">Panel del bot</div>
           <div class="lugar">GTM Honor México</div>
@@ -984,6 +992,9 @@ const TEXTOS = {
     reactivar: "Reactivar",
     eliminar: "Eliminar",
     cambiar_foto: "Cambiar la foto",
+    cambiar_foto_bot: "Cambiar la foto del bot en WhatsApp",
+    confirmar_foto_bot: "La foto nueva del bot se cambia también en WhatsApp: la verán todos los que le escriben. ¿Elegir la foto?",
+    foto_bot_cambiando: "Cambiando la foto del bot en WhatsApp…",
     foto_de_whatsapp: "Foto de WhatsApp",
     ph_nombre: "Nombre y área, por ejemplo: Laura, ventas",
     pista_foto: (numero) => `${numero} · toca la foto para cambiarla`,
@@ -1151,6 +1162,9 @@ const TEXTOS = {
     reactivar: "Reactivate",
     eliminar: "Remove",
     cambiar_foto: "Change the photo",
+    cambiar_foto_bot: "Change the bot's WhatsApp photo",
+    confirmar_foto_bot: "The bot's new photo also changes in WhatsApp: everyone who writes to it will see it. Choose the photo?",
+    foto_bot_cambiando: "Changing the bot's photo in WhatsApp…",
     foto_de_whatsapp: "WhatsApp photo",
     ph_nombre: "Name and team, for example: Laura, sales",
     pista_foto: (numero) => `${numero} · tap the photo to change it`,
@@ -2392,6 +2406,8 @@ selectorDeFoto.accept = "image/*";
 selectorDeFoto.hidden = true;
 document.body.append(selectorDeFoto);
 let usuarioDeLaFoto = null;
+// En usuarioDeLaFoto, la foto que se elige es la del propio bot.
+const FOTO_DEL_BOT = { numero: "" };
 
 function elegirFoto(usuario) {
   usuarioDeLaFoto = usuario;
@@ -2410,6 +2426,7 @@ selectorDeFoto.addEventListener("change", async () => {
       lector.onerror = () => falla(new Error(t("no_pude_leer")));
       lector.readAsDataURL(archivo);
     });
+    if (usuarioDeLaFoto === FOTO_DEL_BOT) { await cambiarFotoDelBot(imagen); return; }
     await pedir("/panel/usuarios/foto", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3086,6 +3103,9 @@ function aplicarIdioma() {
   if (!recargar.firstChild) recargar.append(iconoAjuste("recargar"));
   recargar.title = t("recargar_panel");
   recargar.setAttribute("aria-label", recargar.title);
+  const marca = $("avatar-marca");
+  marca.title = t(marca.classList.contains("cambiando") ? "foto_bot_cambiando" : "cambiar_foto_bot");
+  marca.setAttribute("aria-label", marca.title);
   boton.setAttribute("aria-label", boton.title);
 
   // Lo ya pintado se rehace: la lista, el encabezado y la vista abierta.
@@ -3417,7 +3437,11 @@ async function arranque() {
 // La foto de perfil de WhatsApp del bot en lugar del icono azul (pedido el
 // 13/10/2026). Si el bot no tiene foto, o no carga, se queda el icono.
 async function ponerFotoDelBot() {
-  const { foto } = await pedir("/panel/bot");
+  const { foto, cambio } = await pedir("/panel/bot");
+  // Un cambio de foto que sigue en curso (el panel se recargo a la mitad):
+  // se vuelve a mostrar el anillo hasta que acabe.
+  const enCurso = cambio && (cambio.estado === "pendiente" || cambio.estado === "aplicando");
+  if (enCurso && !$("avatar-marca").classList.contains("cambiando")) esperarCambioDeFoto().catch(() => {});
   if (!foto) return;
   const hueco = $("avatar-marca");
   const imagen = document.createElement("img");
@@ -3428,6 +3452,48 @@ async function ponerFotoDelBot() {
     hueco.classList.add("con-foto");
   });
 }
+
+// Tocar el circulo de la marca cambia la foto del bot, tambien en WhatsApp
+// (pedido el 13/10/2026). El panel no habla con WhatsApp: el servicio guarda
+// la foto, el sidecar la sube y aqui se espera a que diga como salio.
+function marcarCambioDeFoto(cambiando) {
+  const marca = $("avatar-marca");
+  marca.classList.toggle("cambiando", cambiando);
+  marca.title = t(cambiando ? "foto_bot_cambiando" : "cambiar_foto_bot");
+  marca.setAttribute("aria-label", marca.title);
+}
+
+async function esperarCambioDeFoto() {
+  marcarCambioDeFoto(true);
+  try {
+    // El servicio da el cambio por perdido a los 2 minutos; esto solo
+    // pregunta un poco mas para enterarse.
+    for (let vuelta = 0; vuelta < 75; vuelta += 1) {
+      await new Promise((listo) => setTimeout(listo, 2000));
+      const { cambio } = await pedir("/panel/bot");
+      if (cambio?.estado === "listo") { await ponerFotoDelBot(); return; }
+      if (cambio?.estado === "error") { mostrarError(cambio.error); return; }
+      if (!cambio || !cambio.estado) return;
+    }
+  } finally {
+    marcarCambioDeFoto(false);
+  }
+}
+
+async function cambiarFotoDelBot(imagen) {
+  await pedir("/panel/bot/foto", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imagen }),
+  });
+  await esperarCambioDeFoto();
+}
+
+$("avatar-marca").addEventListener("click", () => {
+  if ($("avatar-marca").classList.contains("cambiando")) return;
+  if (!confirm(t("confirmar_foto_bot"))) return;
+  elegirFoto(FOTO_DEL_BOT);
+});
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) latido(); });
 arranque();

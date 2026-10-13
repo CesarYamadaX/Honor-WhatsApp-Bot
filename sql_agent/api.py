@@ -37,7 +37,7 @@ from calificaciones import (
     Calificaciones,
     valor_de,
 )
-from fotos import AlmacenDeFotos, ErrorDeFoto
+from fotos import LADO_DE_PERFIL, AlmacenDeFotos, ErrorDeFoto, cuadrada_en_jpeg
 from config import Config
 from session import RegistroSesiones
 import acceso
@@ -45,6 +45,11 @@ from usuarios import ErrorDeUsuarios, RegistroUsuarios, Usuario
 from config import normalizar_chat_id
 
 logger = logging.getLogger("sql_agent.api")
+
+# Cuanto se espera a que el sidecar cambie la foto del bot en WhatsApp antes de
+# decirle al panel que no se pudo. Pregunta cada 5 s y subir la foto tarda
+# unos segundos, asi que dos minutos solo se pasan si no esta corriendo.
+PLAZO_DEL_CAMBIO_DE_FOTO = 120
 
 
 # Errores del proveedor del modelo: presupuesto agotado (403), sin saldo
@@ -838,11 +843,111 @@ def crear_app(
             album.borrar(anterior)
         return dict(foto_del_bot)
 
+    # Cambiar la foto de perfil del bot desde el panel (pedido el 13/10/2026).
+    # El servicio no habla con WhatsApp: guarda el cambio, el sidecar lo
+    # recoge (pregunta cada pocos segundos), lo aplica y avisa como salio.
+    # Estados: "" nada, "pendiente" esperando al sidecar, "aplicando" el
+    # sidecar ya se lo llevo, "listo" o "error". Vive en memoria: un cambio a
+    # medias no tiene por que sobrevivir a un reinicio.
+    cambio_de_foto: dict[str, Any] = {"id": "", "imagen": b"", "estado": "", "error": "", "desde": 0.0}
+
+    def _estado_del_cambio() -> dict:
+        en_curso = cambio_de_foto["estado"] in ("pendiente", "aplicando")
+        if en_curso and time.monotonic() - cambio_de_foto["desde"] > PLAZO_DEL_CAMBIO_DE_FOTO:
+            # Sin esto el panel esperaria para siempre si el sidecar no corre
+            # o perdio la conexion con WhatsApp.
+            cambio_de_foto.update(
+                estado="error",
+                imagen=b"",
+                error="El bot no contesto: revisa que este conectado a WhatsApp e intenta de nuevo.",
+            )
+            logger.warning("Panel: la foto del bot no se cambio, el sidecar no contesto a tiempo")
+        return {"id": cambio_de_foto["id"], "estado": cambio_de_foto["estado"], "error": cambio_de_foto["error"]}
+
     @app.get("/panel/bot")
     async def ver_bot() -> dict:
         """Que foto va en el circulo de la marca ("" = el icono de siempre)."""
         _solo_local()
-        return {"foto": foto_del_bot["archivo"], "numero": foto_del_bot["numero"]}
+        return {
+            "foto": foto_del_bot["archivo"],
+            "numero": foto_del_bot["numero"],
+            "cambio": _estado_del_cambio(),
+        }
+
+    class FotoNuevaDelBot(BaseModel):
+        # Como en NuevaFoto: base64, con o sin el prefijo "data:...;base64,".
+        imagen: str
+
+    @app.post("/panel/bot/foto")
+    async def cambiar_foto_del_bot(nueva: FotoNuevaDelBot) -> dict:
+        """Pide cambiar la foto de perfil del bot en WhatsApp."""
+        _solo_local()
+        crudo = nueva.imagen.split(",", 1)[-1] if nueva.imagen.startswith("data:") else nueva.imagen
+        try:
+            datos = base64.b64decode(crudo, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise HTTPException(status_code=400, detail="La imagen llego corrupta.") from error
+        try:
+            imagen = await run_in_threadpool(cuadrada_en_jpeg, datos, LADO_DE_PERFIL)
+        except ErrorDeFoto as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        cambio_de_foto.update(
+            id=hashlib.sha256(imagen + str(time.time()).encode()).hexdigest()[:12],
+            imagen=imagen,
+            estado="pendiente",
+            error="",
+            desde=time.monotonic(),
+        )
+        logger.info("Panel: foto de perfil nueva para el bot, esperando al sidecar")
+        return _estado_del_cambio()
+
+    @app.get("/foto-bot/cambio")
+    async def cambio_pendiente_de_foto() -> dict:
+        """La foto que hay que ponerle al bot, si hay (lo pregunta el sidecar).
+
+        Se entrega una sola vez: el sidecar pregunta cada pocos segundos y
+        subir la misma foto dos veces seria un cambio de perfil de mas.
+        """
+        _solo_local()
+        _estado_del_cambio()
+        if cambio_de_foto["estado"] != "pendiente":
+            return {}
+        cambio_de_foto["estado"] = "aplicando"
+        return {"id": cambio_de_foto["id"], "imagen": base64.b64encode(cambio_de_foto["imagen"]).decode()}
+
+    class ResultadoDelCambio(BaseModel):
+        id: str
+        numero: str = ""
+        # None = WhatsApp la acepto; si no, lo que contesto.
+        error: str | None = None
+
+    @app.post("/foto-bot/cambio")
+    async def resultado_del_cambio_de_foto(resultado: ResultadoDelCambio) -> dict:
+        """Como salio el cambio de foto en WhatsApp (lo avisa el sidecar)."""
+        _solo_local()
+        if resultado.id != cambio_de_foto["id"] or cambio_de_foto["estado"] != "aplicando":
+            # Uno viejo, o uno que ya se dio por perdido: no pisa al de ahora.
+            return _estado_del_cambio()
+        if resultado.error:
+            cambio_de_foto.update(estado="error", error=f"WhatsApp no acepto la foto: {resultado.error}")
+            logger.warning("Panel: WhatsApp no acepto la foto del bot: %s", resultado.error)
+        else:
+            # La miniatura del circulo sale de la misma imagen que se subio, y
+            # no de volver a pedirsela a WhatsApp: asi se ve en cuanto acaba.
+            numero = _solo_digitos(resultado.numero) or foto_del_bot["numero"]
+            if numero:
+                archivo = album.guardar(numero, cambio_de_foto["imagen"])
+                anterior = foto_del_bot["archivo"]
+                foto_del_bot.update(archivo=archivo, numero=numero)
+                if registro_del_bot is not None:
+                    registro_del_bot.parent.mkdir(parents=True, exist_ok=True)
+                    registro_del_bot.write_text(json.dumps(foto_del_bot), encoding="utf-8")
+                if anterior and anterior != archivo:
+                    album.borrar(anterior)
+            cambio_de_foto.update(estado="listo", error="")
+            logger.info("Panel: foto de perfil del bot cambiada en WhatsApp")
+        cambio_de_foto["imagen"] = b""
+        return _estado_del_cambio()
 
     @app.post("/panel/usuarios/quitar-foto")
     async def quitar_foto(cambio: CambioUsuario) -> dict:

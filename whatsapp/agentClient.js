@@ -321,6 +321,31 @@ export function enviarFotoDelBot(baseUrl, numero, imagen) {
   return avisar(baseUrl, "/foto-bot", { numero, imagen });
 }
 
+/**
+ * La foto que el panel pidio ponerle al bot: { id, imagen (base64) }, o null.
+ * Se pregunta cada pocos segundos, asi que un fallo no se registra: con el
+ * servicio caido llenaria el log de la misma linea.
+ */
+export async function cambioDeFotoDelBot(baseUrl) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIMEOUT_AVISO_MS);
+  try {
+    const respuesta = await fetch(`${baseUrl}/foto-bot/cambio`, { signal: controlador.signal });
+    if (!respuesta.ok) return null;
+    const cambio = await respuesta.json();
+    return cambio?.id && cambio?.imagen ? cambio : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/** Como salio el cambio de foto del bot (error = null si WhatsApp la acepto). */
+export function avisarCambioDeFoto(baseUrl, id, numero, error) {
+  return avisar(baseUrl, "/foto-bot/cambio", { id, numero, error });
+}
+
 /** Que mensajes de WhatsApp forman la respuesta de un turno. */
 export function registrarEnviados(baseUrl, chatId, turno, mensajes, partes = {}) {
   return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes, partes });
