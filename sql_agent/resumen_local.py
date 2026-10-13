@@ -123,12 +123,34 @@ _PARTE_DE_LA_FECHA = re.compile(
 )
 
 
+# Un corte de periodo en el dia 1 de un mes, a medianoche, con >= o <:
+# "[Date] >= '2024-01-01'" es exactamente "de enero de 2024 en adelante", y
+# eso si se dice con [Year] y [Month]. Visto el 13/10/2026: "ventas de Coppel
+# por mes desde 2024" iba al servidor solo por ese filtro. Un corte a media
+# mes, o con > o <= (que dejan fuera o meten el dia 1), sigue yendo alla.
+_CORTE_DE_MES = re.compile(
+    r"((?:\w+\.)?)\[?Date\]?\s*(>=|<(?!=))\s*N?'(\d{4})-?(\d{2})-?01"
+    r"(?:[ T]00:00(?::00(?:\.0+)?)?)?'",
+    re.IGNORECASE,
+)
+
+
 def _sin_partes_de_la_fecha(texto: str) -> str:
     def cambiar(m: re.Match) -> str:
         funcion = (m.group(1) or m.group(3)).lower()
         alias = m.group(2) or m.group(4) or ""
         return f"{alias}[{'Year' if funcion.startswith('y') else 'Month'}]"
-    return _PARTE_DE_LA_FECHA.sub(cambiar, texto)
+
+    def corte(m: re.Match) -> str:
+        alias, operador, anio, mes = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
+        if not 1 <= mes <= 12:
+            return m.group(0)
+        a, s = f"{alias}[Year]", f"{alias}[Month]"
+        if operador == ">=":
+            return f"({a} > {anio} OR ({a} = {anio} AND {s} >= {mes}))"
+        return f"({a} < {anio} OR ({a} = {anio} AND {s} < {mes}))"
+
+    return _CORTE_DE_MES.sub(corte, _PARTE_DE_LA_FECHA.sub(cambiar, texto))
 
 
 # Lo que no se traduce porque daria otro numero o porque SQLite no lo tiene.

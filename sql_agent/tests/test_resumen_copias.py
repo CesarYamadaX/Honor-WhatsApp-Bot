@@ -118,4 +118,23 @@ def test_el_anio_y_el_mes_de_la_fecha_se_contestan_con_year_y_month():
     assert local is not None and "Date" not in local
     assert "v.[Month]" in local and "v.[Year] = 2026" in local
     # La fecha usada para otra cosa (un dia) sigue yendo al servidor.
-    assert r.traducir("SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE [Date] >= '2026-09-01'") is None
+    assert r.traducir("SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE [Date] >= '2026-09-15'") is None
+
+
+@pytest.mark.parametrize("filtro, igual", [
+    ("[Date] >= '2026-01-01' AND [Date] < '2027-01-01'", "([Year] > 2026 OR ([Year] = 2026 AND [Month] >= 1)) AND ([Year] < 2027 OR ([Year] = 2027 AND [Month] < 1))"),
+    ("v.[Date] >= N'2024-03-01 00:00:00'", "(v.[Year] > 2024 OR (v.[Year] = 2024 AND v.[Month] >= 3))"),
+])
+def test_un_corte_en_el_dia_1_se_dice_con_year_y_month(filtro, igual):
+    q = f"SELECT YEAR([Date]) AS a, SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] v WHERE {filtro} GROUP BY YEAR([Date])"
+    local = r.traducir(q)
+    assert local is not None and igual in local and "Date" not in local
+
+
+@pytest.mark.parametrize("filtro", [
+    "[Date] >= '2026-01-15'",   # a media mes
+    "[Date] > '2026-01-01'",    # deja fuera el dia 1
+    "[Date] <= '2026-02-01'",   # mete el dia 1 de febrero
+])
+def test_un_corte_que_no_cae_en_el_mes_va_al_servidor(filtro):
+    assert r.traducir(f"SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_COPPEL] WHERE {filtro}") is None

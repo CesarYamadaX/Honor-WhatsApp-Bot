@@ -114,7 +114,7 @@ class TestQueMandaAlServidor:
     @pytest.mark.parametrize("query", [
         # Columnas que el resumen no tiene.
         "SELECT [Store], SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Sears] GROUP BY [Store]",
-        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Sears] WHERE [Date] >= '2026-08-01'",
+        "SELECT SUM([QTY]) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Sears] WHERE [Date] >= '2026-08-15'",
         "SELECT [Key prices] FROM [RAW_DATA_B2B].dbo.[vw_ETL_Sears]",
         # Una fila del resumen es un grupo, no una venta.
         "SELECT COUNT(*) FROM [RAW_DATA_B2B].dbo.[vw_ETL_Sears]",
