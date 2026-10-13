@@ -636,7 +636,10 @@ def crear_app(
         archivo = Path(__file__).resolve().parent / "panel" / "index.html"
         if not archivo.exists():
             raise HTTPException(status_code=404, detail="Falta panel/index.html")
-        return FileResponse(archivo)
+        # Que el navegador la pida siempre: sin esto podia seguir usando la
+        # pagina vieja horas despues de un git pull. Visto el 13/10/2026: las
+        # fotos de WhatsApp ya estaban guardadas y el panel no las mostraba.
+        return FileResponse(archivo, headers={"Cache-Control": "no-cache"})
 
     @app.get("/panel/icono/{nombre}")
     async def ver_icono(nombre: str) -> Any:

@@ -2942,8 +2942,15 @@ function pintarLog(alFinal = false) {
 
 /* -------------------------------------------------------------------- datos */
 
-async function cargarUsuarios() {
+// Con `siCambio`, la relectura periodica: si nada cambio no se repinta nada
+// (repintar cada 30 s sin motivo haria parpadear la lista).
+let firmaUsuarios = "";
+
+async function cargarUsuarios({ siCambio = false } = {}) {
   const datos = await pedir("/panel/usuarios");
+  const firma = JSON.stringify(datos.usuarios);
+  if (siCambio && firma === firmaUsuarios) return;
+  firmaUsuarios = firma;
   cacheUsuarios = datos.usuarios;
   cacheCadenas = datos.cadenas || [];
   // En la pestaña, los suspendidos: los activos ya se ven en la lista y
@@ -2952,6 +2959,14 @@ async function cargarUsuarios() {
   if (vista === "usuarios") pintarPersonas();
   if (solapa === "usuarios") pintarLista();
   pintarResumen();
+  if (siCambio) {
+    // Lo que cambia solo (una foto de WhatsApp nueva) se ve tambien en la
+    // lista de chats y en el encabezado de la conversacion abierta.
+    if (solapa === "chats") pintarLista();
+    if (vista === "chat" && chatElegido) {
+      encabezado($("titulo-principal").textContent, $("subtitulo-principal").textContent, chatElegido);
+    }
+  }
 }
 
 async function cargarChats() {
@@ -3173,6 +3188,10 @@ async function latido() {
     if (latidosDesdeDias >= 15) {
       latidosDesdeDias = 0;
       await cargarDias();
+      // Las fotos de WhatsApp llegan solas (las trae el sidecar unos segundos
+      // despues de conectar): sin releer, no se veian hasta recargar.
+      if (!editando) await cargarUsuarios({ siCambio: true }).catch(() => {});
+      if (!$("avatar-marca").classList.contains("con-foto")) ponerFotoDelBot().catch(() => {});
     }
     if (vista === "chat" && enCursoPorChat.has(chatElegido)) {
       $("subtitulo-principal").textContent = t("consultando");

@@ -85,3 +85,10 @@ def test_la_foto_del_bot_va_en_la_marca_y_sobrevive_al_reinicio(tmp_path):
         assert cliente.get("/panel/bot").json()["foto"] == foto
         cliente.post("/foto-bot", json={"numero": "5215500001111", "imagen": None})
         assert cliente.get("/panel/bot").json()["foto"] == "" and not _existe(album, foto)
+
+
+def test_la_pagina_del_panel_no_se_queda_en_cache(todo):
+    # Visto el 13/10/2026: despues del pull el navegador seguia con la
+    # pagina vieja, que no sabia mostrar las fotos de WhatsApp.
+    cliente, _, _ = todo
+    assert cliente.get("/panel").headers["cache-control"] == "no-cache"
