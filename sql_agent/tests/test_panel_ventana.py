@@ -96,3 +96,15 @@ class TestNoAbrirDosVeces:
 
         monkeypatch.setattr(panel.subprocess, "run", revienta)
         assert not panel.ya_esta_abierta("http://127.0.0.1:8000/panel")
+
+
+def test_al_abrir_la_ventana_se_tira_su_cache_y_no_la_sesion(tmp_path):
+    # Visto el 13/10/2026: la ventana seguia con la pagina de las 8:00
+    # despues de un git pull y dos reinicios.
+    for nombre in ("Cache/Cache_Data", "Code Cache/js", "Local Storage"):
+        (tmp_path / "Default" / nombre).mkdir(parents=True)
+        (tmp_path / "Default" / nombre / "f_0001").write_text("x")
+    panel.borrar_cache(tmp_path)
+    assert not (tmp_path / "Default" / "Cache").exists()
+    assert not (tmp_path / "Default" / "Code Cache").exists()
+    assert (tmp_path / "Default" / "Local Storage" / "f_0001").exists()

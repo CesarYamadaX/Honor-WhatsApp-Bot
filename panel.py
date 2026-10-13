@@ -77,6 +77,19 @@ def ya_esta_abierta(url: str) -> bool:
     return marca in (salida.stdout or "")
 
 
+# La cache de la ventana, que se borra al abrirla. Visto el 13/10/2026: la
+# ventana guardo la pagina del panel a las 8:00 y siguio mostrandola despues
+# de un git pull y dos reinicios, sin volver a pedirla -- y esa version no
+# sabia mostrar las fotos de WhatsApp. El perfil (sesion, tamano de ventana)
+# se queda; solo se tira lo que el navegador guardo de las paginas.
+_CACHES_DE_LA_VENTANA = ("Cache", "Code Cache", "GPUCache", "Service Worker")
+
+
+def borrar_cache(perfil: Path) -> None:
+    for nombre in _CACHES_DE_LA_VENTANA:
+        shutil.rmtree(perfil / "Default" / nombre, ignore_errors=True)
+
+
 def abrir(url: str) -> str:
     """Abre el panel. Devuelve como se abrio, para poder decirlo."""
     navegador = navegador_para_app()
@@ -89,6 +102,9 @@ def abrir(url: str) -> str:
     # el panel dentro de su historial.
     perfil = RAIZ / "sql_agent" / "datos" / "ventana"
     perfil.mkdir(parents=True, exist_ok=True)
+    # Solo se llega aqui con la ventana cerrada (ver ya_esta_abierta), asi
+    # que nadie tiene la cache abierta.
+    borrar_cache(perfil)
     subprocess.Popen(
         [
             navegador,
