@@ -29,6 +29,7 @@ import { aFormatoWhatsApp } from "./markdown.js";
 import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio, tipoDeDocumento } from "./notasDeVoz.js";
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 import { sinLlaves } from "./silenciar.js";
+import { actualizarFotos } from "./fotosDePerfil.js";
 
 // Antes de conectar: libsignal vuelca sesiones con llaves privadas por consola
 // y la consola termina en el log (ver silenciar.js).
@@ -505,6 +506,19 @@ async function atender(mensaje) {
   }
 }
 
+const CADA_CUANTO_FOTOS_MS = 6 * 60 * 60 * 1000;
+let relojDeFotos = null;
+
+function programarFotos(sock) {
+  if (relojDeFotos) clearInterval(relojDeFotos);
+  const correr = () =>
+    actualizarFotos(sock, AGENT_API_URL).catch((error) =>
+      console.error(`[whatsapp] no se pudieron revisar las fotos de perfil: ${error.message}`),
+    );
+  setTimeout(correr, 30_000); // despues de que termine de sincronizar
+  relojDeFotos = setInterval(correr, CADA_CUANTO_FOTOS_MS);
+}
+
 // Reintenta arrancar() con backoff exponencial, protegido con su propio
 // catch. Se usa tanto para reconexiones (tras un "close") como para el
 // arranque inicial: un fallo aqui (disco lleno, credenciales a medio
@@ -568,6 +582,9 @@ async function arrancar() {
 
       if (connection === "open") {
         console.log("[whatsapp] conectado");
+        // Las fotos de perfil para el panel: al conectar y cada 6 horas (el
+        // servicio solo devuelve a quien no se reviso en 24 h).
+        programarFotos(sock);
         intentosReconexion = 0;
       }
 

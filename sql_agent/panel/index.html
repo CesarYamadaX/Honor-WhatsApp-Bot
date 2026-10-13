@@ -195,6 +195,7 @@
     font-size: 13px; font-weight: 600; letter-spacing: .01em;
   }
   .avatar.chico { width: 38px; height: 38px; font-size: 12px; }
+  .avatar-principal { flex: none; display: flex; }
   .avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
   /* En la ficha del usuario el avatar se puede tocar para cambiar la foto. */
   button.avatar { padding: 0; border: none; cursor: pointer; position: relative; }
@@ -828,7 +829,7 @@
       <button class="volver" id="volver" type="button" data-t-aria="volver">
         <svg width="24" height="24" viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg>
       </button>
-      <div class="avatar chico" id="avatar-principal" aria-hidden="true" hidden></div>
+      <div class="avatar-principal" id="avatar-principal" hidden></div>
       <div style="min-width:0">
         <div class="nombre" id="titulo-principal" data-t="marca">Panel del bot</div>
         <div class="lugar" id="subtitulo-principal" data-t="elige">Elige una conversación</div>
@@ -977,6 +978,7 @@ const TEXTOS = {
     reactivar: "Reactivar",
     eliminar: "Eliminar",
     cambiar_foto: "Cambiar la foto",
+    foto_de_whatsapp: "Foto de WhatsApp",
     ph_nombre: "Nombre y área, por ejemplo: Laura, ventas",
     pista_foto: (numero) => `${numero} · toca la foto para cambiarla`,
     puede_ver: "Puede ver",
@@ -1142,6 +1144,7 @@ const TEXTOS = {
     reactivar: "Reactivate",
     eliminar: "Remove",
     cambiar_foto: "Change the photo",
+    foto_de_whatsapp: "WhatsApp photo",
     ph_nombre: "Name and team, for example: Laura, sales",
     pista_foto: (numero) => `${numero} · tap the photo to change it`,
     puede_ver: "Can see",
@@ -1420,8 +1423,12 @@ function palomas(rojas) {
   return svg;
 }
 
-function avatar(numero, clase = "", foto = "") {
-  const nodo = elemento("div", `avatar ${clase}`.trim());
+// La foto de alguien: la que se subio en el panel y, si no, la de su perfil
+// de WhatsApp (la trae el sidecar). Pedido el 13/10/2026.
+const fotoDe = (usuario) => usuario?.foto || usuario?.foto_whatsapp || "";
+
+function avatar(numero, clase = "", foto = "", etiqueta = "div") {
+  const nodo = elemento(etiqueta, `avatar ${clase}`.trim());
   if (foto) {
     const imagen = document.createElement("img");
     imagen.src = `/panel/foto/${encodeURIComponent(foto)}`;
@@ -1512,7 +1519,7 @@ function pintarListaChats(caja) {
       elemento("span", "globo", String(chat.turnos)),
     );
     centro.append(arriba, abajo);
-    fila.append(avatar(chat.chat_id, "", ficha?.foto), centro);
+    fila.append(avatar(chat.chat_id, "", fotoDe(ficha)), centro);
     fila.addEventListener("click", () => abrirChat(chat.chat_id).catch((e) => mostrarError(e.message)));
     caja.append(fila);
   }
@@ -1563,7 +1570,7 @@ function filaDeChat(chat, { fragmento, coincidencias, cuando } = {}) {
   abajo.append(previa, elemento("span", "globo", String(coincidencias ?? chat.turnos ?? "")));
   const centro = elemento("div", "centro");
   centro.append(arriba, abajo);
-  fila.append(avatar(chat.chat_id, "", ficha?.foto), centro);
+  fila.append(avatar(chat.chat_id, "", fotoDe(ficha)), centro);
   fila.addEventListener("click", () => {
     resaltar = fragmento ? busqueda : "";
     abrirChat(chat.chat_id).catch((e) => mostrarError(e.message));
@@ -1668,7 +1675,7 @@ function pintarListaUsuarios(caja) {
       elemento("span", `pastilla ${usuario.estado}`, t("estado")[usuario.estado] || usuario.estado),
     );
     centro.append(arriba, abajo);
-    fila.append(avatar(usuario.numero, "", usuario.foto), centro);
+    fila.append(avatar(usuario.numero, "", fotoDe(usuario)), centro);
     fila.addEventListener("click", abrirUsuarios);
     caja.append(fila);
   }
@@ -1696,7 +1703,17 @@ function encabezado(titulo, subtitulo, numeroParaAvatar) {
   hueco.replaceChildren();
   if (numeroParaAvatar) {
     const ficha = fichaDe(numeroParaAvatar);
-    hueco.append(avatar(numeroParaAvatar, "chico", ficha?.foto));
+    if (ficha) {
+      // Tocar la foto la cambia, igual que en la ficha del usuario.
+      const boton = avatar(numeroParaAvatar, "chico", fotoDe(ficha), "button");
+      boton.type = "button";
+      boton.title = t("cambiar_foto");
+      boton.setAttribute("aria-label", t("cambiar_foto"));
+      boton.addEventListener("click", () => elegirFoto(ficha));
+      hueco.append(boton);
+    } else {
+      hueco.append(avatar(numeroParaAvatar, "chico", ""));
+    }
   }
 }
 
@@ -2141,7 +2158,12 @@ function fichaEditable(usuario) {
   retrato.type = "button";
   retrato.title = t("cambiar_foto");
   retrato.setAttribute("aria-label", t("cambiar_foto"));
-  retrato.append(avatar(usuario.numero, "", usuario.foto), elemento("span", null, t("foto")));
+  // Si la que se ve es la de WhatsApp, se dice: "Quitar foto" no aparece
+  // porque no hay ninguna subida que quitar.
+  retrato.append(
+    avatar(usuario.numero, "", fotoDe(usuario)),
+    elemento("span", null, t(!usuario.foto && usuario.foto_whatsapp ? "foto_de_whatsapp" : "foto")),
+  );
   retrato.addEventListener("click", () => elegirFoto(usuario));
   columnaFoto.append(retrato);
   if (usuario.foto) {
@@ -2241,7 +2263,7 @@ function fichaDeUsuario(usuario) {
     );
   }
 
-  fila.append(avatar(usuario.numero, "", usuario.foto), datos, acciones);
+  fila.append(avatar(usuario.numero, "", fotoDe(usuario)), datos, acciones);
   return fila;
 }
 
@@ -2386,6 +2408,9 @@ selectorDeFoto.addEventListener("change", async () => {
       body: JSON.stringify({ numero: usuarioDeLaFoto.numero, imagen }),
     });
     await cargarUsuarios();
+    if (vista === "chat" && chatElegido) {
+      encabezado($("titulo-principal").textContent, $("subtitulo-principal").textContent, chatElegido);
+    }
   } catch (error) {
     mostrarError(error.message);
   }

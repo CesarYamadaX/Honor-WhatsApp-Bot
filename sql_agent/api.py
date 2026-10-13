@@ -762,6 +762,46 @@ def crear_app(
         logger.info("Panel: foto nueva para %s", cambio.numero)
         return resultado
 
+    class FotoDeWhatsApp(BaseModel):
+        numero: str
+        # En base64; None = no tiene foto o no la deja ver (privacidad).
+        imagen: str | None = None
+
+    @app.get("/fotos/pendientes")
+    async def fotos_pendientes() -> dict:
+        """A quien le toca revisar la foto de perfil (lo pregunta el sidecar)."""
+        _solo_local()
+        return {"numeros": await run_in_threadpool(usuarios.pendientes_de_foto)}
+
+    @app.post("/foto-whatsapp")
+    async def foto_de_whatsapp(foto: FotoDeWhatsApp) -> dict:
+        """La foto de perfil de WhatsApp de un usuario, que trae el sidecar.
+
+        Se guarda aparte de la que se sube en el panel (`foto`), que manda.
+        Sin imagen se borra la que habia: la quito de su perfil, o ya no la
+        deja ver.
+        """
+        _solo_local()
+        numero = _solo_digitos(foto.numero)
+        usuario = usuarios.obtener(numero)
+        if usuario is None:
+            raise HTTPException(status_code=404, detail="No es un usuario del bot")
+        archivo = ""
+        if foto.imagen:
+            try:
+                archivo = album.guardar(numero, base64.b64decode(foto.imagen, validate=True))
+            except (binascii.Error, ValueError, ErrorDeFoto) as error:
+                raise HTTPException(status_code=400, detail=f"La foto no sirve: {error}") from error
+        anterior = usuario.foto_whatsapp
+        resultado = _respuesta_de_usuario(usuarios.poner_foto_whatsapp, numero, archivo)
+        # Mismo contenido, mismo nombre: solo se borra si cambio, y nunca la
+        # que se subio a mano.
+        if anterior and anterior not in (archivo, usuario.foto):
+            album.borrar(anterior)
+        if archivo != anterior:
+            logger.info("Foto de WhatsApp %s para %s", "nueva" if archivo else "quitada", numero)
+        return resultado
+
     @app.post("/panel/usuarios/quitar-foto")
     async def quitar_foto(cambio: CambioUsuario) -> dict:
         _solo_local()

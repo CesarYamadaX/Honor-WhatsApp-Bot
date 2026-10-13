@@ -296,6 +296,26 @@ async function avisar(baseUrl, ruta, cuerpo) {
   }
 }
 
+/** A quien le toca revisar la foto de perfil de WhatsApp. [] si no contesta. */
+export async function fotosPendientes(baseUrl) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIMEOUT_AVISO_MS);
+  try {
+    const respuesta = await fetch(`${baseUrl}/fotos/pendientes`, { signal: controlador.signal });
+    return respuesta.ok ? (await respuesta.json()).numeros ?? [] : [];
+  } catch (error) {
+    console.error(`[agentClient] no pude pedir las fotos pendientes: ${error.message}`);
+    return [];
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/** La foto de perfil de un usuario (base64), o null si no tiene o es privada. */
+export function enviarFotoDePerfil(baseUrl, numero, imagen) {
+  return avisar(baseUrl, "/foto-whatsapp", { numero, imagen });
+}
+
 /** Que mensajes de WhatsApp forman la respuesta de un turno. */
 export function registrarEnviados(baseUrl, chatId, turno, mensajes, partes = {}) {
   return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes, partes });

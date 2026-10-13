@@ -78,6 +78,12 @@ class Usuario:
     # se lee entero en cada refresco del panel y se edita a mano cuando hace
     # falta, y un base64 de 30 KB por usuario arruina las dos cosas.
     foto: str = ""
+    # La foto de perfil de WhatsApp, que trae el sidecar (pedido el
+    # 13/10/2026). Aparte de `foto`, la que se sube a mano: esa manda, y si
+    # se quita vuelve a verse esta. `foto_revisada` es cuando se pregunto por
+    # ultima vez, para no preguntar en cada refresco.
+    foto_whatsapp: str = ""
+    foto_revisada: str = ""
     nota: str = ""
     # Las cadenas que puede ver (claves de acceso.CADENAS). Vacio = todas,
     # que es como estaba todo el mundo antes de que esto existiera.
@@ -259,6 +265,26 @@ class RegistroUsuarios:
 
     def quitar_foto(self, crudo: str) -> Usuario:
         return self._cambiar(crudo, foto="")
+
+    def poner_foto_whatsapp(self, crudo: str, archivo: str) -> Usuario:
+        """La de su perfil de WhatsApp; vacio si no tiene o no se deja ver."""
+        return self._cambiar(crudo, foto_whatsapp=archivo, foto_revisada=_ahora())
+
+    def pendientes_de_foto(self, horas: float = 24) -> list[str]:
+        """Los activos cuya foto de WhatsApp no se ha revisado en `horas`."""
+        limite = datetime.now().timestamp() - horas * 3600
+        with self._candado:
+            pendientes = []
+            for usuario in self._usuarios.values():
+                if usuario.estado != ACTIVO:
+                    continue
+                try:
+                    revisada = datetime.fromisoformat(usuario.foto_revisada).timestamp()
+                except ValueError:
+                    revisada = 0
+                if revisada < limite:
+                    pendientes.append(usuario.numero)
+            return pendientes
 
     def suspender(self, crudo: str, nota: str = "") -> Usuario:
         """Le quita el acceso hasta que alguien lo reactive."""
