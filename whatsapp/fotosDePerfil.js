@@ -6,7 +6,7 @@
 // dice que no hay foto -- no tiene, o solo la ven sus contactos -- se manda
 // sin imagen y el servicio borra la que hubiera. Una falla de red no manda
 // nada: se reintenta en la siguiente vuelta.
-import { enviarFotoDePerfil, fotosPendientes } from "./agentClient.js";
+import { enviarFotoDelBot, enviarFotoDePerfil, fotosPendientes } from "./agentClient.js";
 
 const PAUSA_ENTRE_FOTOS_MS = 1500; // no pedirle a WhatsApp decenas de golpe
 
@@ -32,7 +32,24 @@ export async function traerFoto(sock, numero, descargar = fetch) {
   return { numero, imagen: Buffer.from(await respuesta.arrayBuffer()).toString("base64") };
 }
 
+// El numero del propio bot: "5215512345678:12@s.whatsapp.net" -> "5215512345678".
+export function numeroDelBot(sock) {
+  const id = sock?.user?.id ?? "";
+  const numero = id.split("@")[0].split(":")[0];
+  return /^\d{6,20}$/.test(numero) ? numero : null;
+}
+
 export async function actualizarFotos(sock, baseUrl, { pausaMs = PAUSA_ENTRE_FOTOS_MS, descargar = fetch } = {}) {
+  // Primero la del bot, para el circulo de la marca del panel.
+  const propio = numeroDelBot(sock);
+  if (propio) {
+    try {
+      const { imagen } = await traerFoto(sock, propio, descargar);
+      await enviarFotoDelBot(baseUrl, propio, imagen);
+    } catch (error) {
+      console.error(`[whatsapp] no pude traer la foto del bot: ${error.message}`);
+    }
+  }
   const numeros = await fotosPendientes(baseUrl);
   let revisadas = 0;
   for (const numero of numeros) {

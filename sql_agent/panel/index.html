@@ -207,6 +207,7 @@
   button.avatar:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   .avatar.acento { background: var(--acento); color: #fff; }
   .avatar.marca { background: var(--marca); }
+  .avatar.marca.con-foto { background: var(--barra); }
 
   /* --- buscador y solapas --- */
   .herramientas { padding: 8px 12px; display: flex; flex-direction: column; gap: 9px; flex: none; }
@@ -776,7 +777,7 @@
   <aside class="lateral">
     <div class="barra">
       <div class="marca">
-        <div class="avatar marca" aria-hidden="true">
+        <div class="avatar marca" id="avatar-marca" aria-hidden="true">
           <svg width="27" height="27" viewBox="0 0 200 200">
             <path d="M62 148 L58 186 L104 156 Z" fill="#fff"/>
             <circle cx="100" cy="92" r="72" fill="#fff"/>
@@ -3338,6 +3339,9 @@ async function arranque() {
     mostrarError(error.message);
   }
 
+  // La foto de perfil del bot en el circulo de la marca; sin ella, el icono.
+  ponerFotoDelBot().catch(() => {});
+
   // El contador de errores de la pestaña Logs se ve desde el principio. Que
   // falle no puede tumbar el resto del panel.
   await cargarDias().catch(() => {});
@@ -3359,6 +3363,21 @@ async function arranque() {
 
   await latido();
   setInterval(latido, 2000);
+}
+
+// La foto de perfil de WhatsApp del bot en lugar del icono azul (pedido el
+// 13/10/2026). Si el bot no tiene foto, o no carga, se queda el icono.
+async function ponerFotoDelBot() {
+  const { foto } = await pedir("/panel/bot");
+  if (!foto) return;
+  const hueco = $("avatar-marca");
+  const imagen = document.createElement("img");
+  imagen.src = `/panel/foto/${encodeURIComponent(foto)}`;
+  imagen.alt = "";
+  imagen.addEventListener("load", () => {
+    hueco.replaceChildren(imagen);
+    hueco.classList.add("con-foto");
+  });
 }
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) latido(); });

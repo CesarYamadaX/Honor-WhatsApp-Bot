@@ -316,6 +316,11 @@ export function enviarFotoDePerfil(baseUrl, numero, imagen) {
   return avisar(baseUrl, "/foto-whatsapp", { numero, imagen });
 }
 
+/** La foto de perfil del propio bot (base64), o null si no tiene. */
+export function enviarFotoDelBot(baseUrl, numero, imagen) {
+  return avisar(baseUrl, "/foto-bot", { numero, imagen });
+}
+
 /** Que mensajes de WhatsApp forman la respuesta de un turno. */
 export function registrarEnviados(baseUrl, chatId, turno, mensajes, partes = {}) {
   return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes, partes });

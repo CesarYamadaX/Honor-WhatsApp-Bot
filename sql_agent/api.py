@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import base64
+import json
 import binascii
 
 import bienvenida
@@ -801,6 +802,43 @@ def crear_app(
         if archivo != anterior:
             logger.info("Foto de WhatsApp %s para %s", "nueva" if archivo else "quitada", numero)
         return resultado
+
+    # La foto de perfil del propio bot, para el circulo de la marca del panel
+    # (pedido el 13/10/2026). Se recuerda en un JSON junto a las fotos, para
+    # que sobreviva a un reinicio antes de que el sidecar vuelva a traerla.
+    foto_del_bot = {"archivo": "", "numero": ""}
+    registro_del_bot = album.carpeta / "bot.json" if album.carpeta else None
+    if registro_del_bot is not None and registro_del_bot.exists():
+        try:
+            foto_del_bot.update(json.loads(registro_del_bot.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+
+    @app.post("/foto-bot")
+    async def poner_foto_del_bot(foto: FotoDeWhatsApp) -> dict:
+        """La foto de perfil del numero del bot, que trae el sidecar."""
+        _solo_local()
+        numero = _solo_digitos(foto.numero)
+        archivo = ""
+        if foto.imagen:
+            try:
+                archivo = album.guardar(numero, base64.b64decode(foto.imagen, validate=True))
+            except (binascii.Error, ValueError, ErrorDeFoto) as error:
+                raise HTTPException(status_code=400, detail=f"La foto no sirve: {error}") from error
+        anterior = foto_del_bot["archivo"]
+        foto_del_bot.update(archivo=archivo, numero=numero)
+        if registro_del_bot is not None:
+            registro_del_bot.parent.mkdir(parents=True, exist_ok=True)
+            registro_del_bot.write_text(json.dumps(foto_del_bot), encoding="utf-8")
+        if anterior and anterior != archivo:
+            album.borrar(anterior)
+        return dict(foto_del_bot)
+
+    @app.get("/panel/bot")
+    async def ver_bot() -> dict:
+        """Que foto va en el circulo de la marca ("" = el icono de siempre)."""
+        _solo_local()
+        return {"foto": foto_del_bot["archivo"], "numero": foto_del_bot["numero"]}
 
     @app.post("/panel/usuarios/quitar-foto")
     async def quitar_foto(cambio: CambioUsuario) -> dict:

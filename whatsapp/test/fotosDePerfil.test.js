@@ -21,3 +21,9 @@ test("sin foto devuelve imagen null; la red caida lanza para reintentar", async 
   assert.deepEqual(await traerFoto({ profilePictureUrl: async () => { throw privada; } }, "1"), { numero: "1", imagen: null });
   await assert.rejects(traerFoto({ profilePictureUrl: async () => { throw new Error("Timed Out"); } }, "1"));
 });
+
+test("el numero del bot sale de su propio id", async () => {
+  const { numeroDelBot } = await import("../fotosDePerfil.js");
+  assert.equal(numeroDelBot({ user: { id: "5215512345678:12@s.whatsapp.net" } }), "5215512345678");
+  assert.equal(numeroDelBot({}), null);
+});

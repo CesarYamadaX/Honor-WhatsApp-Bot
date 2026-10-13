@@ -68,3 +68,20 @@ def test_la_foto_subida_a_mano_no_se_toca(todo):
 def test_un_numero_que_no_es_usuario_no_guarda_nada(todo):
     cliente, _, _ = todo
     assert cliente.post("/foto-whatsapp", json={"numero": "5219999999999", "imagen": _png("red")}).status_code == 404
+
+
+def test_la_foto_del_bot_va_en_la_marca_y_sobrevive_al_reinicio(tmp_path):
+    usuarios = RegistroUsuarios(tmp_path / "u.json", semilla=[NUMERO])
+    album = AlmacenDeFotos(tmp_path / "fotos")
+    app = crear_app(_config(), lambda: AgenteFalso("ok"), usuarios, Bitacora(tmp_path / "b"), album)
+    with TestClient(app) as cliente:
+        assert cliente.get("/panel/bot").json()["foto"] == ""
+        cliente.post("/foto-bot", json={"numero": "5215500001111", "imagen": _png("red")})
+        foto = cliente.get("/panel/bot").json()["foto"]
+        assert foto and _existe(album, foto)
+    # Otro arranque, antes de que el sidecar la vuelva a traer: la recuerda.
+    app = crear_app(_config(), lambda: AgenteFalso("ok"), usuarios, Bitacora(tmp_path / "b"), album)
+    with TestClient(app) as cliente:
+        assert cliente.get("/panel/bot").json()["foto"] == foto
+        cliente.post("/foto-bot", json={"numero": "5215500001111", "imagen": None})
+        assert cliente.get("/panel/bot").json()["foto"] == "" and not _existe(album, foto)
