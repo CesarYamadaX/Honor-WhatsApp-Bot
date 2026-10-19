@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Iterator
 
 import pandas as pd
@@ -672,6 +673,11 @@ class Reporte:
     # (columna, total) de lo que trae: lo que se dice si el mensaje no da
     # ninguna cifra (ver responder).
     principal: tuple[str, float] | None = None
+    # La cadena de la que es ("Coppel"), si el resultado es de una sola o de
+    # pocas; y sus columnas. Con eso, cuando se piden varios archivos, se
+    # sabe que un reporte rehecho reemplaza al anterior del mismo tema.
+    tema: str | None = None
+    columnas: frozenset[str] = frozenset()
 
     @property
     def con_grafica(self) -> bool:
@@ -728,6 +734,8 @@ class ContextoPeticion:
     # Todos los reportes de la vuelta, para escoger al final (entregar_reporte)
     # el de la consulta con la que se contesto.
     reportes: list[Reporte] = field(default_factory=list)
+    # Los que se entregaron, cuando se pidieron varios archivos.
+    entregados: list[Reporte] = field(default_factory=list)
 
     def registrar_reporte(
         self,
@@ -735,8 +743,11 @@ class ContextoPeticion:
         cifras: frozenset[int] = frozenset(),
         pivotes: list[tuple[str, str, dict, str]] | None = None,
         principal: tuple[str, float] | None = None,
+        tema: str | None = None,
+        columnas: frozenset[str] = frozenset(),
     ) -> None:
-        """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno.
+        """Guarda los adjuntos de la pregunta. Se entrega UN reporte, el bueno,
+        salvo que se pidan varios archivos (ver entregar_reporte).
 
         Una pregunta, un archivo. Antes se acumulaban y se enviaban todos: el
         usuario pidio agregar el modelo a un reporte de ventas y recibio dos
@@ -769,7 +780,9 @@ class ContextoPeticion:
         nuevos = [r for r in rutas if r]
         if not nuevos:
             return
-        self.reportes.append(Reporte(nuevos, cifras, list(pivotes or []), principal))
+        self.reportes.append(
+            Reporte(nuevos, cifras, list(pivotes or []), principal, tema, columnas)
+        )
         trae_grafica = any(r.lower().endswith(".png") for r in nuevos)
         tiene_grafica = any(r.lower().endswith(".png") for r in self.archivos)
         if not self.archivos or (trae_grafica and not tiene_grafica):
@@ -792,7 +805,18 @@ class ContextoPeticion:
         respuesta, asi que no le puede quitar el lugar al reporte. Si la
         respuesta no cita ninguna cifra que este en algun reporte, queda la
         eleccion de registrar_reporte.
+
+        Si la pregunta pide VARIOS archivos ("un archivo por cada cadena"),
+        van todos los reportes de la vuelta, uno por tema (ver
+        _varios_reportes). Visto el 19/10/2026: se pidio un archivo por
+        cadena, se armaron el de Coppel y el de Sears, y llego solo el de
+        Coppel.
         """
+        if pidio_varios_archivos(self.pregunta):
+            varios = self._varios_reportes()
+            if len(varios) > 1:
+                self._entregar_varios(varios)
+                return
         provisional = next((r for r in self.reportes if r.rutas == self.archivos), None)
         elegido = provisional
         citadas = cifras_del_texto(respuesta)
@@ -811,14 +835,65 @@ class ContextoPeticion:
                     )
         if elegido is None:
             return
+        self._armar_pivotes(elegido)
+
+    @staticmethod
+    def _armar_pivotes(reporte: Reporte) -> None:
         # El pivot va con Excel por COM sobre el archivo ya guardado, y solo
         # al que se entrega: cada uno de mas son ~5-7 s tirados.
-        for archivo, hoja, config, nombre in elegido.pivotes:
+        for archivo, hoja, config, nombre in reporte.pivotes:
             bitacora.paso(f"armando el pivot de {nombre}", bitacora.NOTA)
             if excel_pivot.agregar_pivot(archivo, hoja, **config):
                 bitacora.paso("pivot listo", bitacora.NOTA)
             else:
                 bitacora.paso("no se pudo armar el pivot; el reporte sale sin el", bitacora.NOTA)
+
+    def _varios_reportes(self) -> list[Reporte]:
+        """Un reporte por tema, el ultimo de cada uno, en el orden en que salieron.
+
+        Solo cuentan los que traen un Excel y una medida: una comprobacion (un
+        DISTINCT, una lista de cadenas) no tiene que sumar y no es un archivo
+        que se pidio. El ultimo de cada tema porque el modelo rehace: el
+        19/10/2026 armo Coppel, y despues otra vez con el operador; se
+        entrega el de despues, no los dos.
+        """
+        por_tema: dict[object, Reporte] = {}
+        for reporte in self.reportes:
+            if reporte.principal is None:
+                continue
+            if not any(r.lower().endswith(".xlsx") for r in reporte.rutas):
+                continue
+            clave = reporte.tema.casefold() if reporte.tema else reporte.columnas
+            por_tema.pop(clave, None)
+            por_tema[clave] = reporte
+        # El orden: el de la primera vez que aparecio cada tema.
+        orden = {}
+        for reporte in self.reportes:
+            clave = reporte.tema.casefold() if reporte.tema else reporte.columnas
+            orden.setdefault(clave, len(orden))
+        return sorted(
+            por_tema.values(),
+            key=lambda r: orden[r.tema.casefold() if r.tema else r.columnas],
+        )
+
+    def _entregar_varios(self, reportes: list[Reporte]) -> None:
+        """Entrega cada reporte con su archivo, nombrado por su tema.
+
+        Solo los archivos (Excel y el ZIP del crudo, si hay): una grafica por
+        cadena serian varias imagenes que nadie pidio entre los adjuntos.
+        """
+        archivos: list[str] = []
+        for reporte in reportes:
+            self._armar_pivotes(reporte)
+            for ruta in reporte.rutas:
+                if ruta.lower().endswith(".png"):
+                    continue
+                archivos.append(_con_el_tema_en_el_nombre(ruta, reporte.tema))
+        self.archivos[:] = archivos
+        self.entregados = reportes
+        bitacora.paso(
+            f"se pidieron varios archivos: van {len(reportes)}", bitacora.NOTA
+        )
 
 
 _contexto: ContextVar[ContextoPeticion | None] = ContextVar("_contexto", default=None)
@@ -1968,6 +2043,58 @@ def pidio_archivo(pregunta: str) -> bool:
     return bool(_PIDE_ARCHIVO.search(pregunta or ""))
 
 
+# Que se pidieron VARIOS archivos. Visto el 19/10/2026: "dame un archivo por
+# cada cadena" recibio uno solo (ver entregar_reporte).
+_PIDE_VARIOS_ARCHIVOS = re.compile(
+    r"\b(archivos|excels|reportes)\b|por separado|separad[oa]s|"
+    r"\b(archivo|excel|reporte)\s+(por|para|de)\s+cada\b|"
+    r"\b(files|excels|reports)\b|\bseparate\b|\b(file|excel|report)\s+(per|for each)\b|"
+    r"分别|每个",
+    re.IGNORECASE,
+)
+
+
+def pidio_varios_archivos(pregunta: str) -> bool:
+    return bool(_PIDE_VARIOS_ARCHIVOS.search(pregunta or ""))
+
+
+# La columna que dice de que cadena es cada fila.
+_COLUMNA_DE_CADENA = re.compile(r"^(canal|cadena|retail|retailer|cliente|customer)$", re.IGNORECASE)
+
+
+def tema_del_resultado(df: pd.DataFrame) -> str | None:
+    """De que cadena es el resultado ("Coppel"), si es de una a tres; si no, None."""
+    for columna in df.columns:
+        if _COLUMNA_DE_CADENA.match(str(columna).strip()):
+            valores = sorted({str(v).strip() for v in df[columna].dropna()} - {""})
+            if 1 <= len(valores) <= 3:
+                return " y ".join(valores)
+            return None
+    return None
+
+
+def _con_el_tema_en_el_nombre(ruta: str, tema: str | None) -> str:
+    """El archivo renombrado con su cadena: "reporte_Coppel_20261019_...xlsx".
+
+    Con varios adjuntos, el nombre es lo unico que dice cual es cual en el
+    chat. Si no se puede renombrar, va con el nombre que tenia.
+    """
+    if not tema:
+        return ruta
+    origen = Path(ruta)
+    limpio = re.sub(r'[\\/:*?"<>|]+', "", tema).strip().replace(" ", "_")
+    nombre = origen.name.replace("reporte_sql_", f"reporte_{limpio}_", 1)
+    if nombre == origen.name:
+        nombre = f"{limpio}_{origen.name}"
+    destino = origen.with_name(nombre)
+    try:
+        origen.replace(destino)
+    except OSError:
+        logger.warning("No se pudo renombrar %s con su cadena", ruta)
+        return ruta
+    return str(destino)
+
+
 def pidio_detalle_de_tiendas(pregunta: str) -> bool:
     return bool(_PIDE_TIENDAS.search(pregunta or ""))
 
@@ -2509,7 +2636,8 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     principal = cifra_principal(df) if excel else None
     ctx.registrar_reporte(
         imagen, excel, zip_del_crudo, cifras=cifras_del_resultado(df), pivotes=pivotes,
-        principal=principal,
+        principal=principal, tema=tema_del_resultado(df),
+        columnas=frozenset(str(c).casefold() for c in df.columns),
     )
 
     # Que mas se puede preguntar sobre esto. Se queda con las de la PRIMERA
@@ -2851,6 +2979,10 @@ class SQLAgent:
            las columnas que te pidieron. Cualquier comprobacion va ANTES, con
            las herramientas de exploracion, nunca como un segundo
            `consultar_sql`.
+           La excepcion: si pide VARIOS archivos ("un archivo por cada
+           cadena", "por separado"), haz un `consultar_sql` por archivo, con
+           la columna de la cadena en cada uno: cada consulta llega en su
+           propio Excel, con el nombre de su cadena.
            Si el usuario pide una columna mas ("agregale el modelo"), vuelve a
            correr UNA sola consulta con esa columna agregada a las que ya tenia.
            Nunca la traigas por separado: dos consultas dan dos tablas a medias
@@ -3178,6 +3310,16 @@ class SQLAgent:
                         total=f"{total:,.0f}", medida=medida
                     )
                 )
+            # Con varios archivos, la de cada uno: un solo total suelto no
+            # dice de cual es (el 19/10/2026 salio "Total: 3,085,510" sin
+            # decir que era solo Coppel).
+            if ctx.entregados and not cifras_del_texto(texto):
+                lineas = [
+                    f"- {r.tema}: {r.principal[1]:,.0f} {r.principal[0]}"
+                    for r in ctx.entregados if r.tema and r.principal
+                ]
+                if lineas:
+                    texto = f"{texto}\n\n" + "\n".join(lineas)
             if ctx.base_del_pronostico:
                 texto = f"{texto}\n\n{ctx.base_del_pronostico}"
             # Lo mismo con el scraping: que es de internet no puede depender

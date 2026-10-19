@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -2207,6 +2208,72 @@ class TestElReporteEsElDeLaRespuesta:
 
     def test_las_cifras_se_leen_como_las_escribe_el_bot(self):
         assert modulo_agente.cifras_del_texto("$19,999 · 4 210 · 1,250,000 · 12.5% · 3 meses") == {19999, 4210, 1250000, 12}
+
+
+class TestVariosArchivos:
+    """Visto el 19/10/2026: "dame un archivo por cada cadena" armo el Excel de
+    Coppel y el de Sears, los rehizo con el operador, y llego solo el primero
+    de Coppel con un "Total: 3,085,510" que no decia de que era."""
+
+    PREGUNTA = "Dame un archivo por cada cadena, coppel, sears, Elektra"
+
+    def _reporte(self, carpeta, nombre, cadena, unidades):
+        ruta = carpeta / nombre
+        ruta.write_bytes(b"x")
+        df = pd.DataFrame({"Canal": [cadena, cadena], "Unidades": [unidades, 0]})
+        return dict(
+            rutas=(str(carpeta / f"g_{nombre}.png"), str(ruta)),
+            cifras=frozenset({unidades}), principal=("Unidades", float(unidades)),
+            tema=modulo_agente.tema_del_resultado(df),
+            columnas=frozenset(c.casefold() for c in df.columns),
+        )
+
+    def _registrar(self, ctx, datos):
+        ctx.registrar_reporte(*datos["rutas"], cifras=datos["cifras"], principal=datos["principal"],
+                              tema=datos["tema"], columnas=datos["columnas"])
+
+    def test_se_pide_varios_archivos(self):
+        for pregunta in (self.PREGUNTA, "mandame los excels por separado", "one file per retailer",
+                         "reportes de Coppel y Sears"):
+            assert modulo_agente.pidio_varios_archivos(pregunta), pregunta
+        for pregunta in ("mandame el excel de Coppel", "reporte de ventas de mayo", "cuanto vendio Sears"):
+            assert not modulo_agente.pidio_varios_archivos(pregunta), pregunta
+
+    def test_van_todos_uno_por_cadena_el_rehecho_y_con_su_nombre(self, engine, tmp_path):
+        with contexto_peticion(engine, pregunta=self.PREGUNTA) as ctx:
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_1.xlsx", "Coppel", 3085510))
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_2.xlsx", "SEARS", 45000))
+            # Rehechos con el operador: reemplazan a los primeros.
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_3.xlsx", "Coppel", 3085511))
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_4.xlsx", "SEARS", 45001))
+            ctx.entregar_reporte("No pude completar todas las cadenas.")
+        assert [Path(a).name for a in ctx.archivos] == [
+            "reporte_Coppel_3.xlsx", "reporte_SEARS_4.xlsx",
+        ]
+        assert all(Path(a).exists() for a in ctx.archivos)
+        assert [r.tema for r in ctx.entregados] == ["Coppel", "SEARS"]
+
+    def test_una_comprobacion_sin_medida_no_es_un_archivo(self, engine, tmp_path):
+        with contexto_peticion(engine, pregunta=self.PREGUNTA) as ctx:
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_1.xlsx", "Coppel", 100))
+            ctx.registrar_reporte(str(tmp_path / "cadenas.xlsx"), cifras=frozenset())
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_2.xlsx", "SEARS", 200))
+            ctx.entregar_reporte("Listo.")
+        assert [Path(a).name for a in ctx.archivos] == ["reporte_Coppel_1.xlsx", "reporte_SEARS_2.xlsx"]
+
+    def test_sin_pedir_varios_sigue_siendo_uno(self, engine, tmp_path):
+        with contexto_peticion(engine, pregunta="mandame el excel de ventas") as ctx:
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_1.xlsx", "Coppel", 100))
+            self._registrar(ctx, self._reporte(tmp_path, "reporte_sql_2.xlsx", "SEARS", 200))
+            ctx.entregar_reporte("Listo.")
+        assert len(ctx.archivos) == 2 and ctx.archivos[1].endswith("reporte_sql_1.xlsx")
+        assert ctx.entregados == []
+
+    def test_el_tema_es_la_cadena_si_son_pocas(self):
+        assert modulo_agente.tema_del_resultado(pd.DataFrame({"Retail": ["Coppel"] * 3})) == "Coppel"
+        muchas = pd.DataFrame({"Canal": ["a", "b", "c", "d"]})
+        assert modulo_agente.tema_del_resultado(muchas) is None
+        assert modulo_agente.tema_del_resultado(pd.DataFrame({"Modelo": ["x"]})) is None
 
 
 class TestFuenteDeInternet:
