@@ -42,6 +42,12 @@ class TestQueSeGuarda:
         assert not escritor.escribir('[api] INFO:     127.0.0.1:1 - "GET /health HTTP/1.1" 200 OK')
         assert escritor.escribir('[api] INFO:     127.0.0.1:1 - "POST /ask HTTP/1.1" 200 OK')
 
+    def test_el_sondeo_de_la_foto_del_bot_no_se_guarda_pero_su_resultado_si(self, tmp_path):
+        # El sidecar pregunta cada 5 s: 5 617 lineas el 19/10/2026.
+        escritor = _escritor(tmp_path)
+        assert not escritor.escribir('[api] INFO:     127.0.0.1:1 - "GET /foto-bot/cambio HTTP/1.1" 200 OK')
+        assert escritor.escribir('[api] INFO:     127.0.0.1:1 - "POST /foto-bot/cambio HTTP/1.1" 200 OK')
+
     def test_el_qr_y_las_lineas_vacias_no_se_guardan(self, tmp_path):
         escritor = _escritor(tmp_path)
         assert not escritor.escribir("█▀▀▀▀▀█ ▀▄█ █▀▀▀▀▀█")

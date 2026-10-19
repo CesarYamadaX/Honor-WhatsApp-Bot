@@ -30,6 +30,7 @@ import { audioDelMensaje, esDemasiadoLargo, formatoDelAudio, tipoDeDocumento } f
 import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 import { sinLlaves } from "./silenciar.js";
 import { actualizarFotos, aplicarCambioDeFoto } from "./fotosDePerfil.js";
+import { EnCurso } from "./seguimiento.js";
 
 // Antes de conectar: libsignal vuelca sesiones con llaves privadas por consola
 // y la consola termina en el log (ver silenciar.js).
@@ -47,12 +48,12 @@ const CARPETA_AUTH = "auth_info";
 // como que el bot se cayo -- en los logs se ve al usuario reenviando.
 const AVISO_DE_ESPERA_MS = leerEnteroPositivo("WAIT_NOTICE_SECONDS", 12) * 1000;
 
-// Y el segundo aviso, el que pide paciencia. A los dos minutos el primero
-// ("esto puede tardar un poco") ya se quedo corto y todavia faltan varios
-// minutos: un reporte de un anio de Coppel tarda ~290s y uno de toda la
-// historia ~440s, medido. 120s esta elegido para que una consulta normal
-// -- que se responde en segundos -- no lo vea nunca.
-const AVISO_DE_PACIENCIA_MS = leerEnteroPositivo("PATIENCE_NOTICE_SECONDS", 120) * 1000;
+// Y el segundo aviso, el que pide paciencia y promete avisar al terminar.
+// Un reporte de un anio de Coppel tarda ~290s y uno de toda la historia
+// ~440s, medido. Era a los 120 s; el 19/10/2026 se pidio que saliera cuando
+// "se tarda mucho", y en la bitacora la mitad de las consultas acaba en 11 s
+// y 9 de cada 10 antes de 90 s: a los 60 s solo lo ven las de verdad largas.
+const AVISO_DE_PACIENCIA_MS = leerEnteroPositivo("PATIENCE_NOTICE_SECONDS", 60) * 1000;
 // Los textos salen traducidos segun el idioma del chat (ver textos.js).
 
 // WhatsApp expira el indicador de "escribiendo" solo, hay que renovarlo.
@@ -84,6 +85,21 @@ const telefonoDelLid = new Map();
 // el primero en terminar apaga el indicador mientras el segundo sigue
 // esperando respuesta.
 const presenciaPorJid = new Map(); // jid -> { contador, temporizador }
+
+// Lo que esta corriendo en cada chat, para decidir que hacer con un mensaje
+// que llega mientras tanto: sumarlo, ignorarlo o formarlo (ver seguimiento.js).
+const enCurso = new EnCurso();
+
+// Un aviso en el idioma del chat. Nunca lanza: es un acompañamiento, y un
+// fallo aqui no puede dejar un chat sin su respuesta.
+async function avisarEnSuIdioma(jid, idAutorizacion, clave) {
+  try {
+    const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+    await enviarMensajeSimple(jid, traducir(clave, idioma));
+  } catch (error) {
+    console.error(`[whatsapp] no pude mandar el aviso "${clave}" a ${jid}: ${error.message}`);
+  }
+}
 
 function leerEnteroPositivo(clave, defecto) {
   const crudo = process.env[clave];
@@ -427,67 +443,29 @@ async function atender(mensaje) {
       if (!pregunta) return;
     }
 
-    // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo,
-    // un aviso a los pocos segundos para que sepa que la consulta sigue
-    // viva, y otro mas si la cosa se alarga de verdad.
-    const detener = mantenerEscribiendo(jid);
-    const cancelarAvisos = programarAvisos(
-      async (clave, vigente) => {
-        const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
-        // Mientras se averiguaba el idioma pudo llegar la respuesta: un
-        // "ten paciencia" DESPUES del reporte es peor que ningun aviso.
-        if (!vigente()) return;
-        await enviarMensajeSimple(jid, traducir(clave, idioma));
-      },
-      { esperaMs: AVISO_DE_ESPERA_MS, pacienciaMs: AVISO_DE_PACIENCIA_MS },
-    );
-
+    // ¿Sigue corriendo algo de este chat? Entonces este mensaje se suma, se
+    // ignora (un "ok") o espera su turno, en vez de cancelar lo que ya lleva
+    // hecho (ver seguimiento.js).
+    const llegada = enCurso.llega(jid, pregunta);
+    if (llegada.accion === "acuse") {
+      descartado("acuse mientras trabaja", jid);
+      return;
+    }
+    let ficha = llegada.ficha;
     try {
-      const resultado = await preguntar(AGENT_API_URL, idAutorizacion, pregunta);
-      // Los avisos se cortan en cuanto hay respuesta, no al terminar de
-      // entregarla: subir un Excel grande tarda, y en ese rato el de
-      // paciencia ("te aviso en cuanto este") saldria con el reporte ya a
-      // medio llegar. El finally lo repite por si preguntar() lanza.
-      cancelarAvisos();
-      // null = 403 (dejo de estar autorizado entre una llamada y otra) o 409
-      // (a esta pregunta la cancelo un mensaje posterior, que es el que va a
-      // contestar). En ambos casos, silencio.
-      if (resultado === null) return;
-
-      // El servicio dice en que idioma contesto; lo que agregue el sidecar
-      // (un archivo ilegible, "no tengo respuesta") va en el mismo.
-      const idioma = resultado.idioma;
-      let enviadoAlgo = false;
-      // Los ids de lo que se mando, para que una reaccion a cualquiera de
-      // esos mensajes (el texto, el Excel, la grafica) califique este turno.
-      const ids = [];
-      // Y de los que son un archivo, cual: el Excel se califica aparte del
-      // texto (un 👎 a cada uno son dos calificaciones, no una que pisa a otra).
-      const partes = {};
-      if (resultado.reply && resultado.reply.trim()) {
-        ids.push(...((await enviarTexto(jid, resultado.reply)) ?? []));
-        enviadoAlgo = true;
+      if (llegada.accion === "sumar") {
+        console.log(`[whatsapp] ${jid} agrego algo a lo que pidio: se vuelve a preguntar todo junto`);
+        pregunta = llegada.pregunta;
+        await avisarEnSuIdioma(jid, idAutorizacion, "se_suma");
+      } else if (llegada.accion === "esperar") {
+        console.log(`[whatsapp] ${jid} pregunto otra cosa mientras trabaja: espera su turno`);
+        if (llegada.avisar) await avisarEnSuIdioma(jid, idAutorizacion, "en_cola");
+        ficha = await llegada.turno;
       }
-      if (resultado.files.length > 0) {
-        for (const ruta of resultado.files) {
-          for (const id of (await enviarArchivo(jid, ruta, idioma)) ?? []) {
-            ids.push(id);
-            partes[id] = ruta;
-          }
-        }
-        enviadoAlgo = true;
-      }
-      if (resultado.turno && ids.length) {
-        await registrarEnviados(AGENT_API_URL, idAutorizacion, resultado.turno, ids, partes);
-      }
-      // reply en blanco (trocear lo descarta) o {reply:"", files:[]}: sin
-      // esto el usuario se queda sin nada, sin saber si el bot lo escucho.
-      if (!enviadoAlgo) {
-        await enviarMensajeSimple(jid, traducir("sin_respuesta", idioma));
-      }
+      await responderEnElChat(jid, idAutorizacion, pregunta, ficha);
     } finally {
-      cancelarAvisos();
-      detener();
+      if (ficha) enCurso.termina(jid, ficha);
+      else llegada.turno?.then((tomada) => enCurso.termina(jid, tomada));
     }
   } catch (error) {
     console.error(`[whatsapp] fallo atendiendo ${mensaje.key?.remoteJid ?? "mensaje desconocido"}: ${error.message}`);
@@ -503,6 +481,82 @@ async function atender(mensaje) {
     // evitar, por otra via. Desmarcar cuesta, en el peor caso, una consulta
     // repetida, y el backend ya devuelve 429 si la primera sigue viva.
     if (idMensaje) registroVistos.desmarcar(idMensaje);
+  }
+}
+
+// La pregunta al servicio y la entrega de lo que conteste.
+async function responderEnElChat(jid, idAutorizacion, pregunta, ficha) {
+  // Ya se puede acompañar la espera: "escribiendo" desde el primer segundo,
+  // un aviso a los pocos segundos para que sepa que la consulta sigue
+  // viva, y otro mas si la cosa se alarga de verdad.
+  const detener = mantenerEscribiendo(jid);
+  // Si salio el aviso de "te aviso cuando acabe", al acabar se avisa.
+  let prometioAvisar = false;
+  const cancelarAvisos = programarAvisos(
+    async (clave, vigente) => {
+      const idioma = await idiomaDelChat(AGENT_API_URL, idAutorizacion);
+      // Mientras se averiguaba el idioma pudo llegar la respuesta: un
+      // "ten paciencia" DESPUES del reporte es peor que ningun aviso.
+      if (!vigente()) return;
+      // Antes de mandarlo: la respuesta puede llegar mientras se envia.
+      if (clave === "espera_larga") prometioAvisar = true;
+      await enviarMensajeSimple(jid, traducir(clave, idioma));
+    },
+    { esperaMs: AVISO_DE_ESPERA_MS, pacienciaMs: AVISO_DE_PACIENCIA_MS },
+  );
+
+  try {
+    const resultado = await preguntar(AGENT_API_URL, idAutorizacion, pregunta);
+    // Desde aqui la respuesta se esta entregando: un mensaje que llegue
+    // ahora va despues, no se suma (ver seguimiento.js).
+    if (ficha) ficha.respondida = true;
+    // Los avisos se cortan en cuanto hay respuesta, no al terminar de
+    // entregarla: subir un Excel grande tarda, y en ese rato el de
+    // paciencia ("te aviso en cuanto este") saldria con el reporte ya a
+    // medio llegar. El finally lo repite por si preguntar() lanza.
+    cancelarAvisos();
+    // null = 403 (dejo de estar autorizado entre una llamada y otra) o 409
+    // (a esta pregunta la cancelo un mensaje posterior, que es el que va a
+    // contestar). En ambos casos, silencio.
+    if (resultado === null) return;
+
+    // El servicio dice en que idioma contesto; lo que agregue el sidecar
+    // (un archivo ilegible, "no tengo respuesta") va en el mismo.
+    const idioma = resultado.idioma;
+    // Lo prometido: "te aviso en cuanto este". Va como mensaje propio, que
+    // suena en el telefono aunque haya dejado el chat.
+    if (prometioAvisar) await enviarMensajeSimple(jid, traducir("listo", idioma));
+    let enviadoAlgo = false;
+    // Los ids de lo que se mando, para que una reaccion a cualquiera de
+    // esos mensajes (el texto, el Excel, la grafica) califique este turno.
+    const ids = [];
+    // Y de los que son un archivo, cual: el Excel se califica aparte del
+    // texto (un 👎 a cada uno son dos calificaciones, no una que pisa a otra).
+    const partes = {};
+    if (resultado.reply && resultado.reply.trim()) {
+      ids.push(...((await enviarTexto(jid, resultado.reply)) ?? []));
+      enviadoAlgo = true;
+    }
+    if (resultado.files.length > 0) {
+      for (const ruta of resultado.files) {
+        for (const id of (await enviarArchivo(jid, ruta, idioma)) ?? []) {
+          ids.push(id);
+          partes[id] = ruta;
+        }
+      }
+      enviadoAlgo = true;
+    }
+    if (resultado.turno && ids.length) {
+      await registrarEnviados(AGENT_API_URL, idAutorizacion, resultado.turno, ids, partes);
+    }
+    // reply en blanco (trocear lo descarta) o {reply:"", files:[]}: sin
+    // esto el usuario se queda sin nada, sin saber si el bot lo escucho.
+    if (!enviadoAlgo) {
+      await enviarMensajeSimple(jid, traducir("sin_respuesta", idioma));
+    }
+  } finally {
+    cancelarAvisos();
+    detener();
   }
 }
 

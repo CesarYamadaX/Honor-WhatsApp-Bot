@@ -31,16 +31,35 @@ const TEXTOS = {
   // cancelar invita a reescribir la pregunta.
   espera_larga: {
     es:
-      "El reporte que pediste es grande y lo estoy armando. Puede tardar " +
-      "varios minutos, asi que tenme un poco de paciencia: no hace falta " +
-      "que repitas la pregunta, te aviso en cuanto este.",
+      "Lo que pediste es grande y lo estoy armando; puede tardar unos " +
+      "minutos, tenme un poco de paciencia. No hace falta que repitas la " +
+      "pregunta: yo te aviso cuando acabe y te mando el resultado.",
     en:
-      "The report you asked for is a big one and I'm putting it together. " +
-      "It can take several minutes, so please bear with me: no need to " +
-      "resend your question, I'll let you know as soon as it's ready.",
+      "What you asked for is a big one and I'm putting it together; it can " +
+      "take a few minutes, so please bear with me. No need to resend your " +
+      "question: I'll let you know when it's done and send you the result.",
     zh:
-      "你要的报表比较大，我正在生成。可能需要几分钟，请耐心等待：" +
-      "不用重复发送问题，做好我会立刻告诉你。",
+      "你要的内容比较大，我正在生成，可能需要几分钟。" +
+      "不用重复发送问题：做好后我会告诉你并把结果发给你。",
+  },
+  // Lo que se prometio en espera_larga: avisar al acabar (19/10/2026).
+  listo: {
+    es: "Listo, ya terminé lo que me pediste:",
+    en: "Done, here's what you asked for:",
+    zh: "好了，这是你要的结果：",
+  },
+  // Un mensaje que llega a los pocos segundos de otro, con el bot aun
+  // trabajando, se suma a lo que pidio (ver seguimiento.js).
+  se_suma: {
+    es: "Va, lo sumo a lo que me pediste y te contesto todo junto.",
+    en: "Got it, I'll add that to what you asked and answer it all together.",
+    zh: "好的，我把这条加到你刚才的请求里，一起回复你。",
+  },
+  // Y uno que llega despues, con el bot aun trabajando: espera su turno.
+  en_cola: {
+    es: "Sigo con lo que me pediste antes para no perder lo que llevo; en cuanto te lo mande, sigo con esto.",
+    en: "I'm still on your previous request so I don't lose the progress; as soon as I send it, I'll get to this.",
+    zh: "我还在处理你上一个请求，以免前功尽弃；发给你之后马上处理这一条。",
   },
   ocupado: {
     es: "Sigo trabajando en tu pregunta anterior. Dame un momento.",
