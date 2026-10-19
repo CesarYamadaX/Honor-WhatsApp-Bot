@@ -1402,6 +1402,9 @@ const fecha = (iso) => {
   const t = new Date(iso);
   return isNaN(t) ? null : t;
 };
+// Las fechas van como mes/dia/ano en los dos idiomas (pedido el 19/10/2026).
+const dos = (n) => String(n).padStart(2, "0");
+const mesDiaAno = (t) => `${dos(t.getMonth() + 1)}/${dos(t.getDate())}/${t.getFullYear()}`;
 function horaCorta(iso) {
   const t = fecha(iso);
   return t ? t.toLocaleTimeString(localeDeFecha(), { hour: "2-digit", minute: "2-digit" }) : "";
@@ -1415,14 +1418,14 @@ function diaLargo(iso) {
   const mismoDia = (a, b) => a.toDateString() === b.toDateString();
   if (mismoDia(t, hoy)) return t2("hoy");
   if (mismoDia(t, ayer)) return t2("ayer");
-  return t.toLocaleDateString(localeDeFecha(), { day: "numeric", month: "long", year: "numeric" });
+  return mesDiaAno(t);
 }
 function cuandoEnLista(iso) {
   const t = fecha(iso);
   if (!t) return "";
   return t.toDateString() === new Date().toDateString()
     ? horaCorta(iso)
-    : t.toLocaleDateString(localeDeFecha(), { day: "2-digit", month: "2-digit", year: "2-digit" });
+    : mesDiaAno(t);
 }
 function duracion(segundos) {
   const s = Math.max(0, Math.round(Number(segundos) || 0));
@@ -2103,7 +2106,7 @@ function numeroLegible(numero) {
 
 function fechaCorta(iso) {
   const f = fecha(iso);
-  return f ? f.toLocaleDateString(localeDeFecha(), { day: "numeric", month: "short", year: "numeric" }) : "";
+  return f ? mesDiaAno(f) : "";
 }
 
 // Cuando escribio por ultima vez, de la lista de conversaciones.
@@ -2549,7 +2552,8 @@ function nombreDeDia(dia) {
   const capital = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1).toLowerCase();
   if (momento.toDateString() === hoy.toDateString()) return capital(t("hoy"));
   if (momento.toDateString() === ayer.toDateString()) return capital(t("ayer"));
-  return momento.toLocaleDateString(localeDeFecha(), { weekday: "long", day: "numeric", month: "long" });
+  const semana = momento.toLocaleDateString(localeDeFecha(), { weekday: "long" });
+  return `${capital(semana)} ${mesDiaAno(momento)}`;
 }
 
 function pintarListaDias(caja) {
