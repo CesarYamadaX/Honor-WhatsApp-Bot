@@ -510,10 +510,17 @@ def cadenas_sin_el_periodo(query: str) -> str:
         f"(lo mas reciente: {_MESES_ES[ultimo[1] - 1]} de {ultimo[0]})"
         for cadena, (sin, ultimo) in faltan.items()
     )
+    # La frase de ejemplo, con las cadenas que de verdad faltan. Era fija
+    # ("sin Liverpool ni Movistar") y el 20/10/2026 el modelo la copio tal
+    # cual cuando solo faltaba Movistar: dijo que faltaba Liverpool, que si
+    # tenia septiembre.
+    nombres = sorted(faltan)
+    sin = " ni ".join(nombres)
+    verbo = "carga" if len(nombres) == 1 else "cargan"
     return (
         f"OJO: este resultado NO incluye todas las cadenas: {detalle}. Al "
-        "responder dilo en una frase ('sin Liverpool ni Movistar, que aun no "
-        "cargan ese mes'), o el total parece completo y no lo es. Si es un "
+        f"responder dilo en una frase ('sin {sin}, que aun no {verbo} ese mes'), "
+        "nombrando SOLO esas, o el total parece completo y no lo es. Si es un "
         "periodo anterior a que esa cadena empezara a reportar, di que no hay "
         "datos de ella para ese periodo."
     )
@@ -2194,13 +2201,13 @@ def _tiempos_de_reportes() -> dict:
         return {}
 
 
-def _anotar_tiempos(tiempos: dict[str, float], precio: bool | str) -> None:
+def _anotar_tiempos(tiempos: dict[str, float], precio: bool | str, meses: int, con_tienda: bool) -> None:
     if not tiempos:
         return
     with _candado_de_tiempos:
         historial = _tiempos_de_reportes()
         for cadena, segundos in tiempos.items():
-            detallado.aprender(historial, cadena, precio, segundos)
+            detallado.aprender(historial, cadena, precio, segundos, meses, con_tienda)
         try:
             RUTA_DE_TIEMPOS.parent.mkdir(parents=True, exist_ok=True)
             RUTA_DE_TIEMPOS.write_text(json.dumps(historial, indent=1), encoding="utf-8")
@@ -2303,10 +2310,13 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         ]
     elif reporte.partes:
         tabla = pd.concat([p.tabla for p in reporte.partes], ignore_index=True)
-        grupos = [(None, reporte.partes, escribir(None, tabla))]
+        # Un solo archivo: con los nombres de sus cadenas ("Coppel_y_Telcel").
+        nombre = "_y_".join(acceso.NOMBRES.get(p.cadena, p.cadena) for p in reporte.partes)
+        grupos = [(None, reporte.partes, escribir(nombre, tabla))]
     else:
         grupos = []
-    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, modo if con_precio else False)
+    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, modo if con_precio else False,
+                    detallado.meses_entre(inicio, fin), "tienda" in lista)
     sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
     return _Armado(reporte, grupos, fallas, sin_venta)
 
@@ -2393,7 +2403,7 @@ def reporte_detallado(
         modo = "ponderado"
     modo = modo or "ponderado"
     estimado = detallado.estimar(pedidas, modo if con_precio else False, _tiempos_de_reportes(),
-                                 CONSULTAS_A_LA_VEZ)
+                                 CONSULTAS_A_LA_VEZ, detallado.meses_entre(inicio, fin), "tienda" in lista)
 
     # Grande: se arma aparte, sin el limite de la peticion, y se entrega solo.
     if ctx.programar is not None and estimado > EN_LINEA_MAX_S:

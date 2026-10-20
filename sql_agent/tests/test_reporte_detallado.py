@@ -295,20 +295,43 @@ class TestQuePrecio:
 
 
 class TestCuantoTarda:
-    def test_reparte_entre_cuatro_y_la_mas_larga_manda(self):
-        # Sin precio: Telcel (240 s) en un carril, las demas en los otros.
-        assert rd.estimar(list(rd.acceso.CADENAS), False) == 250
-        assert rd.estimar(["SEARS"], False) < 60
+    """Con lo que tardo de verdad el 20/10/2026 en el bot de prueba."""
+
+    def test_un_mes_de_una_cadena_sin_tiendas_va_en_la_conversacion(self):
+        # Elektra, septiembre, por modelo, ultimo precio: tardo 5 s.
+        assert rd.estimar(["ELEKTRA"], "ultimo", meses=1, con_tienda=False) <= 60
+
+    def test_telcel_tarda_aunque_sea_un_mes(self):
+        # Todas las cadenas, septiembre, por modelo: Telcel solo tardo 167 s.
+        segundos = rd.estimar(list(rd.acceso.CADENAS), False, meses=1, con_tienda=False)
+        assert 150 <= segundos <= 220
+
+    def test_seis_meses_por_tienda_con_desglose(self):
+        # Coppel y Sears, mayo a octubre, por tienda, todos los precios: 3.5 min.
+        assert 180 <= rd.estimar(["COPPEL", "SEARS"], "desglosado", meses=6) <= 300
 
     def test_cada_modo_de_precio_cuesta_distinto(self):
         cadenas = list(rd.acceso.CADENAS)
-        ponderado, desglose, ultimo = (rd.estimar(cadenas, m) for m in ("ponderado", "desglosado", "ultimo"))
-        assert ultimo < ponderado <= desglose
-        assert rd.estimar(cadenas, True) == ponderado
+        assert rd.estimar(cadenas, "ultimo") < rd.estimar(cadenas, "ponderado")
+        assert rd.estimar(cadenas, True) == rd.estimar(cadenas, "ponderado")
 
     def test_aprende_de_lo_que_tardo(self):
         historial = {}
-        rd.aprender(historial, "TELCEL", "desglosado", 600)
-        rd.aprender(historial, "TELCEL", "desglosado", 400)
-        assert historial == {"TELCEL|desglosado": 500}
-        assert rd.estimar(["TELCEL"], "desglosado", historial) == 515
+        prediccion = rd.predecir("TELCEL", False, 1, False)
+        rd.aprender(historial, "TELCEL", False, prediccion * 2, meses=1, con_tienda=False)
+        assert historial == {"TELCEL|sin precio|total": 2.0}
+        assert rd.estimar(["TELCEL"], False, historial, meses=1, con_tienda=False) == int(prediccion * 2 + 10)
+
+    def test_meses_entre(self):
+        assert rd.meses_entre((2026, 5), (2026, 10)) == 6 and rd.meses_entre((2025, 12), (2026, 1)) == 2
+
+
+def test_el_mensaje_de_entrega_se_lee_bien():
+    r = rd.Reporte(partes=[rd.Parte("COPPEL", pd.DataFrame(), 100.0, 0.0, 0.5)], desde=(2026, 9), hasta=(2026, 9),
+                   columnas=["tienda", "modelo"], precio=True, modo="ultimo")
+    texto = rd.para_el_usuario(r, 1, ["MOVISTAR"], [], "es")
+    assert texto.startswith("Listo, aquí está el reporte que pediste: venta de septiembre de 2026, "
+                            "por tienda y modelo, con el último precio de cada mes.")
+    assert "- Coppel: 100 unidades (sin precio en el 50% de las unidades)" in texto
+    assert "Todavía sin datos de ese periodo: Movistar." in texto
+    assert "by store and model" in rd.para_el_usuario(r, 1, [], [], "en")

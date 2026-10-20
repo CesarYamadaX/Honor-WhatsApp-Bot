@@ -193,7 +193,7 @@ TEXTOS = {
         ),
     },
     "cancelado": {
-        ESPANOL: "Listo, cancele la consulta anterior.",
+        ESPANOL: "Listo, cancelé la consulta anterior.",
         INGLES: "Done, I cancelled the previous query.",
         CHINO: "好的，我已经取消了上一个查询。",
     },

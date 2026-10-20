@@ -536,8 +536,8 @@ def pregunta_de_precio(varia: dict[str, float]) -> str:
                       sorted(varia.items(), key=lambda x: -x[1]))
     return (
         "TODAVIA NO ARMES EL REPORTE. En ese periodo hay modelos que cambiaron de precio dentro del "
-        f"mes: {donde}. Preguntale al usuario, en un mensaje corto con las opciones numeradas, que "
-        "precio quiere:\n"
+        f"mes: {donde}. Preguntale al usuario, en un mensaje corto, que precio quiere: primero dile "
+        "en que cadenas cambio y que tanto (con esos porcentajes), y luego las opciones numeradas:\n"
         "1. El promedio ponderado por lo vendido cada dia (recomendado: por las unidades da el valor real vendido)\n"
         "2. El ultimo precio del mes\n"
         "3. El primero del mes\n"
@@ -567,7 +567,8 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
             extra.append(f"{p.con_precio:.0%} de las unidades con precio")
         lineas.append(f"- {p.cadena}: {p.unidades:,.0f} unidades" + (f" ({'; '.join(extra)})" if extra else ""))
     if sin_datos:
-        lineas.append(f"Sin venta en ese periodo: {', '.join(sin_datos)}. Dilo.")
+        lineas.append(f"Sin datos de ese periodo (todavia no lo cargan): {', '.join(sin_datos)}. "
+                      "Dilo asi, no como que vendieron cero.")
     lineas.append(
         f"Va adjunto en {archivos} archivo{'s' if archivos != 1 else ''}"
         + (", uno por cadena" if archivos > 1 else "") + ". "
@@ -581,18 +582,20 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
 
 # --- Cuanto va a tardar -----------------------------------------------------
 #
-# Segundos de cada cadena, de la consulta a su Excel escrito. Medido el
-# 19/10/2026, mayo a octubre por tienda, operador y modelo, cuatro a la vez.
-# Cada reporte que se arma corrige estos numeros (ver aprender).
-TIEMPOS_INICIALES = {
-    "TELCEL": 240, "COPPEL": 160, "LIVERPOOL": 70, "ELEKTRA": 50,
-    "AT&T": 55, "SEARS": 8, "MOVISTAR": 6,
+# Por cadena: (segundos fijos, segundos por mes, Excel por mes si va por
+# tienda). Medido el 19 y 20/10/2026: en Telcel casi todo es fijo (un mes por
+# modelo 167 s, seis por tienda 240 s); en Coppel, Liverpool y Elektra crece
+# con los meses (Coppel: un mes 18 s, seis ~100 s, y su Excel por tienda de un
+# millon de filas 37 s).
+TIEMPOS = {
+    "TELCEL": (155, 13, 2), "COPPEL": (2, 16, 7), "AT&T": (24, 4, 2), "LIVERPOOL": (0, 10, 2),
+    "ELEKTRA": (0, 6, 2), "SEARS": (2, 1, 0), "MOVISTAR": (2, 1, 0),
 }
-# Cuanto mas tarda cada forma de poner el precio. El ponderado lee tambien
-# la venta por dia (medido el 19/10/2026: Telcel 260 s, Elektra 218 s,
-# Coppel 186 s, AT&T y Liverpool ~100 s); el desglose lee cada fila por dia;
-# el primero, ultimo, minimo y maximo solo miran los precios del mes.
-# Medido el desglose de Coppel y Sears: 208 s, contra ~160 s sin precio.
+# Cuanto mas tarda cada forma de poner el precio, en la parte que crece con
+# los meses: el ponderado lee tambien la venta por dia y el desglose cada fila
+# por dia (Coppel, seis meses: 186 s contra 117). La parte fija no cambia:
+# Telcel con precio, dos meses, tardo lo mismo que sin el (20/10/2026). El
+# primero, ultimo, minimo y maximo solo miran los precios del mes.
 FACTOR_DE_PRECIO = {"ponderado": 1.6, "desglosado": 1.6}
 
 
@@ -600,31 +603,48 @@ def _modo(precio: bool | str) -> str:
     return "" if not precio else ("ponderado" if precio is True else str(precio))
 
 
-def _llave(cadena: str, precio: bool | str) -> str:
-    modo = _modo(precio)
-    return f"{cadena}|{modo}" if modo else cadena
+def _llave(cadena: str, precio: bool | str, con_tienda: bool) -> str:
+    return f"{cadena}|{_modo(precio) or 'sin precio'}|{'tienda' if con_tienda else 'total'}"
+
+
+def predecir(cadena: str, precio: bool | str, meses: int, con_tienda: bool) -> float:
+    fijo, por_mes, excel = TIEMPOS.get(cadena, (10, 10, 2))
+    factor = FACTOR_DE_PRECIO.get(_modo(precio), 1)
+    return fijo + (por_mes * factor + (excel if con_tienda else 0)) * max(1, meses)
 
 
 def estimar(cadenas: Iterable[str], precio: bool | str, historial: dict | None = None,
-            a_la_vez: int = 4) -> int:
+            a_la_vez: int = 4, meses: int = 6, con_tienda: bool = True) -> int:
     """Los segundos que tardara, repartiendo las cadenas entre `a_la_vez`
-    consultas: la mas larga primero, cada una al que se libere antes."""
+    consultas: la mas larga primero, cada una al que se libere antes. Lo
+    aprendido de reportes anteriores corrige cada cadena (ver aprender)."""
     historial = historial or {}
-    tiempos = []
-    for cadena in cadenas:
-        base = TIEMPOS_INICIALES.get(cadena, 60) * FACTOR_DE_PRECIO.get(_modo(precio), 1)
-        tiempos.append(float(historial.get(_llave(cadena, precio), base)))
+    tiempos = [
+        predecir(c, precio, meses, con_tienda) * float(historial.get(_llave(c, precio, con_tienda), 1.0))
+        for c in cadenas
+    ]
     carriles = [0.0] * max(1, a_la_vez)
     for segundos in sorted(tiempos, reverse=True):
         carriles[carriles.index(min(carriles))] += segundos
     return int(max(carriles) + (5 if precio else 0) + 10)
 
 
-def aprender(historial: dict, cadena: str, precio: bool | str, segundos: float) -> None:
-    """Corrige el tiempo de una cadena con lo que tardo esta vez (mitad y mitad)."""
-    llave = _llave(cadena, precio)
+def aprender(historial: dict, cadena: str, precio: bool | str, segundos: float,
+             meses: int = 6, con_tienda: bool = True) -> None:
+    """Guarda cuanto se equivoco la prediccion de esa cadena (mitad y mitad
+    con lo que ya sabia), para corregir la siguiente."""
+    prediccion = predecir(cadena, precio, meses, con_tienda)
+    if prediccion <= 0:
+        return
+    llave = _llave(cadena, precio, con_tienda)
+    razon = segundos / prediccion
     anterior = historial.get(llave)
-    historial[llave] = round(segundos if anterior is None else (anterior + segundos) / 2, 1)
+    historial[llave] = round(razon if anterior is None else (float(anterior) + razon) / 2, 3)
+
+
+def meses_entre(desde, hasta) -> int:
+    (a1, m1), (a2, m2) = desde, hasta
+    return (a2 - a1) * 12 + (m2 - m1) + 1
 
 
 def en_minutos(segundos: int) -> int:
@@ -635,21 +655,25 @@ def en_minutos(segundos: int) -> int:
 
 _TEXTOS = {
     "es": {
-        "listo": "Listo, aqui esta el reporte que pediste: venta de {periodo}, por {columnas}{precio}.",
-        "precio_ponderado": ", con el precio promedio ponderado por lo vendido cada dia",
-        "precio_ultimo": ", con el ultimo precio de cada mes",
+        "listo": "Listo, aquí está el reporte que pediste: venta de {periodo}, por {columnas}{precio}.",
+        "precio_ponderado": ", con el precio promedio ponderado por lo vendido cada día",
+        "precio_ultimo": ", con el último precio de cada mes",
         "precio_primero": ", con el primer precio de cada mes",
-        "precio_minimo": ", con el precio mas bajo de cada mes",
-        "precio_maximo": ", con el precio mas alto de cada mes",
-        "precio_desglosado": ", con cada precio en su fila y lo que se vendio a ese precio",
+        "precio_minimo": ", con el precio más bajo de cada mes",
+        "precio_maximo": ", con el precio más alto de cada mes",
+        "precio_desglosado": ", con cada precio en su fila y lo que se vendió a ese precio",
         "archivos": "Va en {n} archivos, uno por cadena.",
         "archivo": "Va en un archivo.",
         "total": "Total: {total} unidades.",
         "sin_precio": "sin precio en el {pct} de las unidades",
-        "sin_venta": "Sin venta en ese periodo: {cadenas}.",
-        "fallas": "No pude sacar: {cadenas}. Pidemelo de nuevo si lo necesitas.",
-        "falla": "No pude terminar el reporte que pediste ({error}). Pidemelo de nuevo, por favor.",
+        "sin_venta": "Todavía sin datos de ese periodo: {cadenas}.",
+        "fallas": "No pude sacar: {cadenas}. Pídemelo de nuevo si lo necesitas.",
+        "falla": "No pude terminar el reporte que pediste ({error}). Pídemelo de nuevo, por favor.",
         "unidades": "unidades",
+        "y": " y ",
+        "columnas": {"canal": "canal", "tienda": "tienda", "region": "región", "operador": "operador",
+                     "marca": "marca", "modelo": "modelo", "clasificacion": "clasificación",
+                     "semana": "semana"},
     },
     "en": {
         "listo": "Done, here is the report you asked for: sales for {periodo}, by {columnas}{precio}.",
@@ -663,10 +687,13 @@ _TEXTOS = {
         "archivo": "It comes in one file.",
         "total": "Total: {total} units.",
         "sin_precio": "no price for {pct} of the units",
-        "sin_venta": "No sales in that period: {cadenas}.",
+        "sin_venta": "No data loaded yet for that period: {cadenas}.",
         "fallas": "I couldn't get: {cadenas}. Ask me again if you need it.",
         "falla": "I couldn't finish the report you asked for ({error}). Please ask me again.",
         "unidades": "units",
+        "y": " and ",
+        "columnas": {"canal": "channel", "tienda": "store", "region": "region", "operador": "carrier",
+                     "marca": "brand", "modelo": "model", "clasificacion": "category", "semana": "week"},
     },
     "zh": {
         "listo": "好了，这是你要的报表：{periodo}的销量，按{columnas}{precio}。",
@@ -680,12 +707,22 @@ _TEXTOS = {
         "archivo": "共一个文件。",
         "total": "合计：{total} 台。",
         "sin_precio": "{pct} 的销量没有价格",
-        "sin_venta": "该期间没有销量：{cadenas}。",
+        "sin_venta": "该期间暂无数据：{cadenas}。",
         "fallas": "未能获取：{cadenas}。需要的话请再问我一次。",
         "falla": "我没能完成你要的报表（{error}）。请再问我一次。",
         "unidades": "台",
+        "y": "和",
+        "columnas": {"canal": "渠道", "tienda": "门店", "region": "区域", "operador": "运营商",
+                     "marca": "品牌", "modelo": "型号", "clasificacion": "类别", "semana": "周"},
     },
 }
+
+
+def _lista(cosas: list[str], y: str) -> str:
+    """'tienda, operador y modelo'."""
+    if len(cosas) <= 1:
+        return "".join(cosas)
+    return ", ".join(cosas[:-1]) + y + cosas[-1]
 
 
 def _texto(idioma: str) -> dict:
@@ -698,7 +735,8 @@ def para_el_usuario(r: Reporte, archivos: int, sin_venta: list[str], fallas: lis
     aqui no hay modelo que lo redacte, asi que va escrito."""
     t = _texto(idioma)
     lineas = [
-        t["listo"].format(periodo=periodo(r.desde, r.hasta), columnas=", ".join(r.columnas),
+        t["listo"].format(periodo=periodo(r.desde, r.hasta), columnas=_lista(
+                              [t["columnas"].get(c, c) for c in r.columnas], t["y"]),
                           precio=t["precio_" + r.modo] if r.precio else ""),
         t["archivos"].format(n=archivos) if archivos > 1 else t["archivo"],
         "",

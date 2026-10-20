@@ -26,6 +26,15 @@ class TestCadenasSinElMes:
         assert "Liverpool no tiene septiembre de 2026 (lo mas reciente: agosto de 2026)" in aviso
         assert "Movistar" in aviso and "Coppel" not in aviso
 
+    def test_el_ejemplo_nombra_solo_las_que_faltan(self, monkeypatch):
+        # Visto el 20/10/2026: el ejemplo era fijo ("sin Liverpool ni
+        # Movistar") y el modelo lo copio cuando solo faltaba Movistar.
+        meses = dict(MESES, Liverpool={(2026, m) for m in range(1, 10)})
+        monkeypatch.setattr(resumen_local, "meses_por_cadena", lambda: meses)
+        aviso = agent.cadenas_sin_el_periodo(
+            f"SELECT SUM([QTY]) FROM {CONSOLIDADA} WHERE [Brand] = 'HONOR' AND [Year] = 2026 AND [Month] = 9")
+        assert "'sin Movistar, que aun no carga ese mes'" in aviso and "Liverpool" not in aviso
+
     def test_filtrado_a_una_cadena_o_sin_mes_no_avisa(self, monkeypatch):
         monkeypatch.setattr(resumen_local, "meses_por_cadena", lambda: MESES)
         assert agent.cadenas_sin_el_periodo(
