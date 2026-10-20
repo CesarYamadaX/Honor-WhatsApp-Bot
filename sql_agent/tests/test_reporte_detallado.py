@@ -221,3 +221,94 @@ class TestGenerar:
         assert [p.cadena for p in r.partes] == ["SEARS"]
         r = rd.generar(ejecutar, ["COPPEL", "SEARS"], ["tienda", "modelo"], (2026, 5), (2026, 5), precio=True)
         assert [p.cadena for p in r.partes] == ["SEARS"]
+
+
+class TestQuePrecio:
+    """Pedido el 19/10/2026: si el precio cambio en el mes, preguntar cual
+    quiere, y poder ver todos los precios con lo vendido a cada uno."""
+
+    def _coppel_septiembre(self):
+        # $5,000 del 1 al 14 y $4,000 del 15 en adelante.
+        return _precios(*[("Coppel", "COP X6C", f"2026-09-{d:02d}", 5000.0 if d < 15 else 4000.0)
+                          for d in range(1, 31)])
+
+    def test_se_entiende_lo_que_elige(self):
+        assert rd.modo_de_precio("el último del mes") == "ultimo"
+        assert rd.modo_de_precio("Todos los precios") == "desglosado"
+        assert rd.modo_de_precio("el mas bajo") == "minimo"
+        assert rd.modo_de_precio("") == ""
+        with pytest.raises(ValueError):
+            rd.modo_de_precio("el de mi primo")
+
+    def test_cuanto_varia_por_cadena(self):
+        precios = self._coppel_septiembre()
+        fijo = _precios(*[("Sears", "SRS X6C", "2026-09-30", 6000.0)])
+        varia = rd.cuanto_varia(pd.concat([precios, fijo]), ["COPPEL", "SEARS"], (2026, 9), (2026, 9))
+        assert varia == {"COPPEL": 1.0}
+        # Fuera del periodo pedido no cuenta.
+        assert rd.cuanto_varia(precios, ["COPPEL"], (2026, 10), (2026, 10)) == {}
+
+    def test_la_pregunta_trae_las_seis_opciones_y_donde_cambio(self):
+        texto = rd.pregunta_de_precio({"COPPEL": 0.44, "TELCEL": 0.22})
+        assert "TODAVIA NO ARMES" in texto and "Coppel (44% de sus modelos)" in texto
+        assert all(f"{n}." in texto for n in range(1, 7)) and "desglosado" in texto
+
+    def test_primero_ultimo_minimo_maximo(self):
+        precios = self._coppel_septiembre()
+        venta = _venta(("Coppel", 2026, 9, "T1", X6C, None, 40))
+        for modo, esperado in (("primero", 5000.0), ("ultimo", 4000.0), ("minimo", 4000.0), ("maximo", 5000.0)):
+            tabla = rd.armar_parte("COPPEL", venta, ["tienda", "modelo"], precios, modo).tabla
+            assert tabla[rd.MODOS_DE_PRECIO[modo]].tolist() == [esperado], modo
+
+    def test_desglosado_una_fila_por_precio_con_sus_unidades(self):
+        precios = self._coppel_septiembre()
+        # T1 vendio 10 antes del cambio y 30 despues; T2 solo despues.
+        ventas = pd.DataFrame(
+            [("Coppel", 2026, 9, "T1", X6C, None, "2026-09-03", 4),
+             ("Coppel", 2026, 9, "T1", X6C, None, "2026-09-10", 6),
+             ("Coppel", 2026, 9, "T1", X6C, None, "2026-09-20", 30),
+             ("Coppel", 2026, 9, "T2", X6C, None, "2026-09-21", 2)],
+            columns=["Canal", "Año", "Mes", "Tienda", "Modelo", rd.DESCRIPCION, "Dia", "Unidades"],
+        )
+        parte = rd.armar_parte("COPPEL", ventas, ["tienda", "modelo"], precios, "desglosado")
+        filas = parte.tabla[["Tienda", "Unidades", "Precio"]].values.tolist()
+        # Juntos y de menor a mayor precio.
+        assert filas == [["T1", 30.0, 4000.0], ["T1", 10.0, 5000.0], ["T2", 2.0, 4000.0]]
+        assert parte.unidades == 42 and parte.con_precio == 1.0
+
+    def test_el_desglose_lee_cada_fila_por_dia_y_los_otros_no(self):
+        consultas = {}
+
+        def ejecutar(sql, de_que):
+            consultas[de_que] = sql
+            return None
+
+        for modo in ("desglosado", "ultimo", "ponderado"):
+            rd.generar(ejecutar, ["SEARS"], ["tienda", "modelo"], (2026, 9), (2026, 9), precio=True, modo=modo)
+            sql = consultas["SEARS"]
+            if modo == "desglosado":
+                assert "[Date] AS [Dia]" in sql and "GROUPING SETS" not in sql
+            elif modo == "ultimo":
+                assert "AS [Dia]" not in sql
+            else:
+                assert "GROUPING SETS" in sql
+
+
+class TestCuantoTarda:
+    def test_reparte_entre_cuatro_y_la_mas_larga_manda(self):
+        # Sin precio: Telcel (240 s) en un carril, las demas en los otros.
+        assert rd.estimar(list(rd.acceso.CADENAS), False) == 250
+        assert rd.estimar(["SEARS"], False) < 60
+
+    def test_cada_modo_de_precio_cuesta_distinto(self):
+        cadenas = list(rd.acceso.CADENAS)
+        ponderado, desglose, ultimo = (rd.estimar(cadenas, m) for m in ("ponderado", "desglosado", "ultimo"))
+        assert ultimo < ponderado <= desglose
+        assert rd.estimar(cadenas, True) == ponderado
+
+    def test_aprende_de_lo_que_tardo(self):
+        historial = {}
+        rd.aprender(historial, "TELCEL", "desglosado", 600)
+        rd.aprender(historial, "TELCEL", "desglosado", 400)
+        assert historial == {"TELCEL|desglosado": 500}
+        assert rd.estimar(["TELCEL"], "desglosado", historial) == 515

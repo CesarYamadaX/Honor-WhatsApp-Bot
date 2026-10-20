@@ -2345,3 +2345,32 @@ class TestReporteGrandeAparte:
         programados = []
         _, texto = self._pedir(engine, monkeypatch, "sears", programados)
         assert programados == [] and "No hay venta" in texto
+
+
+class TestQuePrecioQuiere:
+    def _pedir(self, engine, monkeypatch, varia, **extra):
+        monkeypatch.setattr(modulo_agente, "_cuanto_varia_el_precio", lambda *a: varia)
+        monkeypatch.setattr(modulo_agente, "_tiempos_de_reportes", lambda: {})
+        llamadas = []
+
+        def armar(*args, **kwargs):
+            llamadas.append(args)
+            return modulo_agente._Armado(detallado.Reporte(), [], {}, [])
+
+        monkeypatch.setattr(modulo_agente, "_armar_reporte_detallado", armar)
+        with contexto_peticion(engine, pregunta="reporte con precio") as ctx:
+            texto = modulo_agente.reporte_detallado.invoke(
+                {"cadenas": "sears", "desde": "2026-09", "columnas": "modelo", "con_precio": True, **extra})
+        return texto, llamadas
+
+    def test_si_el_precio_cambio_en_el_mes_primero_pregunta(self, engine, monkeypatch):
+        texto, llamadas = self._pedir(engine, monkeypatch, {"SEARS": 0.3})
+        assert "TODAVIA NO ARMES" in texto and llamadas == []
+
+    def test_si_no_cambio_arma_con_el_ponderado(self, engine, monkeypatch):
+        _, llamadas = self._pedir(engine, monkeypatch, {})
+        assert llamadas and llamadas[0][-1] == "ponderado"
+
+    def test_si_ya_dijo_cual_no_pregunta(self, engine, monkeypatch):
+        _, llamadas = self._pedir(engine, monkeypatch, {"SEARS": 0.3}, tipo_de_precio="desglosado")
+        assert llamadas and llamadas[0][-1] == "desglosado"

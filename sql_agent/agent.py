@@ -2194,7 +2194,7 @@ def _tiempos_de_reportes() -> dict:
         return {}
 
 
-def _anotar_tiempos(tiempos: dict[str, float], precio: bool) -> None:
+def _anotar_tiempos(tiempos: dict[str, float], precio: bool | str) -> None:
     if not tiempos:
         return
     with _candado_de_tiempos:
@@ -2208,6 +2208,23 @@ def _anotar_tiempos(tiempos: dict[str, float], precio: bool) -> None:
             logger.warning("No se pudieron guardar los tiempos del reporte detallado")
 
 
+def _cuanto_varia_el_precio(ctx: "ContextoPeticion", pedidas, inicio, fin) -> dict[str, float]:
+    """Que cadenas tienen modelos que cambiaron de precio dentro del mes.
+    Ante una falla, {}: se arma con el ponderado en vez de no armar nada."""
+    try:
+        with ctx.engine.connect() as conexion, _presupuesto_de_tiempo(conexion, TIMEOUT_VALORES * 3):
+            crudos = _ejecutar_interrumpible(conexion, detallado.sql_de_precios(inicio, fin), ctx.cancelacion)
+    except ConsultaCancelada:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("Reporte detallado: no se pudo ver si el precio cambia en el mes")
+        return {}
+    catalogo_de_modelos = homologacion.catalogo()
+    precios = detallado.precios_por_modelo(
+        crudos, catalogo_de_modelos.buscar if catalogo_de_modelos else (lambda _t: None))
+    return detallado.cuanto_varia(precios, pedidas, inicio, fin)
+
+
 @dataclass
 class _Armado:
     reporte: "detallado.Reporte"
@@ -2218,7 +2235,8 @@ class _Armado:
 
 
 def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: list[str], inicio, fin,
-                             marca: str, con_precio: bool, por_cadena: bool, plazo: int) -> _Armado:
+                             marca: str, con_precio: bool, por_cadena: bool, plazo: int,
+                             modo: str = "ponderado") -> _Armado:
     """Las consultas, el cruce y los Excel; lo mismo en linea que aparte."""
     fallas: dict[str, str] = {}
     comenzo = time.monotonic()
@@ -2273,7 +2291,7 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
     catalogo_de_modelos = homologacion.catalogo()
     reporte = detallado.generar(
         ejecutar, pedidas, lista, inicio, fin, marca=marca,
-        precio=con_precio,
+        precio=con_precio, modo=modo,
         buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
         en_paralelo=en_paralelo,
         al_terminar=al_terminar if por_cadena else None,
@@ -2288,7 +2306,7 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         grupos = [(None, reporte.partes, escribir(None, tabla))]
     else:
         grupos = []
-    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, con_precio)
+    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, modo if con_precio else False)
     sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
     return _Armado(reporte, grupos, fallas, sin_venta)
 
@@ -2302,6 +2320,7 @@ def reporte_detallado(
     con_precio: bool = False,
     un_archivo_por_cadena: bool = False,
     marca: str = "",
+    tipo_de_precio: str = "",
 ) -> str:
     """El reporte detallado de venta, ya hecho: por cadena, mes, tienda,
     modelo, operador o region, de una o varias cadenas, con precio si se pide,
@@ -2322,6 +2341,10 @@ def reporte_detallado(
     `con_precio`: el precio promedio de venta del mes (de la tabla Prices).
     `un_archivo_por_cadena`: True si pide un archivo por cadena o separados.
     `marca`: solo una marca ("HONOR"); vacio, todas.
+    `tipo_de_precio`, si el precio cambio dentro del mes: ponderado (por lo
+    vendido cada dia), ultimo, primero, minimo, maximo, o desglosado (una
+    fila por precio con lo vendido a cada uno). Si el usuario no lo dijo,
+    dejalo vacio: si hace falta, la herramienta te dira que se lo preguntes.
     Si va a tardar mas de un minuto se arma aparte y se le manda al usuario
     al acabar: la herramienta te dice cuanto tardara y que contestarle.
     """
@@ -2332,8 +2355,10 @@ def reporte_detallado(
         lista = detallado.columnas_pedidas(columnas)
         inicio = detallado.mes_de(desde, hoy)
         fin = detallado.mes_de(hasta, hoy)
+        modo = detallado.modo_de_precio(tipo_de_precio)
     except ValueError as error:
         return str(error)
+    con_precio = con_precio or bool(modo)
     if inicio > fin:
         inicio, fin = fin, inicio
     if ctx.cadenas:
@@ -2353,7 +2378,22 @@ def reporte_detallado(
         f"{', '.join(pedidas)}, {detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
         + (", con precio" if con_precio else "")
     )
-    estimado = detallado.estimar(pedidas, con_precio, _tiempos_de_reportes(), CONSULTAS_A_LA_VEZ)
+
+    # Precio sin decir cual: si cambio dentro del mes, primero se pregunta
+    # (pedido el 19/10/2026). Mirar los precios cuesta ~7 s.
+    if con_precio and not modo:
+        varia = _cuanto_varia_el_precio(ctx, pedidas, inicio, fin)
+        if varia:
+            bitacora.paso("el precio cambio dentro del mes: se pregunta cual quiere", bitacora.NOTA)
+            ctx.hubo_datos = True
+            ctx.sugerencias = []
+            texto = detallado.pregunta_de_precio(varia)
+            ctx.vistos.append(texto)
+            return texto
+        modo = "ponderado"
+    modo = modo or "ponderado"
+    estimado = detallado.estimar(pedidas, modo if con_precio else False, _tiempos_de_reportes(),
+                                 CONSULTAS_A_LA_VEZ)
 
     # Grande: se arma aparte, sin el limite de la peticion, y se entrega solo.
     if ctx.programar is not None and estimado > EN_LINEA_MAX_S:
@@ -2363,7 +2403,7 @@ def reporte_detallado(
         def trabajo(cancelacion: threading.Event) -> tuple[str, list[str]]:
             armado = _armar_reporte_detallado(
                 motor, cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena,
-                PLAZO_APARTE_S,
+                PLAZO_APARTE_S, modo,
             )
             if not armado.reporte.partes and armado.fallas:
                 raise RuntimeError("; ".join(f"{k}: {v}" for k, v in armado.fallas.items()))
@@ -2394,6 +2434,7 @@ def reporte_detallado(
     bitacora.paso(f"armando el reporte detallado: {descripcion}", bitacora.NOTA)
     armado = _armar_reporte_detallado(
         ctx.engine, ctx.cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena, queda,
+        modo,
     )
     reporte, fallas = armado.reporte, armado.fallas
     if fallas:

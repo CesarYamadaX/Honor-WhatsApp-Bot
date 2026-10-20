@@ -55,6 +55,36 @@ DESCRIPCION = "Descripcion de la cadena"
 _EXPRESION_DESCRIPCION = "CASE WHEN [Modelo] IS NULL THEN RTRIM([Material_Description]) END"
 PRECIO = "Precio promedio"
 
+# Que precio va cuando cambio dentro del mes. Pedido el 19/10/2026: que se le
+# pregunte al usuario cual prefiere, y que se puedan ver todos los precios con
+# lo que se vendio a cada uno.
+MODOS_DE_PRECIO = {
+    "ponderado": "Precio promedio",           # por lo vendido cada dia
+    "ultimo": "Precio al cierre del mes",
+    "primero": "Precio al inicio del mes",
+    "minimo": "Precio mas bajo del mes",
+    "maximo": "Precio mas alto del mes",
+    "desglosado": "Precio",                   # una fila por precio
+}
+_ALIAS_DE_MODO = {
+    "promedio": "ponderado", "ponderado": "ponderado", "último": "ultimo", "ultimo": "ultimo",
+    "cierre": "ultimo", "final": "ultimo", "primero": "primero", "inicio": "primero",
+    "minimo": "minimo", "mínimo": "minimo", "mas bajo": "minimo", "más bajo": "minimo",
+    "maximo": "maximo", "máximo": "maximo", "mas alto": "maximo", "más alto": "maximo",
+    "desglosado": "desglosado", "todos": "desglosado", "todos los precios": "desglosado",
+}
+
+
+def modo_de_precio(texto: str) -> str:
+    """'el ultimo' -> 'ultimo'; vacio -> ''. Uno que no se entiende, ValueError."""
+    limpio = (texto or "").strip().casefold()
+    if not limpio:
+        return ""
+    for alias, modo in _ALIAS_DE_MODO.items():
+        if alias in limpio:
+            return modo
+    raise ValueError(f"No entiendo el precio {texto!r}. Opciones: {', '.join(MODOS_DE_PRECIO)}.")
+
 _ALIAS_DE_CADENA = {
     "ATT": "AT&T", "AT T": "AT&T", "AT&T CACS": "AT&T", "AT&T DEALERS": "AT&T",
     "TELCEL CAC": "TELCEL", "MOVISTAR CACS": "MOVISTAR", "MOVISTAR CAC": "MOVISTAR",
@@ -137,7 +167,7 @@ def columnas_pedidas(texto: str) -> list[str]:
 
 
 def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "",
-                  diario: bool = False) -> str:
+                  diario: bool | str = False) -> str:
     """La venta de UNA cadena, agrupada. Siempre por [Retail] (para saber la
     cadena de cada fila y cruzar el precio) y por año y mes.
 
@@ -145,6 +175,9 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
     modelo POR DIA ([_detalle] = 0), para darle a cada dia el precio de ese
     dia (ver precio_por_fecha). Va en la misma consulta, con GROUPING SETS:
     recorrer la vista dos veces costaria el doble (Telcel: ~4 min cada vez).
+
+    Con `diario="completo"` (el desglose de precios), cada fila del reporte
+    por dia: para saber cuanto vendio esa tienda a cada precio.
     """
     expresiones = ["[Retail] AS [Canal]", "[Year] AS [Año]", "[Month] AS [Mes]"]
     agrupar = ["[Retail]", "[Year]", "[Month]"]
@@ -163,7 +196,12 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
     filtros = [_filtro_de_periodo(desde, hasta)]
     if marca:
         filtros.append(f"[Brand] = '{marca.replace(chr(39), chr(39) * 2)}'")
-    if diario:
+    if diario == "completo":
+        if "[Modelo]" not in agrupar:
+            raise ValueError("el precio va por modelo: pide la columna modelo")
+        expresiones.append("[Date] AS [Dia]")
+        grupos = ", ".join(agrupar + ["[Date]"])
+    elif diario:
         if "[Modelo]" not in agrupar:
             raise ValueError("el precio va por modelo: pide la columna modelo")
         expresiones += ["[Date] AS [Dia]", "GROUPING([Date]) AS [_detalle]"]
@@ -304,6 +342,35 @@ def precio_por_fecha(dias: pd.DataFrame, precios: pd.DataFrame, llaves: list[str
     return suma[llaves + [PRECIO]]
 
 
+def precio_del_mes(precios: pd.DataFrame, modo: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """El primero, el ultimo, el mas bajo o el mas alto de cada mes, por
+    [Retail] exacto y por cadena (el respaldo, como en el ponderado)."""
+    funcion = {"primero": "first", "ultimo": "last", "minimo": "min", "maximo": "max"}[modo]
+    ordenados = precios.sort_values("Dia")
+    exacto = ordenados.groupby(["retail", "Modelo", "Año", "Mes"], as_index=False)["Precio"].agg(funcion)
+    por_cadena = (ordenados.dropna(subset=["cadena"])
+                  .groupby(["cadena", "Modelo", "Año", "Mes", "Dia"], as_index=False)["Precio"].mean()
+                  .groupby(["cadena", "Modelo", "Año", "Mes"], as_index=False)["Precio"].agg(funcion))
+    return exacto, por_cadena
+
+
+def cuanto_varia(precios: pd.DataFrame, cadenas: Iterable[str], desde, hasta) -> dict[str, float]:
+    """Por cadena, que parte de sus modelos cambio de precio dentro de algun
+    mes del periodo (0.44 = 44%). Solo las que tienen alguno."""
+    if precios is None or precios.empty:
+        return {}
+    (a1, m1), (a2, m2) = desde, hasta
+    p = precios[(precios["Año"] * 100 + precios["Mes"]).between(a1 * 100 + m1, a2 * 100 + m2)]
+    p = p[p["cadena"].isin(set(cadenas))]
+    if p.empty:
+        return {}
+    distintos = p.assign(Precio=p["Precio"].round(0)).groupby(
+        ["cadena", "retail", "Modelo", "Año", "Mes"])["Precio"].nunique()
+    por_modelo = (distintos > 1).groupby(level=["cadena", "Modelo"]).any()
+    fraccion = por_modelo.groupby(level="cadena").mean()
+    return {c: float(f) for c, f in fraccion.items() if f > 0}
+
+
 @dataclass
 class Parte:
     """Lo de una cadena: su tabla y como salio."""
@@ -321,6 +388,7 @@ class Reporte:
     hasta: tuple[int, int] = (0, 0)
     columnas: list[str] = field(default_factory=list)
     precio: bool = False
+    modo: str = "ponderado"
 
     @property
     def unidades(self) -> float:
@@ -328,7 +396,7 @@ class Reporte:
 
 
 def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
-                precios: pd.DataFrame | None) -> Parte:
+                precios: pd.DataFrame | None, modo: str = "ponderado") -> Parte:
     """Ordena la tabla de una cadena, le pone el precio y la mide.
 
     Con `precios`, `ventas` trae tambien la venta por dia ([_detalle] = 0,
@@ -341,6 +409,7 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
         dias = t[t["_detalle"] == 0]
         t = t[t["_detalle"] == 1].drop(columns=["_detalle", "Dia"])
     t["Unidades"] = pd.to_numeric(t["Unidades"], errors="coerce").fillna(0.0)
+    nombre_del_precio = MODOS_DE_PRECIO.get(modo, PRECIO)
     if "Modelo" in t.columns:
         t["Modelo"] = t["Modelo"].fillna("")
         t[DESCRIPCION] = t[DESCRIPCION].fillna("")
@@ -350,18 +419,41 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
         if "Modelo" in t.columns and total else 0.0
     )
     cubierto = None
-    if precios is not None and dias is not None and "Modelo" in t.columns:
-        llaves = ["Canal", "Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Modelo"]
-        precio = precio_por_fecha(dias.dropna(subset=["Modelo"]), precios, llaves)
-        t = t.merge(precio, on=llaves, how="left")
-        cubierto = float(t.loc[t[PRECIO].notna(), "Unidades"].sum()) / total if total else 0.0
+    if precios is not None and "Modelo" in t.columns:
+        if modo == "desglosado" and "Dia" in t.columns:
+            # Cada dia con su precio, y se suma lo vendido a cada precio: una
+            # fila por precio, con sus unidades.
+            t["Dia"] = _como_dia(t["Dia"])
+            t["retail"] = t["Canal"].astype(str).str.strip().str.casefold()
+            t["cadena"] = t["Canal"].map(cadena_de)
+            t[nombre_del_precio] = _precio_en(t, precios, "retail").fillna(
+                _precio_en(t, precios, "cadena")).round(2)
+            fila = [c for c in t.columns if c not in ("Dia", "retail", "cadena", "Unidades")]
+            t = t.groupby(fila, as_index=False, dropna=False, sort=False)["Unidades"].sum()
+        elif modo == "ponderado" and dias is not None:
+            llaves = ["Canal", "Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Modelo"]
+            precio = precio_por_fecha(dias.dropna(subset=["Modelo"]), precios, llaves)
+            t = t.merge(precio, on=llaves, how="left")
+        elif modo in ("primero", "ultimo", "minimo", "maximo"):
+            exacto, por_cadena = precio_del_mes(precios, modo)
+            t["retail"] = t["Canal"].astype(str).str.strip().str.casefold()
+            t["cadena"] = t["Canal"].map(cadena_de)
+            t = t.merge(exacto.rename(columns={"Precio": "_exacto"}), on=["retail", "Modelo", "Año", "Mes"], how="left")
+            t = t.merge(por_cadena.rename(columns={"Precio": "_cadena"}), on=["cadena", "Modelo", "Año", "Mes"], how="left")
+            t[nombre_del_precio] = t["_exacto"].fillna(t["_cadena"]).round(2)
+            t = t.drop(columns=["retail", "cadena", "_exacto", "_cadena"])
+        if nombre_del_precio in t.columns:
+            cubierto = float(t.loc[t[nombre_del_precio].notna(), "Unidades"].sum()) / total if total else 0.0
     # Columnas en un orden que se lee: canal, periodo, lo pedido, unidades, precio.
     orden = ["Canal", "Año", "Mes"] + [COLUMNAS[c][1] for c in columnas if c != "canal"]
     if "modelo" in columnas and (t[DESCRIPCION] != "").any():
         orden.insert(orden.index("Modelo") + 1, DESCRIPCION)
-    orden += ["Unidades"] + ([PRECIO] if PRECIO in t.columns else [])
+    orden += ["Unidades"] + ([nombre_del_precio] if nombre_del_precio in t.columns else [])
     t = t[[c for c in orden if c in t.columns]]
     orden_de_filas = ["Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Canal"]
+    if modo == "desglosado" and nombre_del_precio in t.columns:
+        # Los precios de una misma fila, juntos y de menor a mayor.
+        orden_de_filas = [c for c in t.columns if c != "Unidades"]
     t = t[t["Unidades"] != 0].sort_values(orden_de_filas, kind="stable").reset_index(drop=True)
     return Parte(cadena, t, total, sin_modelo, cubierto)
 
@@ -369,6 +461,7 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
 def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterable[str], columnas: list[str],
             desde, hasta, marca: str = "", precio: bool = False,
             buscar: Callable[[str], str | None] | None = None,
+            modo: str = "ponderado",
             en_paralelo: Callable[[list[Callable[[], object]]], list] | None = None,
             al_terminar: Callable[[Parte], None] | None = None) -> Reporte:
     """Corre las consultas y arma el reporte.
@@ -394,17 +487,20 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
         precios = precios_por_modelo(crudos, buscar or (lambda _t: None))
 
     def una(cadena: str) -> Parte | None:
-        ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=precio), cadena)
+        # Solo el ponderado y el desglose necesitan la venta por dia; el
+        # primero, ultimo, minimo y maximo salen de los precios del mes.
+        diario = {"ponderado": True, "desglosado": "completo"}.get(modo, False) if precio else False
+        ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario), cadena)
         if ventas is None or ventas.empty:
             return None
-        parte = armar_parte(cadena, ventas, columnas, precios)
+        parte = armar_parte(cadena, ventas, columnas, precios, modo)
         if al_terminar is not None:
             al_terminar(parte)
         return parte
 
     trabajos: list[Callable[[], object]] = [(lambda c=c: una(c)) for c in cadenas]
     resultados = en_paralelo(trabajos) if en_paralelo else [t() for t in trabajos]
-    reporte = Reporte(desde=desde, hasta=hasta, columnas=columnas, precio=precio)
+    reporte = Reporte(desde=desde, hasta=hasta, columnas=columnas, precio=precio, modo=modo)
     reporte.partes = [p for p in resultados if p is not None]
     return reporte
 
@@ -420,11 +516,45 @@ def periodo(desde, hasta) -> str:
     return f"{_MESES[m1 - 1]} de {a1} a {_MESES[m2 - 1]} de {a2}"
 
 
+_COMO_ES_EL_PRECIO = {
+    "ponderado": ("El precio es el de la fecha de cada venta (tabla Prices): cada dia vendido toma "
+                  "el precio de ese dia, y el de la fila es el promedio ponderado por lo que se "
+                  "vendio cada dia. Vacio si no hay precio para esas fechas. Dilo asi."),
+    "ultimo": "El precio es el ultimo del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
+    "primero": "El precio es el primero del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
+    "minimo": "El precio es el mas bajo del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
+    "maximo": "El precio es el mas alto del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
+    "desglosado": ("Cada precio va en su propia fila, con las unidades que se vendieron a ese precio "
+                   "(el de la fecha de cada venta, tabla Prices): un modelo que cambio de precio en el "
+                   "mes sale en varias filas. Dilo asi."),
+}
+
+
+def pregunta_de_precio(varia: dict[str, float]) -> str:
+    """Lo que se le dice al modelo cuando hay que preguntar que precio quiere."""
+    donde = ", ".join(f"{acceso.NOMBRES.get(c, c)} ({f:.0%} de sus modelos)" for c, f in
+                      sorted(varia.items(), key=lambda x: -x[1]))
+    return (
+        "TODAVIA NO ARMES EL REPORTE. En ese periodo hay modelos que cambiaron de precio dentro del "
+        f"mes: {donde}. Preguntale al usuario, en un mensaje corto con las opciones numeradas, que "
+        "precio quiere:\n"
+        "1. El promedio ponderado por lo vendido cada dia (recomendado: por las unidades da el valor real vendido)\n"
+        "2. El ultimo precio del mes\n"
+        "3. El primero del mes\n"
+        "4. El mas bajo del mes\n"
+        "5. El mas alto del mes\n"
+        "6. Todos los precios: una fila por precio, con las unidades que se vendieron a cada uno\n"
+        "Cuando conteste, vuelve a llamar `reporte_detallado` con lo mismo que pidio y "
+        "`tipo_de_precio` = ponderado, ultimo, primero, minimo, maximo o desglosado."
+    )
+
+
 def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
     """Lo que lee el modelo."""
     lineas = [
         f"Reporte detallado de venta, {periodo(r.desde, r.hasta)}, con: "
-        f"año, mes, {', '.join(r.columnas)}, unidades" + (", precio promedio del mes" if r.precio else "") + ".",
+        f"año, mes, {', '.join(r.columnas)}, unidades"
+        + (f", {MODOS_DE_PRECIO.get(r.modo, PRECIO).lower()}" if r.precio else "") + ".",
         f"Total: {r.unidades:,.0f} unidades.",
         "Por cadena:",
     ]
@@ -445,12 +575,7 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
         "una o dos frases con el total y lo que se pidio."
     )
     if r.precio:
-        lineas.append(
-            "El precio es el de la fecha de cada venta (tabla Prices): cada dia "
-            "vendido toma el precio de ese dia, y el de la fila es el promedio "
-            "ponderado por lo que se vendio cada dia. Vacio si no hay precio "
-            "para esas fechas. Dilo asi."
-        )
+        lineas.append(_COMO_ES_EL_PRECIO.get(r.modo, _COMO_ES_EL_PRECIO["ponderado"]))
     return "\n".join(lineas)
 
 
@@ -463,23 +588,31 @@ TIEMPOS_INICIALES = {
     "TELCEL": 240, "COPPEL": 160, "LIVERPOOL": 70, "ELEKTRA": 50,
     "AT&T": 55, "SEARS": 8, "MOVISTAR": 6,
 }
-# Con precio la misma lectura trae tambien la venta por dia: medido el
-# 19/10/2026, Telcel 260 s, Elektra 218 s, Coppel 186 s, AT&T y Liverpool ~100 s.
-CON_PRECIO = 1.6
+# Cuanto mas tarda cada forma de poner el precio. El ponderado lee tambien
+# la venta por dia (medido el 19/10/2026: Telcel 260 s, Elektra 218 s,
+# Coppel 186 s, AT&T y Liverpool ~100 s); el desglose lee cada fila por dia;
+# el primero, ultimo, minimo y maximo solo miran los precios del mes.
+# Medido el desglose de Coppel y Sears: 208 s, contra ~160 s sin precio.
+FACTOR_DE_PRECIO = {"ponderado": 1.6, "desglosado": 1.6}
 
 
-def _llave(cadena: str, precio: bool) -> str:
-    return f"{cadena}{'|precio' if precio else ''}"
+def _modo(precio: bool | str) -> str:
+    return "" if not precio else ("ponderado" if precio is True else str(precio))
 
 
-def estimar(cadenas: Iterable[str], precio: bool, historial: dict | None = None,
+def _llave(cadena: str, precio: bool | str) -> str:
+    modo = _modo(precio)
+    return f"{cadena}|{modo}" if modo else cadena
+
+
+def estimar(cadenas: Iterable[str], precio: bool | str, historial: dict | None = None,
             a_la_vez: int = 4) -> int:
     """Los segundos que tardara, repartiendo las cadenas entre `a_la_vez`
     consultas: la mas larga primero, cada una al que se libere antes."""
     historial = historial or {}
     tiempos = []
     for cadena in cadenas:
-        base = TIEMPOS_INICIALES.get(cadena, 60) * (CON_PRECIO if precio else 1)
+        base = TIEMPOS_INICIALES.get(cadena, 60) * FACTOR_DE_PRECIO.get(_modo(precio), 1)
         tiempos.append(float(historial.get(_llave(cadena, precio), base)))
     carriles = [0.0] * max(1, a_la_vez)
     for segundos in sorted(tiempos, reverse=True):
@@ -487,7 +620,7 @@ def estimar(cadenas: Iterable[str], precio: bool, historial: dict | None = None,
     return int(max(carriles) + (5 if precio else 0) + 10)
 
 
-def aprender(historial: dict, cadena: str, precio: bool, segundos: float) -> None:
+def aprender(historial: dict, cadena: str, precio: bool | str, segundos: float) -> None:
     """Corrige el tiempo de una cadena con lo que tardo esta vez (mitad y mitad)."""
     llave = _llave(cadena, precio)
     anterior = historial.get(llave)
@@ -503,7 +636,12 @@ def en_minutos(segundos: int) -> int:
 _TEXTOS = {
     "es": {
         "listo": "Listo, aqui esta el reporte que pediste: venta de {periodo}, por {columnas}{precio}.",
-        "precio": ", con el precio de la fecha de cada venta",
+        "precio_ponderado": ", con el precio promedio ponderado por lo vendido cada dia",
+        "precio_ultimo": ", con el ultimo precio de cada mes",
+        "precio_primero": ", con el primer precio de cada mes",
+        "precio_minimo": ", con el precio mas bajo de cada mes",
+        "precio_maximo": ", con el precio mas alto de cada mes",
+        "precio_desglosado": ", con cada precio en su fila y lo que se vendio a ese precio",
         "archivos": "Va en {n} archivos, uno por cadena.",
         "archivo": "Va en un archivo.",
         "total": "Total: {total} unidades.",
@@ -515,7 +653,12 @@ _TEXTOS = {
     },
     "en": {
         "listo": "Done, here is the report you asked for: sales for {periodo}, by {columnas}{precio}.",
-        "precio": ", with the price on the date of each sale",
+        "precio_ponderado": ", with the average price weighted by daily sales",
+        "precio_ultimo": ", with the last price of each month",
+        "precio_primero": ", with the first price of each month",
+        "precio_minimo": ", with the lowest price of each month",
+        "precio_maximo": ", with the highest price of each month",
+        "precio_desglosado": ", with each price on its own row and the units sold at it",
         "archivos": "It comes in {n} files, one per retailer.",
         "archivo": "It comes in one file.",
         "total": "Total: {total} units.",
@@ -527,7 +670,12 @@ _TEXTOS = {
     },
     "zh": {
         "listo": "好了，这是你要的报表：{periodo}的销量，按{columnas}{precio}。",
-        "precio": "，价格按每笔销售当天的价格",
+        "precio_ponderado": "，价格为按每日销量加权的平均价",
+        "precio_ultimo": "，价格为每月最后的价格",
+        "precio_primero": "，价格为每月第一个价格",
+        "precio_minimo": "，价格为每月最低价",
+        "precio_maximo": "，价格为每月最高价",
+        "precio_desglosado": "，每个价格单独一行，附该价格的销量",
         "archivos": "共 {n} 个文件，每个渠道一个。",
         "archivo": "共一个文件。",
         "total": "合计：{total} 台。",
@@ -551,7 +699,7 @@ def para_el_usuario(r: Reporte, archivos: int, sin_venta: list[str], fallas: lis
     t = _texto(idioma)
     lineas = [
         t["listo"].format(periodo=periodo(r.desde, r.hasta), columnas=", ".join(r.columnas),
-                          precio=t["precio"] if r.precio else ""),
+                          precio=t["precio_" + r.modo] if r.precio else ""),
         t["archivos"].format(n=archivos) if archivos > 1 else t["archivo"],
         "",
         t["total"].format(total=f"{r.unidades:,.0f}"),
