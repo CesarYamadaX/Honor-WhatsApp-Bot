@@ -1067,6 +1067,7 @@ class TestToolkitDelAgente:
             "precio_en_internet",
             "semanas_de_inventario",
             "promotoria_contra_ventas",
+            "reporte_detallado",
         }
 
     def test_el_prompt_reserva_el_pronostico_para_el_futuro(self, engine, monkeypatch):
@@ -2268,6 +2269,11 @@ class TestVariosArchivos:
             ctx.entregar_reporte("Listo.")
         assert len(ctx.archivos) == 2 and ctx.archivos[1].endswith("reporte_sql_1.xlsx")
         assert ctx.entregados == []
+
+    def test_un_archivo_que_ya_trae_su_cadena_no_se_renombra(self, tmp_path):
+        ruta = tmp_path / "reporte_Coppel_20261019.xlsx"
+        ruta.write_bytes(b"x")
+        assert modulo_agente._con_el_tema_en_el_nombre(str(ruta), "Coppel") == str(ruta)
 
     def test_el_tema_es_la_cadena_si_son_pocas(self):
         assert modulo_agente.tema_del_resultado(pd.DataFrame({"Retail": ["Coppel"] * 3})) == "Coppel"

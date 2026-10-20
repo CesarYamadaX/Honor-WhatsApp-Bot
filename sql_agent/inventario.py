@@ -39,11 +39,12 @@ INVENTARIO = "[RAW_INV_B2B].dbo.[TELCEL_INV_B2B]"
 VENTA = "[RAW_DATA_B2B].dbo.[vw_ETL_TELCEL_B2B]"
 HOMOLOGACION = "[GTM BI Database].dbo.[UNICOS$]"
 SEMANAS_DE_PROMEDIO = 4
-# Lo que se agrega al nombre de un modelo que UNICOS$ no tiene. Pedido el
-# 9/10/2026: el modelo va SIEMPRE por su nombre homologado; uno que no esta en
-# el catalogo no se disfraza de homologado ("HONOR X6E 128GB 4G" armado del
-# texto de Telcel), se dice.
-SIN_HOMOLOGAR = " (sin homologar)"
+# Un modelo que UNICOS$ no tiene va con el [Modelo] VACIO y su descripcion de
+# Telcel al lado, en esta columna. Pedido el 9/10/2026: el modelo va SIEMPRE
+# por su nombre homologado, nunca uno armado del texto de Telcel; y el
+# 19/10/2026: lo que no esta en UNICOS$, con el nombre homologado vacio (antes
+# iba el texto de Telcel marcado "(sin homologar)").
+DESCRIPCION_TELCEL = "Descripcion Telcel"
 
 _SKU_DE_LA_VENTA = "LEFT([Material_Description], CHARINDEX(' ', [Material_Description] + ' ') - 1)"
 
@@ -58,8 +59,8 @@ class Resultado:
     venta_semanal: float
     sin_venta: list[str] = field(default_factory=list)
     recortada: bool = False
-    # Los modelos que no estan en UNICOS$, con su stock: van con el nombre
-    # de Telcel y marcados SIN_HOMOLOGAR.
+    # Las descripciones de Telcel de lo que no esta en UNICOS$: en la tabla
+    # van con el [Modelo] vacio (ver DESCRIPCION_TELCEL).
     sin_homologar: list[str] = field(default_factory=list)
 
     @property
@@ -174,18 +175,24 @@ def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
     # del inventario contra UNICOS$ tal cual, luego normalizada (el mismo
     # catalogo que la columna [Modelo] del Excel), luego la de la venta del
     # mismo SKU. Si el catalogo no lo tiene (X6E y X7E no estaban en octubre
-    # de 2026), el nombre de Telcel marcado SIN_HOMOLOGAR.
+    # de 2026), el [Modelo] vacio y su descripcion de Telcel al lado.
     nombres = dict(zip(homologado["descripcion"], homologado["modelo"])) if not homologado.empty else {}
     juntos["Modelo"] = [
         nombre_de_modelo(d, nombres, catalogo, v)
         for d, v in zip(juntos["descripcion"], juntos["descripcion_venta"])
     ]
+    juntos[DESCRIPCION_TELCEL] = [
+        "" if modelo else str(d if isinstance(d, str) and d else v or "").strip()
+        for modelo, d, v in zip(juntos["Modelo"], juntos["descripcion"], juntos["descripcion_venta"])
+    ]
     # "X6C" tambien aparece en la descripcion de un combo del HONOR 400 que
-    # regala un X6C: si se pidio un modelo, se queda lo que ES ese modelo.
+    # regala un X6C: si se pidio un modelo, se queda lo que ES ese modelo. Lo
+    # que no esta homologado se busca en su descripcion de Telcel.
     for token in _tokens(texto):
-        juntos = juntos[juntos["Modelo"].str.upper().str.contains(token, regex=False)]
+        nombre = juntos["Modelo"].where(juntos["Modelo"] != "", juntos[DESCRIPCION_TELCEL])
+        juntos = juntos[nombre.str.upper().str.contains(token, regex=False)]
 
-    tabla = juntos.groupby("Modelo", as_index=False).agg(
+    tabla = juntos.groupby(["Modelo", DESCRIPCION_TELCEL], as_index=False).agg(
         Stock=("stock", "sum"), venta=("venta", "sum")
     )
     tabla["Venta semanal"] = tabla["venta"] / semanas
@@ -195,8 +202,14 @@ def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
     tabla = tabla.rename(columns={"venta": f"Venta {semanas} semanas"})
     tabla = tabla.sort_values("Stock", ascending=False).reset_index(drop=True)
 
-    sin_venta = tabla.loc[(tabla["Stock"] > 0) & (tabla[f"Venta {semanas} semanas"] <= 0), "Modelo"].tolist()
-    sin_homologar = [m for m in tabla["Modelo"] if str(m).endswith(SIN_HOMOLOGAR)]
+    sin_venta = [
+        nombre_en_la_tabla(f)
+        for _, f in tabla[(tabla["Stock"] > 0) & (tabla[f"Venta {semanas} semanas"] <= 0)].iterrows()
+    ]
+    sin_homologar = tabla.loc[tabla["Modelo"] == "", DESCRIPCION_TELCEL].tolist()
+    # Si todo esta homologado, la columna de Telcel no aporta nada.
+    if not sin_homologar:
+        tabla = tabla.drop(columns=[DESCRIPCION_TELCEL])
     return Resultado(
         foto=foto, desde=desde, hasta=hasta, tabla=tabla,
         stock=float(tabla["Stock"].sum()),
@@ -205,17 +218,17 @@ def armar(stock: pd.DataFrame, venta: pd.DataFrame, homologado: pd.DataFrame,
     )
 
 
-# 'HONOR 4G LBU-LX3 X6E 128GB NEGRO IU' -> 'HONOR X6E 128GB 4G', la forma
-# del catalogo de homologacion, para los modelos que todavia no estan en el.
-_DESCRIPCION_DE_TELCEL = re.compile(
-    r"^(?P<marca>\S+)\s+(?P<red>[2345]G)\s+\S+\s+(?P<modelo>.+?)\s+(?P<memoria>\d+\s*(?:GB|TB))(?!\w)",
-    re.IGNORECASE,
-)
+def nombre_en_la_tabla(fila) -> str:
+    """Como se nombra una fila al hablar de ella: su modelo, o si no esta
+    homologado, su descripcion de Telcel dicha como tal."""
+    if fila.get("Modelo"):
+        return fila["Modelo"]
+    return f"{fila.get(DESCRIPCION_TELCEL, '')} (descripcion de Telcel, no esta en UNICOS$)"
 
 
 def nombre_de_modelo(descripcion: str, homologado: dict, catalogo=None,
                      descripcion_venta: str | None = None) -> str:
-    """El [HOMOLOGACION MODELO] de UNICOS$, o el nombre de Telcel marcado."""
+    """El [HOMOLOGACION MODELO] de UNICOS$, o "" si no esta."""
     if descripcion in homologado and homologado[descripcion]:
         return homologado[descripcion]
     if catalogo is not None:
@@ -223,13 +236,7 @@ def nombre_de_modelo(descripcion: str, homologado: dict, catalogo=None,
             modelo = catalogo.buscar(texto) if isinstance(texto, str) else None
             if modelo:
                 return modelo
-    descripcion = descripcion if isinstance(descripcion, str) else str(descripcion_venta or "")
-    m = _DESCRIPCION_DE_TELCEL.match(descripcion or "")
-    if not m:
-        return f"{descripcion}{SIN_HOMOLOGAR}"
-    # Los colores del mismo telefono juntos ('X6E 128GB NEGRO' y 'DORADO'),
-    # pero dicho: no es el nombre del catalogo.
-    return f"{m['marca']} {m['modelo']} {m['memoria'].replace(' ', '')} {m['red']}".upper() + SIN_HOMOLOGAR
+    return ""
 
 
 def _numero(x: float) -> str:
@@ -250,7 +257,7 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
         # Que modelos cubre la cuenta, dicho: sin esto el revisor no sabia
         # que "1 079 unidades" eran del X6c que se pregunto (9/10/2026).
         "Modelos que cubre: " + (
-            ", ".join(map(str, r.tabla["Modelo"].head(5)))
+            ", ".join(nombre_en_la_tabla(f) for _, f in r.tabla.head(5).iterrows())
             + (f" y {len(r.tabla) - 5} mas" if len(r.tabla) > 5 else "")
         ) + ".",
         f"Stock: {_numero(r.stock)} unidades en la foto del {r.foto:%d/%m/%Y} "
@@ -267,10 +274,11 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
     ]
     if r.sin_homologar:
         lineas.append(
-            "OJO: estos modelos NO estan en UNICOS$ (el catalogo de homologacion) "
-            f"y van con el nombre de Telcel: {', '.join(r.sin_homologar)}. Al "
-            "responder nombralos asi, di que todavia no estan homologados y que "
-            "hay que darlos de alta en UNICOS$."
+            "OJO: estos productos NO estan en UNICOS$ (el catalogo de homologacion); "
+            "en el Excel van con el modelo vacio y su descripcion de Telcel: "
+            f"{', '.join(r.sin_homologar)}. Al responder nombralos por esa "
+            "descripcion, di que todavia no estan homologados y que hay que "
+            "darlos de alta en UNICOS$. No les inventes un nombre de modelo."
         )
     if r.recortada:
         lineas.append(
@@ -283,7 +291,7 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
         for _, f in filas.iterrows():
             s = f["Semanas de inventario"]
             lineas.append(
-                f"- {f['Modelo']}: stock {_numero(f['Stock'])}, venta semanal "
+                f"- {nombre_en_la_tabla(f)}: stock {_numero(f['Stock'])}, venta semanal "
                 f"{_numero(f['Venta semanal'])}, "
                 + (f"{s:.1f} semanas" if s is not None and not pd.isna(s) else "sin venta en el periodo")
             )
@@ -293,7 +301,10 @@ def como_texto(r: Resultado, maximo: int = 15) -> str:
             "Al contestar, nombra los 3 modelos con mas stock con sus "
             "semanas. El resto va adjunto: no lo menciones."
         )
-    lentos = r.tabla.loc[pd.to_numeric(r.tabla["Semanas de inventario"], errors="coerce").fillna(0) > 52, "Modelo"].tolist()
+    lentos = [
+        nombre_en_la_tabla(f)
+        for _, f in r.tabla[pd.to_numeric(r.tabla["Semanas de inventario"], errors="coerce").fillna(0) > 52].iterrows()
+    ]
     if lentos:
         lineas.append(
             f"Con mas de un ano de inventario: {', '.join(lentos[:5])}. Casi "

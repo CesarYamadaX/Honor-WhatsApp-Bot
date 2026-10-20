@@ -65,7 +65,7 @@ class TestLaCuenta:
         r = inv.armar(_stock(("1", "HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", 8955.0)),
                       _venta(), _HOMOLOGADO, FOTO, DESDE, HASTA)
         assert r.semanas is None
-        assert r.sin_venta == ["HONOR X6E 128GB 4G (sin homologar)"]
+        assert r.sin_venta == ["HONOR 4G LBU-LX3 X6E 128GB NEGRO IU (descripcion de Telcel, no esta en UNICOS$)"]
         assert "sin venta" in inv.como_texto(r)
 
     def test_venta_sin_stock_es_cero_semanas(self):
@@ -75,15 +75,31 @@ class TestLaCuenta:
 
 
 class TestNombres:
-    def test_un_modelo_sin_homologar_se_dice(self):
+    def test_un_modelo_sin_homologar_va_vacio(self):
         # X6E y X7E no estaban en UNICOS$ en octubre de 2026. Pedido el
-        # 9/10/2026: siempre el nombre homologado; si no lo hay, se dice, no
-        # se arma uno que parezca del catalogo.
-        assert inv.nombre_de_modelo("HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", {}) == "HONOR X6E 128GB 4G (sin homologar)"
-        assert inv.nombre_de_modelo("HONOR 4G LAB-LX3 X7E 256GB NARANJA IU", {}) == "HONOR X7E 256GB 4G (sin homologar)"
+        # 9/10/2026: siempre el nombre homologado, nunca uno armado; y el
+        # 19/10/2026: si no esta en UNICOS$, el nombre homologado vacio.
+        assert inv.nombre_de_modelo("HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", {}) == ""
+        assert inv.nombre_de_modelo("ACCESORIO RARO", {}) == ""
 
-    def test_lo_que_no_se_entiende_va_con_su_texto_y_marcado(self):
-        assert inv.nombre_de_modelo("ACCESORIO RARO", {}) == "ACCESORIO RARO (sin homologar)"
+    def test_en_la_tabla_va_vacio_con_su_descripcion_de_telcel_y_sin_juntarse(self):
+        r = inv.armar(_stock(("1", "HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", 10.0),
+                             ("2", "HONOR 4G LAB-LX3 X7E 256GB NARANJA IU", 5.0),
+                             ("3", "HONOR 4G NIC-LX3 X6C 256GB CIAN IU", 7.0)),
+                      _venta(), _HOMOLOGADO, FOTO, DESDE, HASTA)
+        filas = r.tabla[["Modelo", inv.DESCRIPCION_TELCEL]].values.tolist()
+        assert ["", "HONOR 4G LBU-LX3 X6E 128GB NEGRO IU"] in filas
+        assert ["", "HONOR 4G LAB-LX3 X7E 256GB NARANJA IU"] in filas
+        assert ["HONOR X6C 256GB 4G", ""] in filas
+
+    def test_si_todo_esta_homologado_no_va_la_columna_de_telcel(self):
+        assert inv.DESCRIPCION_TELCEL not in _x6c().tabla.columns
+
+    def test_un_modelo_pedido_que_no_esta_homologado_se_encuentra(self):
+        r = inv.armar(_stock(("1", "HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", 10.0),
+                             ("3", "HONOR 4G NIC-LX3 X6C 256GB CIAN IU", 7.0)),
+                      _venta(), _HOMOLOGADO, FOTO, DESDE, HASTA, texto="X6E")
+        assert r.stock == 10.0
 
     def test_casa_con_el_catalogo_normalizado_o_por_la_venta(self):
         from homologacion import Catalogo
@@ -97,7 +113,7 @@ class TestNombres:
         r = inv.armar(_stock(("1", "HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", 10.0)),
                       _venta(("1", "1 HONOR 4G LBU-LX3 X6E 128GB NEGRO IU", 8.0)),
                       _HOMOLOGADO, FOTO, DESDE, HASTA)
-        assert r.sin_homologar == ["HONOR X6E 128GB 4G (sin homologar)"]
+        assert r.sin_homologar == ["HONOR 4G LBU-LX3 X6E 128GB NEGRO IU"]
         assert "NO estan en UNICOS$" in inv.como_texto(r)
 
 

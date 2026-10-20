@@ -3,6 +3,8 @@ import os
 import re
 import threading
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -52,6 +54,7 @@ import acceso
 from contexto import CRUDAS, contexto_del_resultado, ficha_del_archivo
 import excel_pivot
 import promotoria
+import reporte_detallado as detallado
 import proveedor
 import homologacion
 from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
@@ -736,6 +739,9 @@ class ContextoPeticion:
     reportes: list[Reporte] = field(default_factory=list)
     # Los que se entregaron, cuando se pidieron varios archivos.
     entregados: list[Reporte] = field(default_factory=list)
+    # Lo pone una herramienta que ya armo un archivo por cadena
+    # (reporte_detallado): se entregan todos aunque la pregunta no lo diga.
+    varios_archivos: bool = False
 
     def registrar_reporte(
         self,
@@ -812,7 +818,7 @@ class ContextoPeticion:
         cadena, se armaron el de Coppel y el de Sears, y llego solo el de
         Coppel.
         """
-        if pidio_varios_archivos(self.pregunta):
+        if self.varios_archivos or pidio_varios_archivos(self.pregunta):
             varios = self._varios_reportes()
             if len(varios) > 1:
                 self._entregar_varios(varios)
@@ -2082,6 +2088,8 @@ def _con_el_tema_en_el_nombre(ruta: str, tema: str | None) -> str:
     if not tema:
         return ruta
     origen = Path(ruta)
+    if tema.casefold() in origen.name.casefold():  # ya lo trae (reporte_detallado)
+        return ruta
     limpio = re.sub(r'[\\/:*?"<>|]+', "", tema).strip().replace(" ", "_")
     nombre = origen.name.replace("reporte_sql_", f"reporte_{limpio}_", 1)
     if nombre == origen.name:
@@ -2154,6 +2162,171 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
 # Telcel tarda ~135 s en el servidor (su vista es la mas grande): mas que el
 # tope normal de una herramienta, pero sin pasarse de lo que queda.
 PLAZO_DE_PROMOTORIA = 180
+
+# El reporte detallado corre una consulta por cadena, a la vez. Medido el
+# 19/10/2026, mayo a octubre por tienda, operador y modelo: Coppel 92 s (un
+# millon de filas), Elektra 28 s, Sears 2 s. Lo que queda despues de las
+# consultas es para escribir los Excel, que con un millon de filas son ~2 min.
+CONSULTAS_A_LA_VEZ = 4
+RESERVA_PARA_LOS_EXCEL = 150
+
+
+@tool
+def reporte_detallado(
+    cadenas: str = "todas",
+    desde: str = "",
+    hasta: str = "",
+    columnas: str = "canal, tienda, modelo",
+    con_precio: bool = False,
+    un_archivo_por_cadena: bool = False,
+    marca: str = "",
+) -> str:
+    """El reporte detallado de venta, ya hecho: por cadena, mes, tienda,
+    modelo, operador o region, de una o varias cadenas, con precio si se pide,
+    en un Excel o uno por cadena.
+
+    Usala SIEMPRE que pidan un reporte o un archivo de venta con detalle
+    (tienda, modelo, mes, operador, region) o con precio, o un archivo por
+    cadena. No lo armes con `consultar_sql`: el 19/10/2026 ese cruce a mano
+    se corto a los 507 s, y el de "un archivo por cadena" dejo fuera a cinco
+    cadenas. Llamala UNA vez, con todo lo que se pidio.
+
+    `cadenas`: separadas por comas (Coppel, Telcel, AT&T, Movistar,
+    Liverpool, Elektra, Sears) o "todas". Cada cadena trae todos sus canales
+    ("Telcel CAC" es Telcel; el canal sale en la columna Canal).
+    `desde`, `hasta`: meses AAAA-MM ("2026-05"); "a la fecha" es `hasta`
+    vacio (el mes en curso). `columnas`: de canal, tienda, region, operador,
+    marca, modelo, clasificacion; año, mes y unidades van siempre.
+    `con_precio`: el precio promedio de venta del mes (de la tabla Prices).
+    `un_archivo_por_cadena`: True si pide un archivo por cadena o separados.
+    `marca`: solo una marca ("HONOR"); vacio, todas.
+    """
+    ctx = _contexto_actual()
+    hoy = datetime.now().date()
+    try:
+        pedidas = detallado.cadenas_pedidas(cadenas)
+        lista = detallado.columnas_pedidas(columnas)
+        inicio = detallado.mes_de(desde, hoy)
+        fin = detallado.mes_de(hasta, hoy)
+    except ValueError as error:
+        return str(error)
+    if inicio > fin:
+        inicio, fin = fin, inicio
+    if ctx.cadenas:
+        fuera = [c for c in pedidas if c not in ctx.cadenas]
+        pedidas = [c for c in pedidas if c in ctx.cadenas]
+        if fuera:
+            ctx.negadas.update(fuera)
+        if not pedidas:
+            return _sin_permiso(ctx, acceso.Acotada("", fuera=fuera))
+
+    queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - RESERVA_PARA_LOS_EXCEL)
+    if queda < MINIMO_UTIL:
+        return ("Ya no queda tiempo en esta peticion para armar el reporte. No "
+                "reintentes: dile al usuario que lo vuelva a pedir.")
+    bitacora.paso(
+        f"armando el reporte detallado: {', '.join(pedidas)}, "
+        f"{detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
+        + (", con precio" if con_precio else ""),
+        bitacora.NOTA,
+    )
+
+    fallas: dict[str, str] = {}
+
+    def ejecutar(sql: str, de_que: str) -> pd.DataFrame | None:
+        if ctx.cancelacion is not None and ctx.cancelacion.is_set():
+            raise ConsultaCancelada()
+        comenzo = time.monotonic()
+        try:
+            with ctx.engine.connect() as conexion, _presupuesto_de_tiempo(conexion, queda):
+                df = _ejecutar_interrumpible(conexion, sql, ctx.cancelacion)
+        except ConsultaCancelada:
+            raise
+        except Exception as error:  # noqa: BLE001 - las demas cadenas siguen
+            logger.exception("Reporte detallado: fallo la consulta de %s", de_que)
+            fallas[de_que] = str(error)[:200]
+            return None
+        logger.info("Reporte detallado: %s en %.0fs, %d filas", de_que, time.monotonic() - comenzo, len(df))
+        return df
+
+    def en_paralelo(trabajos):
+        with ThreadPoolExecutor(max_workers=CONSULTAS_A_LA_VEZ) as pool:
+            return [f.result() for f in [pool.submit(t) for t in trabajos]]
+
+    # Un archivo por cadena si se pidio, si es una sola, o si es por tienda de
+    # varias: medido el 19/10/2026, todas por tienda y modelo son 2.2 millones
+    # de filas, y un solo Excel asi pasaria de 80 MB.
+    por_cadena = un_archivo_por_cadena or len(pedidas) == 1 or "tienda" in lista
+    marca_de_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    escritos: dict[str, str] = {}
+
+    def escribir(tema: str | None, tabla: pd.DataFrame) -> str | None:
+        etiqueta = re.sub(r'[\\/:*?"<>| ]+', "_", tema or "cadenas")
+        try:
+            return ExcelExporter.export_to_excel(
+                tabla, filename=f"reporte_{etiqueta}_{marca_de_tiempo}_{uuid.uuid4().hex[:6]}.xlsx",
+                rapido=len(tabla) > 20_000,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Reporte detallado: no se pudo escribir el Excel de %s", tema)
+            fallas[tema or "el Excel"] = "no se pudo escribir el archivo"
+            return None
+
+    def al_terminar(parte) -> None:
+        # Desde el hilo de la cadena: su Excel se escribe mientras las demas
+        # siguen en el servidor (1 millon de filas: 37 s, medido).
+        ruta = escribir(acceso.NOMBRES.get(parte.cadena, parte.cadena), parte.tabla)
+        if ruta:
+            escritos[parte.cadena] = ruta
+
+    catalogo_de_modelos = homologacion.catalogo()
+    reporte = detallado.generar(
+        ejecutar, pedidas, lista, inicio, fin, marca=(marca or "").strip().upper(),
+        precio=con_precio,
+        buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
+        en_paralelo=en_paralelo,
+        al_terminar=al_terminar if por_cadena else None,
+    )
+    if fallas:
+        bitacora.paso(f"no salieron: {', '.join(fallas)}", bitacora.NOTA)
+    if not reporte.partes:
+        if fallas:
+            return ("No pude armar el reporte: las consultas fallaron "
+                    f"({'; '.join(f'{k}: {v}' for k, v in fallas.items())}). Diselo al usuario.")
+        return (f"No hay venta de {', '.join(pedidas)} en {detallado.periodo(inicio, fin)}. "
+                "Dilo asi.")
+
+    # Se registran aqui, en orden y en este hilo: el contexto no es de los hilos.
+    if por_cadena:
+        grupos = [
+            (acceso.NOMBRES.get(p.cadena, p.cadena), [p], escritos.get(p.cadena))
+            for p in reporte.partes
+        ]
+    else:
+        tabla = pd.concat([p.tabla for p in reporte.partes], ignore_index=True)
+        grupos = [(None, reporte.partes, escribir(None, tabla))]
+    archivos = 0
+    for tema, partes, ruta in grupos:
+        if not ruta:
+            continue
+        total = float(sum(p.unidades for p in partes))
+        ctx.registrar_reporte(
+            ruta, cifras=frozenset({round(total)}), principal=("Unidades", total),
+            tema=tema, columnas=frozenset(str(c).casefold() for p in partes for c in p.tabla.columns),
+        )
+        archivos += 1
+    bitacora.paso(f"reporte detallado listo: {archivos} archivo(s)", bitacora.NOTA)
+    ctx.varios_archivos = archivos > 1
+    ctx.hubo_datos = True
+    ctx.sugerencias = []
+
+    sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
+    texto = detallado.como_texto(reporte, sin_venta, archivos)
+    if fallas:
+        texto += ("\nOJO, no salio: " + "; ".join(f"{k} ({v})" for k, v in fallas.items())
+                  + ". Diselo al usuario y ofrece pedirlo de nuevo.")
+    ctx.vistos.append(texto)
+    return texto
 
 
 @tool
@@ -2971,6 +3144,10 @@ class SQLAgent:
            Si preguntan si las tiendas con promotor venden mas (el efecto o
            el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
            cruce propio de HCReport con la venta.
+           Un reporte o archivo de venta con detalle (por tienda, modelo,
+           mes, operador o region), con precio, o un archivo por cadena:
+           `reporte_detallado`, UNA vez y con todo lo pedido; nunca un
+           SELECT propio ni otra consulta despues.
            Para explorar tienes tres herramientas que NO generan reporte:
            `describir_objeto` (que columnas hay), `buscar_modelos` (nombres de
            celular) y `valores_distintos` (como estan escritos los valores de una
@@ -2980,9 +3157,9 @@ class SQLAgent:
            las herramientas de exploracion, nunca como un segundo
            `consultar_sql`.
            La excepcion: si pide VARIOS archivos ("un archivo por cada
-           cadena", "por separado"), haz un `consultar_sql` por archivo, con
-           la columna de la cadena en cada uno: cada consulta llega en su
-           propio Excel, con el nombre de su cadena.
+           cadena", "por separado"), usa `reporte_detallado` con
+           `un_archivo_por_cadena=True`: llega un Excel por cadena, con su
+           nombre.
            Si el usuario pide una columna mas ("agregale el modelo"), vuelve a
            correr UNA sola consulta con esa columna agregada a las que ya tenia.
            Nunca la traigas por separado: dos consultas dan dos tablas a medias
@@ -3129,6 +3306,7 @@ class SQLAgent:
             precio_en_internet,
             semanas_de_inventario,
             promotoria_contra_ventas,
+            reporte_detallado,
         ]
         agente = RunnableMultiActionAgent(
             runnable=create_openai_tools_agent(self.llm, herramientas, prompt),
