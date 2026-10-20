@@ -127,7 +127,7 @@ class TestDeWhatsAppAlPanel:
 
     def test_una_respuesta_de_error_tambien_trae_su_turno(self, tmp_path):
         class Falla(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
                 raise RuntimeError("algo se rompio")
 
         app = crear_app(_config(), lambda: Falla("x"), bitacora=Bitacora(tmp_path / "b"),
@@ -172,7 +172,7 @@ class TestComentarios:
         vistas = []
 
         class Atento(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
                 vistas.append(notas)
                 return super().responder(pregunta, cancelacion, cadenas)
 
@@ -243,7 +243,7 @@ class TestCadaParteSeCalificaAparte:
         # Registrados sin parte (antes de este cambio): el texto va primero y
         # los archivos al final, en orden.
         class ConExcel(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
                 return "texto", [str(tmp_path / "reporte_viejo.xlsx")]
 
         notas = Calificaciones()

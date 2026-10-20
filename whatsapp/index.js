@@ -31,6 +31,7 @@ import { texto as traducir, textoArchivoMuyGrande } from "./textos.js";
 import { sinLlaves } from "./silenciar.js";
 import { actualizarFotos, aplicarCambioDeFoto } from "./fotosDePerfil.js";
 import { EnCurso } from "./seguimiento.js";
+import { entregarPendientes } from "./entregas.js";
 
 // Antes de conectar: libsignal vuelca sesiones con llaves privadas por consola
 // y la consola termina en el log (ver silenciar.js).
@@ -89,6 +90,11 @@ const presenciaPorJid = new Map(); // jid -> { contador, temporizador }
 // Lo que esta corriendo en cada chat, para decidir que hacer con un mensaje
 // que llega mientras tanto: sumarlo, ignorarlo o formarlo (ver seguimiento.js).
 const enCurso = new EnCurso();
+
+// El chat de cada telefono, para mandar ahi lo que llega despues (un reporte
+// armado aparte): el servicio solo sabe el telefono, y el chat puede ser un
+// "@lid".
+const chatDelTelefono = new Map();
 
 // Un aviso en el idioma del chat. Nunca lanza: es un acompañamiento, y un
 // fallo aqui no puede dejar un chat sin su respuesta.
@@ -362,6 +368,7 @@ async function atender(mensaje) {
     // para enrutar el chat.
     if (mensaje.key?.senderPn) telefonoDelLid.set(jid, mensaje.key.senderPn);
     const idAutorizacion = mensaje.key?.senderPn ?? telefonoDelLid.get(jid) ?? jid;
+    chatDelTelefono.set(idAutorizacion, jid);
 
     // Grupos y difusiones se descartan ANTES de tocar nada: ni dedupe, ni
     // presencia, ni HTTP. Si el chip llega a agregarse a un grupo, el bot no
@@ -593,6 +600,32 @@ function programarFotos(sock) {
   }, CADA_CUANTO_CAMBIO_DE_FOTO_MS);
 }
 
+// Los reportes que el servicio armo aparte: se preguntan cada 5 s y se
+// mandan al chat de quien los pidio (ver entregas.js). Una vuelta a la vez:
+// mandar un Excel grande tarda.
+const CADA_CUANTO_ENTREGAS_MS = 5000;
+let relojDeEntregas = null;
+
+function programarEntregas() {
+  if (relojDeEntregas) clearInterval(relojDeEntregas);
+  let entregando = false;
+  relojDeEntregas = setInterval(async () => {
+    if (entregando || !socketActual) return;
+    entregando = true;
+    try {
+      await entregarPendientes(AGENT_API_URL, {
+        jidDe: (telefono) => chatDelTelefono.get(telefono),
+        enviarTexto,
+        enviarArchivo,
+      });
+    } catch (error) {
+      console.error(`[whatsapp] no se pudieron revisar los reportes pendientes: ${error.message}`);
+    } finally {
+      entregando = false;
+    }
+  }, CADA_CUANTO_ENTREGAS_MS);
+}
+
 // Reintenta arrancar() con backoff exponencial, protegido con su propio
 // catch. Se usa tanto para reconexiones (tras un "close") como para el
 // arranque inicial: un fallo aqui (disco lleno, credenciales a medio
@@ -659,6 +692,7 @@ async function arrancar() {
         // Las fotos de perfil para el panel: al conectar y cada 6 horas (el
         // servicio solo devuelve a quien no se reviso en 24 h).
         programarFotos(sock);
+        programarEntregas();
         intentosReconexion = 0;
       }
 

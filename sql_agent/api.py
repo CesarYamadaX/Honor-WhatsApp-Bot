@@ -25,6 +25,7 @@ import bienvenida
 import idioma as idiomas
 import registro_de_logs
 import resumen_local
+import segundo_plano
 import traduccion
 import transcripcion
 from agent import ConsultaCancelada
@@ -274,6 +275,9 @@ def crear_app(
     app.state.bitacora = diario
     app.state.fotos = album
     app.state.calificaciones = notas
+    # Los reportes grandes que se arman aparte y se entregan al acabar.
+    trabajos = segundo_plano.Trabajos()
+    app.state.trabajos = trabajos
 
     def autorizado(chat_id: str) -> bool:
         """Unico punto donde se decide si un chat existe para el bot.
@@ -307,6 +311,11 @@ def crear_app(
         try:
             # Las cadenas se leen en cada pregunta, no al abrir la sesion:
             # un cambio en el panel vale desde el siguiente mensaje.
+            def programar(trabajo, si_falla, idioma_del_trabajo):
+                # Un reporte grande: sigue en su hilo, sin el limite de esta
+                # peticion, y el sidecar lo entrega al acabar (segundo_plano.py).
+                trabajos.lanzar(chat_id, turno.id, idioma_del_trabajo, trabajo, si_falla)
+
             texto, archivos = sesion.agente.responder(
                 pregunta,
                 cancelacion=sesion.cancelacion,
@@ -314,6 +323,7 @@ def crear_app(
                 # Se leen en cada pregunta: un comentario nuevo en el panel
                 # vale desde el siguiente mensaje, como las cadenas.
                 notas=notas.notas_para_el_bot(),
+                programar=programar,
             )
             idioma_usado = getattr(sesion.agente, "idioma", idioma)
             # Su primera pregunta: la respuesta y, al pie, que mas se puede
@@ -420,9 +430,13 @@ def crear_app(
         quiere_cancelar = es_cancelacion(peticion.text)
 
         if sesion.lock.acquire(blocking=False):
-            # Nada en curso. Un "cancela" aqui no tiene a que aplicarse.
+            # Nada en curso en la conversacion. Un "cancela" puede ser para un
+            # reporte grande que se esta armando aparte.
             if quiere_cancelar:
                 sesion.lock.release()
+                if trabajos.cancelar(peticion.chat_id):
+                    logger.info("Cancelado un reporte en segundo plano de %s", peticion.chat_id)
+                    return Respuesta(reply=idiomas.texto("cancelado", idioma), files=[], idioma=idioma)
                 return Respuesta(
                     reply=idiomas.texto("nada_que_cancelar", idioma),
                     files=[],
@@ -463,6 +477,25 @@ def crear_app(
             # contestar. 409 le dice al sidecar que no mande nada.
             raise HTTPException(status_code=409, detail="Consulta cancelada")
         return respuesta
+
+    @app.get("/entregas")
+    async def entregas() -> dict:
+        """Los reportes armados aparte que hay que mandar (lo pregunta el sidecar)."""
+        _solo_local()
+        return {"entregas": [
+            {"id": e.id, "chat_id": e.chat_id, "turno": e.turno, "idioma": e.idioma,
+             "texto": e.texto, "archivos": e.archivos}
+            for e in trabajos.pendientes()
+        ]}
+
+    class EntregaHecha(BaseModel):
+        id: str
+
+    @app.post("/entregas/confirmar")
+    async def entrega_hecha(hecha: EntregaHecha) -> dict:
+        """El sidecar ya la mando: no se vuelve a dar."""
+        _solo_local()
+        return {"confirmada": trabajos.confirmar(hecha.id)}
 
     @app.post("/enviados")
     async def enviados(peticion: Enviados) -> dict:

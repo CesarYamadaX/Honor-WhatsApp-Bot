@@ -31,8 +31,9 @@ DIAS_QUE_SE_GUARDAN = 14
 # como va (/panel/actividad), y iniciar.py y el sidecar consultan /health:
 # cada una de esas peticiones deja una linea de uvicorn. Serian ~43 000
 # lineas al dia que taparian todo lo demas. Lo mismo el sidecar preguntando
-# cada 5 s si hay que cambiar la foto del bot: 5 617 lineas el 19/10/2026.
-_RUIDO = re.compile(r'"GET /(panel|health|foto-bot/cambio)[^"]*" \d{3}')
+# cada 5 s si hay que cambiar la foto del bot: 5 617 lineas el 19/10/2026; y
+# si hay reportes armados aparte que entregar (segundo_plano.py).
+_RUIDO = re.compile(r'"GET /(panel|health|foto-bot/cambio|entregas)[^"]*" \d{3}')
 # El QR de vinculacion se dibuja con bloques: en un archivo no sirve.
 _BLOQUES = set("█▀▄▌▐░▒▓")
 

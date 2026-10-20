@@ -187,7 +187,7 @@ class TestLaApi:
         recibidas = []
 
         class Agente(AgenteFalso):
-            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
                 recibidas.append(cadenas)
                 return "ok", []
 

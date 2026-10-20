@@ -17,7 +17,7 @@ def cliente(tmp_path, monkeypatch):
     llamadas = []
 
     class Contador(AgenteFalso):
-        def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+        def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
             llamadas.append(pregunta)
             return super().responder(pregunta, cancelacion, cadenas)
 

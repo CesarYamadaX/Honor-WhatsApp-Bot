@@ -56,30 +56,95 @@ class TestLaConsulta:
     def test_la_marca_va_escapada(self):
         assert "[Brand] = 'O''BRIEN'" in rd.sql_de_ventas("SEARS", ["modelo"], (2026, 5), (2026, 5), "O'BRIEN")
 
-    def test_precios_por_mes_sin_cruzar_en_el_servidor(self):
+    def test_precios_por_dia_sin_cruzar_en_el_servidor(self):
         sql = rd.sql_de_precios((2026, 5), (2026, 10))
         assert "UNICOS" not in sql and "JOIN" not in sql
-        assert "'2026-05-01'" in sql and "DATEADD(MONTH, 1, '2026-10-01')" in sql
+        assert "CAST([Día/Periodo] AS date) AS [Dia]" in sql
+        # Desde un mes antes: la venta del dia 1 toma el ultimo precio anterior.
+        assert "DATEADD(MONTH, -1, '2026-05-01')" in sql and "DATEADD(MONTH, 1, '2026-10-01')" in sql
+
+    def test_con_precio_la_misma_lectura_trae_la_venta_por_dia(self):
+        sql = rd.sql_de_ventas("COPPEL", ["tienda", "modelo", "semana"], (2026, 5), (2026, 10), diario=True)
+        # Una sola lectura de las vistas, igual que sin precio.
+        sin_precio = rd.sql_de_ventas("COPPEL", ["tienda", "modelo", "semana"], (2026, 5), (2026, 10))
+        assert sql.count("vw_ETL_") == sin_precio.count("vw_ETL_")
+        assert "GROUPING SETS" in sql and "GROUPING([Date]) AS [_detalle]" in sql
+        assert "([Retail], [Year], [Month], [Modelo], [Date], [WEEK])" in sql
+
+
+def _precios(*filas):
+    crudos = pd.DataFrame(filas, columns=["Retail", "Producto", "Dia", "Precio"])
+    return rd.precios_por_modelo(crudos, lambda x: "HONOR X6C 256GB 4G" if "X6C" in x else None)
+
+
+def _dias(*filas):
+    return pd.DataFrame(filas, columns=["Canal", "Año", "Mes", "Modelo", "Dia", "Unidades"])
+
+
+X6C = "HONOR X6C 256GB 4G"
+LLAVES = ["Canal", "Año", "Mes", "Modelo"]
+
+
+class TestPrecioPorFecha:
+    """Pedido el 19/10/2026: el precio de acuerdo con la fecha de la venta,
+    porque cambia dentro del mes."""
+
+    def test_cada_dia_su_precio_y_la_fila_ponderada_por_lo_vendido(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0),
+                           ("Coppel", "COP X6C", "2026-09-15", 4000.0))
+        # Cada dia hay precio en las diarias; aqui solo cambia el 15.
+        for dia in pd.date_range("2026-09-02", "2026-09-30"):
+            precios.loc[len(precios)] = ["coppel", "COPPEL", X6C, dia, 2026, 9,
+                                         5000.0 if dia.day < 15 else 4000.0, False]
+        dias = _dias(("Coppel", 2026, 9, X6C, "2026-09-03", 10), ("Coppel", 2026, 9, X6C, "2026-09-20", 30))
+        precio = rd.precio_por_fecha(dias, precios, LLAVES)
+        assert precio[rd.PRECIO].tolist() == [4250.0]  # (10 x 5000 + 30 x 4000) / 40
+
+    def test_elektra_toma_el_precio_de_su_semana(self):
+        # Elektra pone un precio cada domingo; la semana de venta va de domingo a sabado.
+        precios = _precios(("Elektra", "EKT X6C", "2026-09-06", 3000.0),
+                           ("Elektra", "EKT X6C", "2026-09-13", 2800.0))
+        dias = _dias(("ELEKTRA", 2026, 9, X6C, "2026-09-09", 1), ("ELEKTRA", 2026, 9, X6C, "2026-09-14", 1))
+        assert rd._precio_en(
+            dias.assign(Dia=pd.to_datetime(dias["Dia"]), retail="elektra"), precios, "retail"
+        ).tolist() == [3000.0, 2800.0]
+
+    def test_sears_y_movistar_van_por_mes(self):
+        # Un solo precio al cierre: una venta del 10 de septiembre toma el de
+        # septiembre (30/09), no el de agosto (31/08), que es el mas cercano.
+        precios = _precios(("Sears", "SRS X6C", "2026-08-31", 6000.0), ("Sears", "SRS X6C", "2026-09-30", 5500.0))
+        dias = _dias(("SEARS", 2026, 9, X6C, "2026-09-10", 2))
+        assert rd.precio_por_fecha(dias, precios, LLAVES)[rd.PRECIO].tolist() == [5500.0]
+
+    def test_el_canal_exacto_y_si_no_el_de_su_cadena(self):
+        precios = _precios(("Liverpool Offline", "LIV X6C", "2026-09-01", 3000.0),
+                           ("Liverpool Online", "LIV X6C", "2026-09-01", 2800.0),
+                           ("Telcel CAC", "TEL X6C", "2026-09-01", 2500.0))
+        dias = _dias(("Liverpool Online", 2026, 9, X6C, "2026-09-02", 1),
+                     ("TELCEL RETAIL", 2026, 9, X6C, "2026-09-02", 1))
+        precio = rd.precio_por_fecha(dias, precios, LLAVES)
+        assert dict(zip(precio["Canal"], precio[rd.PRECIO])) == {"Liverpool Online": 2800.0, "TELCEL RETAIL": 2500.0}
+
+    def test_un_precio_de_hace_mas_de_una_semana_no_se_usa(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-08-01", 5000.0), ("Coppel", "COP X6C", "2026-08-02", 5000.0))
+        dias = _dias(("Coppel", 2026, 9, X6C, "2026-09-20", 3))
+        assert rd.precio_por_fecha(dias, precios, LLAVES).empty
+
+    def test_la_parte_separa_el_detalle_y_le_pone_el_precio(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0), ("Coppel", "COP X6C", "2026-09-02", 5000.0))
+        ventas = pd.DataFrame(
+            [("Coppel", 2026, 9, "T1", X6C, None, None, 1, 4),
+             ("Coppel", 2026, 9, "T2", None, "COP RARO", None, 1, 7),
+             ("Coppel", 2026, 9, None, X6C, None, "2026-09-02", 0, 4)],
+            columns=["Canal", "Año", "Mes", "Tienda", "Modelo", rd.DESCRIPCION, "Dia", "_detalle", "Unidades"],
+        )
+        parte = rd.armar_parte("COPPEL", ventas, ["tienda", "modelo"], precios)
+        assert parte.tabla["Tienda"].tolist() == ["T1", "T2"]
+        assert parte.tabla[rd.PRECIO].tolist()[0] == 5000.0 and pd.isna(parte.tabla[rd.PRECIO].tolist()[1])
+        assert parte.unidades == 11 and parte.con_precio == pytest.approx(4 / 11)
 
 
 class TestElCruce:
-    def test_precio_por_retail_exacto_y_si_no_por_cadena(self):
-        precios = pd.DataFrame(
-            [("Liverpool Offline", "LIV X6C", 2026, 5, 3000.0),
-             ("Liverpool Online", "LIV X6C", 2026, 5, 2800.0),
-             ("Coppel", "COP X6C", 2026, 5, 2500.0)],
-            columns=["Retail", "Producto", "Año", "Mes", "Precio"],
-        )
-        exacto, por_cadena = rd.precios_por_modelo(precios, lambda t: "HONOR X6C 256GB 4G")
-        venta = _venta(("Liverpool Offline", 2026, 5, "T1", "HONOR X6C 256GB 4G", "", 4),
-                       ("Liverpool IOT", 2026, 5, "T1", "HONOR X6C 256GB 4G", "", 1),
-                       ("Coppel", 2026, 6, "T2", "HONOR X6C 256GB 4G", "", 2),
-                       ("Coppel", 2026, 5, "T2", "", "COP RARO", 7))
-        con = rd.con_precio(venta, exacto, por_cadena)
-        assert con[rd.PRECIO].tolist()[:2] == [3000.0, 2900.0]
-        # Junio sin precio, y lo que no tiene modelo tampoco: vacio.
-        assert con[rd.PRECIO].isna().tolist()[2:] == [True, True]
-
     def test_la_parte_va_ordenada_con_modelo_vacio_y_su_descripcion(self):
         venta = _venta(("Unknown", 2026, 6, "T1", None, "ATT RARO", 3),
                        ("AT&T Cacs", 2026, 5, "T1", "HONOR X6C 256GB 4G", None, 5),
@@ -119,13 +184,17 @@ class TestGenerar:
         def ejecutar(sql, de_que):
             corridas.append(de_que)
             if "Prices" in sql:
-                return pd.DataFrame([("Coppel", "COP X6C", 2026, 5, 2500.0)],
-                                    columns=["Retail", "Producto", "Año", "Mes", "Precio"])
+                return pd.DataFrame([("Coppel", "COP X6C", "2026-05-02", 2500.0)],
+                                    columns=["Retail", "Producto", "Dia", "Precio"])
+            assert "GROUPING SETS" in sql
             cadena = "Coppel" if "vw_ETL_COPPEL" in sql else "SEARS"
-            return _venta((cadena, 2026, 5, "T1", "HONOR X6C 256GB 4G", None, 10))
+            return pd.DataFrame(
+                [(cadena, 2026, 5, "T1", X6C, None, None, 1, 10), (cadena, 2026, 5, None, X6C, None, "2026-05-03", 0, 10)],
+                columns=["Canal", "Año", "Mes", "Tienda", "Modelo", rd.DESCRIPCION, "Dia", "_detalle", "Unidades"],
+            )
 
         r = rd.generar(ejecutar, ["COPPEL", "SEARS"], ["canal", "tienda"], (2026, 5), (2026, 5),
-                       precio=True, buscar=lambda t: "HONOR X6C 256GB 4G")
+                       precio=True, buscar=lambda x: X6C)
         assert corridas == ["precios", "COPPEL", "SEARS"]
         assert [p.cadena for p in r.partes] == ["COPPEL", "SEARS"]
         # Con precio, el modelo va aunque no se pidiera: el precio es por modelo.
@@ -148,6 +217,7 @@ class TestGenerar:
                 return None
             return _venta(("SEARS", 2026, 5, "T1", "HONOR X6C 256GB 4G", None, 10))
 
+        r = rd.generar(ejecutar, ["COPPEL", "SEARS"], ["tienda", "modelo"], (2026, 5), (2026, 5), precio=False)
+        assert [p.cadena for p in r.partes] == ["SEARS"]
         r = rd.generar(ejecutar, ["COPPEL", "SEARS"], ["tienda", "modelo"], (2026, 5), (2026, 5), precio=True)
         assert [p.cadena for p in r.partes] == ["SEARS"]
-        assert r.partes[0].con_precio == 0.0

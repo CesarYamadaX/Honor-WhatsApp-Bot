@@ -346,6 +346,30 @@ export function avisarCambioDeFoto(baseUrl, id, numero, error) {
   return avisar(baseUrl, "/foto-bot/cambio", { id, numero, error });
 }
 
+/**
+ * Los reportes armados aparte que hay que mandar. Se pregunta cada pocos
+ * segundos: un fallo no se registra (con el servicio caido llenaria el log).
+ */
+export async function entregasPendientes(baseUrl) {
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIMEOUT_AVISO_MS);
+  try {
+    const respuesta = await fetch(`${baseUrl}/entregas`, { signal: controlador.signal });
+    if (!respuesta.ok) return [];
+    const cuerpo = await respuesta.json();
+    return Array.isArray(cuerpo?.entregas) ? cuerpo.entregas : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+/** Esa entrega ya se mando: el servicio no la vuelve a dar. */
+export function confirmarEntrega(baseUrl, id) {
+  return avisar(baseUrl, "/entregas/confirmar", { id });
+}
+
 /** Que mensajes de WhatsApp forman la respuesta de un turno. */
 export function registrarEnviados(baseUrl, chatId, turno, mensajes, partes = {}) {
   return avisar(baseUrl, "/enviados", { chat_id: chatId, turno, mensajes, partes });

@@ -9,10 +9,12 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
+import acceso
 import agent as modulo_agente
 import catalogo
 import grafica
 import idioma as idiomas
+import reporte_detallado as detallado
 
 from agent import (
     SQLAgent,
@@ -2310,3 +2312,36 @@ class TestFuenteDeInternet:
         agente.agent_executor = self._UsaElScraping("El iPhone 17 esta en $19,999.", usa=False)
         texto, _ = agente.responder("en cuanto esta el iphone 17")
         assert "internet" not in texto
+
+
+class TestReporteGrandeAparte:
+    """Pedido el 19/10/2026: los archivos grandes sin limite de tiempo,
+    avisando al usuario cuanto tardara."""
+
+    def _pedir(self, engine, monkeypatch, cadenas, programados):
+        monkeypatch.setattr(modulo_agente, "_tiempos_de_reportes", lambda: {})
+        armado = modulo_agente._Armado(detallado.Reporte(), [], {}, [])
+        monkeypatch.setattr(modulo_agente, "_armar_reporte_detallado", lambda *a, **k: armado)
+        with contexto_peticion(engine, pregunta="reporte",
+                               programar=lambda *a: programados.append(a)) as ctx:
+            texto = modulo_agente.reporte_detallado.invoke(
+                {"cadenas": cadenas, "desde": "2026-05", "columnas": "tienda, modelo", "con_precio": True})
+        return ctx, texto
+
+    def test_si_tarda_se_arma_aparte_y_se_dice_cuanto(self, engine, monkeypatch):
+        programados = []
+        ctx, texto = self._pedir(engine, monkeypatch, "todas", programados)
+        minutos = detallado.en_minutos(detallado.estimar(list(acceso.CADENAS), True))
+        assert len(programados) == 1 and minutos > 1
+        assert f"tardara unos {minutos} minutos" in texto and "No des cifras" in texto
+        assert ctx.archivos == []
+        # El trabajo, al correr, da el texto para el usuario y los archivos.
+        trabajo, si_falla, idioma = programados[0]
+        mensaje, archivos = trabajo(threading.Event())
+        assert mensaje.startswith("Listo") and archivos == [] and idioma == ctx.idioma
+        assert "No pude terminar" in si_falla(RuntimeError("x"))
+
+    def test_si_es_rapido_va_en_la_conversacion(self, engine, monkeypatch):
+        programados = []
+        _, texto = self._pedir(engine, monkeypatch, "sears", programados)
+        assert programados == [] and "No hay venta" in texto

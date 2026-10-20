@@ -36,7 +36,7 @@ class AgenteFalso:
     def __init__(self):
         self.preguntas = []
 
-    def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+    def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
         self.preguntas.append(pregunta)
         return "listo", []
 
@@ -142,7 +142,7 @@ class TestVerLoQueHaceElBot:
         class AgenteQueFalla:
             idioma = "es"
 
-            def responder(self, pregunta, cancelacion=None, cadenas=None, notas=""):
+            def responder(self, pregunta, cancelacion=None, cadenas=None, notas="", programar=None):
                 raise RuntimeError("timeout expired")
 
         diario = Bitacora(tmp_path / "bitacora")

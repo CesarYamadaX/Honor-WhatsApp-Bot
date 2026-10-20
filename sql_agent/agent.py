@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -10,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import pandas as pd
 import sqlparse
@@ -742,6 +743,10 @@ class ContextoPeticion:
     # Lo pone una herramienta que ya armo un archivo por cadena
     # (reporte_detallado): se entregan todos aunque la pregunta no lo diga.
     varios_archivos: bool = False
+    # Como mandar un trabajo largo a armarse aparte, sin el limite de la
+    # peticion: programar(trabajo, si_falla, idioma). Lo da el servicio (ver
+    # segundo_plano.py); None en la CLI y en las pruebas: todo va en linea.
+    programar: Callable | None = None
 
     def registrar_reporte(
         self,
@@ -912,11 +917,12 @@ def contexto_peticion(
     pregunta: str = "",
     idioma: str = idiomas.POR_DEFECTO,
     cadenas=None,
+    programar: Callable | None = None,
 ) -> Iterator[ContextoPeticion]:
     """Activa un contexto por petición, en lugar del viejo global _db_instance."""
     ctx = ContextoPeticion(
         engine=engine, cancelacion=cancelacion, pregunta=pregunta, idioma=idioma,
-        cadenas=acceso.normalizar(cadenas),
+        cadenas=acceso.normalizar(cadenas), programar=programar,
     )
     testigo = _contexto.set(ctx)
     try:
@@ -2169,6 +2175,122 @@ PLAZO_DE_PROMOTORIA = 180
 # consultas es para escribir los Excel, que con un millon de filas son ~2 min.
 CONSULTAS_A_LA_VEZ = 4
 RESERVA_PARA_LOS_EXCEL = 150
+# Lo que se espera dentro de la conversacion; si se estima mas, el reporte se
+# arma aparte y se entrega al acabar (pedido el 19/10/2026: sin limite de
+# tiempo para los archivos grandes, avisando cuanto tardara).
+EN_LINEA_MAX_S = 60
+# Aparte no hay limite de la peticion; esto es solo para que una consulta
+# trabada no se quede para siempre.
+PLAZO_APARTE_S = 2 * 3600
+# Lo que tardo cada cadena las ultimas veces, para estimar la siguiente.
+RUTA_DE_TIEMPOS = Path(__file__).resolve().parent / "datos" / "tiempos_de_reportes.json"
+_candado_de_tiempos = threading.Lock()
+
+
+def _tiempos_de_reportes() -> dict:
+    try:
+        return json.loads(RUTA_DE_TIEMPOS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _anotar_tiempos(tiempos: dict[str, float], precio: bool) -> None:
+    if not tiempos:
+        return
+    with _candado_de_tiempos:
+        historial = _tiempos_de_reportes()
+        for cadena, segundos in tiempos.items():
+            detallado.aprender(historial, cadena, precio, segundos)
+        try:
+            RUTA_DE_TIEMPOS.parent.mkdir(parents=True, exist_ok=True)
+            RUTA_DE_TIEMPOS.write_text(json.dumps(historial, indent=1), encoding="utf-8")
+        except OSError:
+            logger.warning("No se pudieron guardar los tiempos del reporte detallado")
+
+
+@dataclass
+class _Armado:
+    reporte: "detallado.Reporte"
+    # (tema, partes, ruta) de cada archivo, en orden.
+    grupos: list
+    fallas: dict[str, str]
+    sin_venta: list[str]
+
+
+def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: list[str], inicio, fin,
+                             marca: str, con_precio: bool, por_cadena: bool, plazo: int) -> _Armado:
+    """Las consultas, el cruce y los Excel; lo mismo en linea que aparte."""
+    fallas: dict[str, str] = {}
+    comenzo = time.monotonic()
+    tiempos: dict[str, float] = {}
+
+    def ejecutar(sql: str, de_que: str) -> pd.DataFrame | None:
+        if cancelacion is not None and cancelacion.is_set():
+            raise ConsultaCancelada()
+        desde_aqui = time.monotonic()
+        try:
+            with engine.connect() as conexion, _presupuesto_de_tiempo(conexion, plazo):
+                df = _ejecutar_interrumpible(conexion, sql, cancelacion)
+        except ConsultaCancelada:
+            raise
+        except Exception as error:  # noqa: BLE001 - las demas cadenas siguen
+            if cancelacion is not None and cancelacion.is_set():
+                raise ConsultaCancelada() from None
+            logger.exception("Reporte detallado: fallo la consulta de %s", de_que)
+            fallas[de_que] = str(error)[:200]
+            return None
+        logger.info("Reporte detallado: %s en %.0fs, %d filas", de_que, time.monotonic() - desde_aqui, len(df))
+        tiempos[de_que] = time.monotonic() - comenzo
+        return df
+
+    def en_paralelo(trabajos):
+        with ThreadPoolExecutor(max_workers=CONSULTAS_A_LA_VEZ) as pool:
+            return [f.result() for f in [pool.submit(t) for t in trabajos]]
+
+    marca_de_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
+    escritos: dict[str, str] = {}
+
+    def escribir(tema: str | None, tabla: pd.DataFrame) -> str | None:
+        etiqueta = re.sub(r'[\\/:*?"<>| ]+', "_", tema or "cadenas")
+        try:
+            return ExcelExporter.export_to_excel(
+                tabla, filename=f"reporte_{etiqueta}_{marca_de_tiempo}_{uuid.uuid4().hex[:6]}.xlsx",
+                rapido=len(tabla) > 20_000,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Reporte detallado: no se pudo escribir el Excel de %s", tema)
+            fallas[tema or "el Excel"] = "no se pudo escribir el archivo"
+            return None
+
+    def al_terminar(parte) -> None:
+        # Desde el hilo de la cadena: su Excel se escribe mientras las demas
+        # siguen en el servidor (1 millon de filas: 37 s, medido).
+        ruta = escribir(acceso.NOMBRES.get(parte.cadena, parte.cadena), parte.tabla)
+        if ruta:
+            escritos[parte.cadena] = ruta
+        tiempos[parte.cadena] = time.monotonic() - comenzo
+
+    catalogo_de_modelos = homologacion.catalogo()
+    reporte = detallado.generar(
+        ejecutar, pedidas, lista, inicio, fin, marca=marca,
+        precio=con_precio,
+        buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
+        en_paralelo=en_paralelo,
+        al_terminar=al_terminar if por_cadena else None,
+    )
+    if por_cadena:
+        grupos = [
+            (acceso.NOMBRES.get(p.cadena, p.cadena), [p], escritos.get(p.cadena))
+            for p in reporte.partes
+        ]
+    elif reporte.partes:
+        tabla = pd.concat([p.tabla for p in reporte.partes], ignore_index=True)
+        grupos = [(None, reporte.partes, escribir(None, tabla))]
+    else:
+        grupos = []
+    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, con_precio)
+    sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
+    return _Armado(reporte, grupos, fallas, sin_venta)
 
 
 @tool
@@ -2200,6 +2322,8 @@ def reporte_detallado(
     `con_precio`: el precio promedio de venta del mes (de la tabla Prices).
     `un_archivo_por_cadena`: True si pide un archivo por cadena o separados.
     `marca`: solo una marca ("HONOR"); vacio, todas.
+    Si va a tardar mas de un minuto se arma aparte y se le manda al usuario
+    al acabar: la herramienta te dice cuanto tardara y que contestarle.
     """
     ctx = _contexto_actual()
     hoy = datetime.now().date()
@@ -2220,73 +2344,58 @@ def reporte_detallado(
         if not pedidas:
             return _sin_permiso(ctx, acceso.Acotada("", fuera=fuera))
 
-    queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - RESERVA_PARA_LOS_EXCEL)
-    if queda < MINIMO_UTIL:
-        return ("Ya no queda tiempo en esta peticion para armar el reporte. No "
-                "reintentes: dile al usuario que lo vuelva a pedir.")
-    bitacora.paso(
-        f"armando el reporte detallado: {', '.join(pedidas)}, "
-        f"{detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
-        + (", con precio" if con_precio else ""),
-        bitacora.NOTA,
-    )
-
-    fallas: dict[str, str] = {}
-
-    def ejecutar(sql: str, de_que: str) -> pd.DataFrame | None:
-        if ctx.cancelacion is not None and ctx.cancelacion.is_set():
-            raise ConsultaCancelada()
-        comenzo = time.monotonic()
-        try:
-            with ctx.engine.connect() as conexion, _presupuesto_de_tiempo(conexion, queda):
-                df = _ejecutar_interrumpible(conexion, sql, ctx.cancelacion)
-        except ConsultaCancelada:
-            raise
-        except Exception as error:  # noqa: BLE001 - las demas cadenas siguen
-            logger.exception("Reporte detallado: fallo la consulta de %s", de_que)
-            fallas[de_que] = str(error)[:200]
-            return None
-        logger.info("Reporte detallado: %s en %.0fs, %d filas", de_que, time.monotonic() - comenzo, len(df))
-        return df
-
-    def en_paralelo(trabajos):
-        with ThreadPoolExecutor(max_workers=CONSULTAS_A_LA_VEZ) as pool:
-            return [f.result() for f in [pool.submit(t) for t in trabajos]]
-
+    marca = (marca or "").strip().upper()
     # Un archivo por cadena si se pidio, si es una sola, o si es por tienda de
     # varias: medido el 19/10/2026, todas por tienda y modelo son 2.2 millones
     # de filas, y un solo Excel asi pasaria de 80 MB.
     por_cadena = un_archivo_por_cadena or len(pedidas) == 1 or "tienda" in lista
-    marca_de_tiempo = datetime.now().strftime("%Y%m%d_%H%M%S")
-    escritos: dict[str, str] = {}
-
-    def escribir(tema: str | None, tabla: pd.DataFrame) -> str | None:
-        etiqueta = re.sub(r'[\\/:*?"<>| ]+', "_", tema or "cadenas")
-        try:
-            return ExcelExporter.export_to_excel(
-                tabla, filename=f"reporte_{etiqueta}_{marca_de_tiempo}_{uuid.uuid4().hex[:6]}.xlsx",
-                rapido=len(tabla) > 20_000,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Reporte detallado: no se pudo escribir el Excel de %s", tema)
-            fallas[tema or "el Excel"] = "no se pudo escribir el archivo"
-            return None
-
-    def al_terminar(parte) -> None:
-        # Desde el hilo de la cadena: su Excel se escribe mientras las demas
-        # siguen en el servidor (1 millon de filas: 37 s, medido).
-        ruta = escribir(acceso.NOMBRES.get(parte.cadena, parte.cadena), parte.tabla)
-        if ruta:
-            escritos[parte.cadena] = ruta
-
-    catalogo_de_modelos = homologacion.catalogo()
-    reporte = detallado.generar(
-        ejecutar, pedidas, lista, inicio, fin, marca=(marca or "").strip().upper(),
-        precio=con_precio,
-        buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
-        en_paralelo=en_paralelo,
-        al_terminar=al_terminar if por_cadena else None,
+    descripcion = (
+        f"{', '.join(pedidas)}, {detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
+        + (", con precio" if con_precio else "")
     )
+    estimado = detallado.estimar(pedidas, con_precio, _tiempos_de_reportes(), CONSULTAS_A_LA_VEZ)
+
+    # Grande: se arma aparte, sin el limite de la peticion, y se entrega solo.
+    if ctx.programar is not None and estimado > EN_LINEA_MAX_S:
+        minutos = detallado.en_minutos(estimado)
+        motor, idioma = ctx.engine, ctx.idioma
+
+        def trabajo(cancelacion: threading.Event) -> tuple[str, list[str]]:
+            armado = _armar_reporte_detallado(
+                motor, cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena,
+                PLAZO_APARTE_S,
+            )
+            if not armado.reporte.partes and armado.fallas:
+                raise RuntimeError("; ".join(f"{k}: {v}" for k, v in armado.fallas.items()))
+            archivos = [ruta for _, _, ruta in armado.grupos if ruta]
+            return detallado.para_el_usuario(
+                armado.reporte, len(archivos), armado.sin_venta, list(armado.fallas), idioma,
+            ), archivos
+
+        ctx.programar(trabajo, lambda error: detallado.no_se_pudo(error, idioma), idioma)
+        bitacora.paso(f"reporte grande ({descripcion}): se arma aparte, unos {minutos} min", bitacora.NOTA)
+        ctx.hubo_datos = True
+        ctx.sugerencias = []
+        texto = (
+            f"El reporte ({descripcion}) se esta armando aparte y tardara unos {minutos} "
+            "minutos; se le enviara solo a este chat en cuanto este, con los archivos. "
+            "Dile al usuario exactamente eso en una o dos frases: que es un reporte grande, "
+            f"que tardara unos {minutos} minutos, que se lo mandas aqui en cuanto este y que "
+            "mientras puede seguir preguntando. No des cifras: todavia no las hay. No hagas "
+            "otra consulta."
+        )
+        ctx.vistos.append(texto)
+        return texto
+
+    queda = int(TIMEOUT_PETICION - (time.monotonic() - ctx.inicio) - RESERVA_PARA_LOS_EXCEL)
+    if queda < MINIMO_UTIL:
+        return ("Ya no queda tiempo en esta peticion para armar el reporte. No "
+                "reintentes: dile al usuario que lo vuelva a pedir.")
+    bitacora.paso(f"armando el reporte detallado: {descripcion}", bitacora.NOTA)
+    armado = _armar_reporte_detallado(
+        ctx.engine, ctx.cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena, queda,
+    )
+    reporte, fallas = armado.reporte, armado.fallas
     if fallas:
         bitacora.paso(f"no salieron: {', '.join(fallas)}", bitacora.NOTA)
     if not reporte.partes:
@@ -2297,16 +2406,8 @@ def reporte_detallado(
                 "Dilo asi.")
 
     # Se registran aqui, en orden y en este hilo: el contexto no es de los hilos.
-    if por_cadena:
-        grupos = [
-            (acceso.NOMBRES.get(p.cadena, p.cadena), [p], escritos.get(p.cadena))
-            for p in reporte.partes
-        ]
-    else:
-        tabla = pd.concat([p.tabla for p in reporte.partes], ignore_index=True)
-        grupos = [(None, reporte.partes, escribir(None, tabla))]
     archivos = 0
-    for tema, partes, ruta in grupos:
+    for tema, partes, ruta in armado.grupos:
         if not ruta:
             continue
         total = float(sum(p.unidades for p in partes))
@@ -2320,8 +2421,7 @@ def reporte_detallado(
     ctx.hubo_datos = True
     ctx.sugerencias = []
 
-    sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
-    texto = detallado.como_texto(reporte, sin_venta, archivos)
+    texto = detallado.como_texto(reporte, armado.sin_venta, archivos)
     if fallas:
         texto += ("\nOJO, no salio: " + "; ".join(f"{k} ({v})" for k, v in fallas.items())
                   + ". Diselo al usuario y ofrece pedirlo de nuevo.")
@@ -3377,6 +3477,7 @@ class SQLAgent:
         cancelacion: threading.Event | None = None,
         cadenas=None,
         notas: str = "",
+        programar: Callable | None = None,
     ) -> tuple[str, list[str]]:
         """Responde una pregunta y devuelve (texto, rutas de archivos generados).
 
@@ -3400,7 +3501,7 @@ class SQLAgent:
                 ampliado = bool(self.historial)
             self.cadenas = cadenas
         with contexto_peticion(
-            self.engine, cancelacion, pregunta, self.idioma, cadenas
+            self.engine, cancelacion, pregunta, self.idioma, cadenas, programar
         ) as ctx:
             instruccion = idiomas.INSTRUCCION[self.idioma]
             if notas:
