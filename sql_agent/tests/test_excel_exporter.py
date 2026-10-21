@@ -135,7 +135,9 @@ class TestElArchivoSaleEnOrden:
 
 class TestAnchoDeColumnas:
     def _ancho(self, libro, letra):
-        return libro[HOJA_DATOS].column_dimensions[letra].width
+        # El ancho que se VE, en caracteres. xlsxwriter lo guarda como Excel,
+        # con el relleno de la celda sumado (+0.71): 25 caracteres son 25.71.
+        return int(libro[HOJA_DATOS].column_dimensions[letra].width)
 
     def test_la_columna_se_ancha_al_texto_mas_largo(self, tmp_path, monkeypatch):
         libro = _exportar(
@@ -237,3 +239,32 @@ class TestFormatoDeFechas:
             monkeypatch,
         )
         assert libro[HOJA_DATOS]["A2"].value == pd.Timestamp("2026-01-01 08:30").to_pydatetime()
+
+
+class TestEscritorRapido:
+    """Desde el 20/10/2026 el Excel se escribe columna por columna con
+    xlsxwriter (un mes de Telcel, 406 mil filas: 78 s -> 47 s). Lo que el
+    escritor de antes hacia solo, este lo tiene que hacer a mano."""
+
+    def test_fechas_que_llegan_como_objetos_date_salen_como_fecha(self, tmp_path, monkeypatch):
+        # Asi entrega pyodbc una columna DATE: objetos date, no datetime64.
+        from datetime import date
+        df = pd.DataFrame({"Dia": [date(2026, 9, 1), date(2026, 9, 2)], "Unidades": [1, 2]})
+        celda = _exportar(df, tmp_path, monkeypatch)[HOJA_DATOS]["A2"]
+        assert celda.is_date and celda.number_format == excel_exporter.FORMATO_FECHA
+
+    def test_lo_vacio_queda_en_blanco_y_el_texto_se_queda_texto(self, tmp_path, monkeypatch):
+        df = pd.DataFrame({"Codigo": ["0012", None, "=1+1"], "Precio": [1.5, float("nan"), None]})
+        hoja = _exportar(df, tmp_path, monkeypatch)[HOJA_DATOS]
+        assert [hoja.cell(r, 1).value for r in (2, 3, 4)] == ["0012", None, "=1+1"]
+        assert [hoja.cell(r, 2).value for r in (2, 3, 4)] == [1.5, None, None]
+        # Una fecha vacia, tambien (va al final: el Excel se ordena por fecha).
+        fechas = pd.DataFrame({"Cuando": pd.to_datetime(["2026-09-01", None]), "Unidades": [1, 2]})
+        hoja = _exportar(fechas, tmp_path, monkeypatch, "fechas.xlsx")[HOJA_DATOS]
+        assert hoja.cell(2, 1).is_date and hoja.cell(3, 1).value is None
+
+    def test_mas_de_un_millon_de_filas_sigue_en_varias_hojas(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(excel_exporter, "MAX_FILAS_POR_HOJA_DE_EXCEL", 2)
+        df = pd.DataFrame({"Unidades": [1, 2, 3, 4, 5]})
+        libro = _exportar(df, tmp_path, monkeypatch)
+        assert libro.sheetnames == [HOJA_DATOS, f"{HOJA_DATOS} (2)", f"{HOJA_DATOS} (3)"]

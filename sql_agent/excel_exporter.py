@@ -1,12 +1,9 @@
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
-from openpyxl.styles import Alignment
-from openpyxl.utils import get_column_letter
-
 import homologacion
 from tiempo import ordenar_por_tiempo
 
@@ -62,80 +59,84 @@ def partir_en_hojas(nombre: str, df: pd.DataFrame) -> list[tuple[str, pd.DataFra
     return trozos
 
 
-def _formatear_columnas_de_fecha(hoja, df: pd.DataFrame) -> None:
-    """Muestra las fechas como dia, sin hora.
+def _es_fecha(columna: pd.Series) -> bool:
+    """Columna de fechas: la de pandas, o una de objetos date/datetime, que es
+    como el driver entrega a veces una columna DATE de SQL Server."""
+    if pd.api.types.is_datetime64_any_dtype(columna):
+        return True
+    if columna.dtype != object:
+        return False
+    muestra = columna.dropna().head(200)
+    return not muestra.empty and all(isinstance(v, (date, datetime)) for v in muestra)
 
-    pandas escribe datetime64 con formato de fecha y hora, asi que una fecha a
-    medianoche se rinde "2026-01-01 00:00:00": una columna ancha llena de
-    ceros que nadie lee.
 
-    Esto cambia el FORMATO, no el valor: la celda sigue guardando el datetime
-    completo, asi que la hora se ve en la barra de formulas y vuelve con
-    cambiarle el formato a la columna. No se pierde nada.
+def _ancho(nombre, columna: pd.Series) -> int:
+    """El ancho de la columna en caracteres, como el autoajuste de Excel.
+
+    Se mide lo que se VE: una fecha se muestra como yyyy-mm-dd aunque guarde
+    la hora, asi que su ancho es el del formato. El resto, el texto mas largo
+    de la columna entera (con pandas, sin recorrer celda por celda).
     """
-    for indice, nombre in enumerate(df.columns, start=1):
-        if not pd.api.types.is_datetime64_any_dtype(df[nombre]):
-            continue
-        for (celda,) in hoja.iter_rows(min_col=indice, max_col=indice, min_row=2):
-            celda.number_format = FORMATO_FECHA
+    if _es_fecha(columna):
+        ancho_del_dato = len(FORMATO_FECHA)
+    else:
+        textos = columna.dropna().astype(str)
+        ancho_del_dato = int(textos.str.len().max()) if not textos.empty else 0
+    return max(len(str(nombre)), ancho_del_dato) + MARGEN_COLUMNA
 
 
-def _escribir_rapido(ruta: str, por_hoja: list[tuple[str, pd.DataFrame]]) -> None:
-    """Las hojas con xlsxwriter: fechas como dia y anchos medidos sobre una
-    muestra (medir medio millon de filas tardaria mas que escribirlas)."""
-    with pd.ExcelWriter(
-        ruta, engine="xlsxwriter",
-        datetime_format=FORMATO_FECHA, date_format=FORMATO_FECHA,
-    ) as escritor:
+def _valores(columna: pd.Series) -> list:
+    """La columna como valores de Python que xlsxwriter escribe tal cual;
+    lo vacio (NaN, NaT, None) como None, que deja la celda en blanco."""
+    if pd.api.types.is_datetime64_any_dtype(columna):
+        fechas = columna.dt.tz_localize(None) if getattr(columna.dt, "tz", None) else columna
+        return [None if pd.isna(v) else v.to_pydatetime() for v in fechas]
+    if pd.api.types.is_bool_dtype(columna):
+        return [None if pd.isna(v) else bool(v) for v in columna.tolist()]
+    if pd.api.types.is_numeric_dtype(columna):
+        return [None if pd.isna(v) else v for v in columna.astype(object).tolist()]
+    return [None if (v is None or (isinstance(v, float) and v != v) or v is pd.NaT or v is pd.NA) else v
+            for v in columna.astype(object).tolist()]
+
+
+def _escribir(ruta: str, por_hoja: list[tuple[str, pd.DataFrame]]) -> None:
+    """Escribe las hojas con xlsxwriter, columna por columna.
+
+    Medido el 20/10/2026 con una hoja de 100 mil filas x 22 columnas (un mes
+    de Elektra): openpyxl, como era antes, 47.5 s; pandas con xlsxwriter
+    29.9 s; columna por columna 11 s. En un reporte de cadena el Excel era lo
+    mas lento (Coppel, un mes: 48 de 66 s; Telcel: 78 s).
+
+    Mismo resultado que antes: fechas como dia (la hora se queda en la celda),
+    cada columna al ancho de su contenido, y la que no cabe en el ancho
+    maximo, topada y con el texto ajustado en varias lineas. El formato va en
+    cada celda, no solo en la columna, para que cualquier lector lo vea.
+    """
+    import xlsxwriter
+
+    libro = xlsxwriter.Workbook(ruta, {
+        # Que un texto se quede texto: "0012" o "=algo" de una descripcion no
+        # son un numero ni una formula.
+        "strings_to_numbers": False, "strings_to_formulas": False, "strings_to_urls": False,
+    })
+    try:
+        encabezado = libro.add_format({"bold": True})
+        fecha = libro.add_format({"num_format": FORMATO_FECHA})
+        ajustado = libro.add_format({"text_wrap": True, "valign": "top"})
         for nombre, trozo in por_hoja:
-            trozo.to_excel(escritor, index=False, sheet_name=nombre)
-            hoja = escritor.sheets[nombre]
-            muestra = trozo.head(2000)
+            hoja = libro.add_worksheet(nombre)
+            hoja.write_row(0, 0, [str(c) for c in trozo.columns], encabezado)
             for indice, columna in enumerate(trozo.columns):
-                if pd.api.types.is_datetime64_any_dtype(muestra[columna]):
-                    ancho_del_dato = len(FORMATO_FECHA)
-                else:
-                    textos = muestra[columna].dropna().astype(str)
-                    ancho_del_dato = int(textos.str.len().max()) if not textos.empty else 0
-                ancho = max(len(str(columna)), ancho_del_dato) + MARGEN_COLUMNA
+                serie = trozo.iloc[:, indice]
+                ancho = _ancho(columna, serie)
+                es_fecha = _es_fecha(serie)
+                formato = fecha if es_fecha else (ajustado if ancho > ANCHO_MAXIMO else None)
                 hoja.set_column(indice, indice, min(max(ancho, ANCHO_MINIMO), ANCHO_MAXIMO))
+                if len(trozo):
+                    hoja.write_column(1, indice, _valores(serie), formato)
             hoja.freeze_panes(1, 0)
-
-
-def _ajustar_ancho_de_columnas(hoja, df: pd.DataFrame) -> None:
-    """Da a cada columna el ancho de su contenido, como el autoajuste de Excel.
-
-    openpyxl no tiene autoajuste: el "ajustar al contenido" de Excel lo calcula
-    Excel al abrir el archivo y solo si alguien lo pide a mano. Aqui se mide el
-    texto mas largo de cada columna y se fija el ancho, para que el reporte
-    llegue legible sin que el usuario toque nada.
-    """
-    for indice, nombre in enumerate(df.columns, start=1):
-        columna = df[nombre]
-        if pd.api.types.is_datetime64_any_dtype(columna):
-            # Se mide lo que se VE, no lo que se guarda: la celda conserva la
-            # hora pero se muestra como yyyy-mm-dd. En un formato de fecha
-            # numerico cada caracter del codigo rinde un caracter en pantalla,
-            # asi que su largo es el ancho mostrado.
-            ancho_del_dato = len(FORMATO_FECHA)
-        else:
-            textos = columna.dropna().astype(str)
-            ancho_del_dato = int(textos.str.len().max()) if not textos.empty else 0
-
-        ancho = max(len(str(nombre)), ancho_del_dato) + MARGEN_COLUMNA
-        hoja.column_dimensions[get_column_letter(indice)].width = min(
-            max(ancho, ANCHO_MINIMO), ANCHO_MAXIMO
-        )
-
-        if ancho > ANCHO_MAXIMO:
-            # La columna no cabe en el tope. Ensancharla hasta el texto mas
-            # largo (una descripcion de producto puede pasar de 90 caracteres)
-            # empujaria el resto de la tabla fuera de la pantalla del
-            # telefono, pero recortarla escondería datos. Se ajusta el texto:
-            # ocupa varias lineas y se ve completo. Excel calcula solo el alto
-            # de la fila mientras nadie lo fije a mano.
-            for (celda,) in hoja.iter_rows(min_col=indice, max_col=indice, min_row=2):
-                celda.alignment = Alignment(wrap_text=True, vertical="top")
+    finally:
+        libro.close()
 
 
 class ExcelExporter:
@@ -161,11 +162,9 @@ class ExcelExporter:
         llego entero en el mensaje, esa hoja no aporta nada (pedido el
         5/10/2026). Sin otras hojas se pone igual: un Excel no puede ir vacio.
 
-        `rapido=True` escribe con xlsxwriter en vez de openpyxl: la mitad de
-        tiempo y ~15% menos de peso (un mes de AT&T, 11.6 millones de
-        celdas: 54 s y 42 MB contra 97 s y 49 MB). Es para los reportes de
-        muchos datos, que van solo con el crudo; los demas siguen con
-        openpyxl, porque el pivot por COM y el formato se probaron con el.
+        `rapido` ya no cambia nada: desde el 20/10/2026 todo se escribe con
+        el escritor rapido (ver _escribir). Se deja para no romper a quien
+        lo pasa.
         """
         if df is None or df.empty:
             raise ValueError("No hay datos para exportar. El DataFrame está vacío.")
@@ -233,22 +232,7 @@ class ExcelExporter:
         if con_datos or not por_hoja:
             por_hoja = partir_en_hojas(HOJA_DATOS, df) + por_hoja
 
-        if rapido:
-            _escribir_rapido(filepath, por_hoja)
-            return os.path.abspath(filepath)
-
-        with pd.ExcelWriter(filepath, engine="openpyxl") as escritor:
-            for nombre, trozo in por_hoja:
-                trozo.to_excel(escritor, index=False, sheet_name=nombre)
-            try:
-                for nombre, trozo in por_hoja:
-                    _formatear_columnas_de_fecha(escritor.book[nombre], trozo)
-                    _ajustar_ancho_de_columnas(escritor.book[nombre], trozo)
-            except Exception:
-                # Los datos son lo que el usuario pidio; el formato es un
-                # extra. Un resultado con una forma que no se previo aqui no
-                # puede costarle el reporte entero.
-                logger.exception("No se pudo dar formato a la tabla; se envia igual")
+        _escribir(filepath, por_hoja)
 
         # Absoluta siempre, sin importar si output_dir ya lo era: es lo que
         # consume Node al otro lado del contrato HTTP (ver comentario arriba).
