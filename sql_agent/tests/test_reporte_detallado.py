@@ -186,6 +186,8 @@ class TestGenerar:
             if "Prices" in sql:
                 return pd.DataFrame([("Coppel", "COP X6C", "2026-05-02", 2500.0)],
                                     columns=["Retail", "Producto", "Dia", "Precio"])
+            if de_que == "scrap":
+                return pd.DataFrame(columns=["Retail", "Producto", "Dia", "Precio"])
             assert "GROUPING SETS" in sql
             cadena = "Coppel" if "vw_ETL_COPPEL" in sql else "SEARS"
             return pd.DataFrame(
@@ -195,7 +197,7 @@ class TestGenerar:
 
         r = rd.generar(ejecutar, ["COPPEL", "SEARS"], ["canal", "tienda"], (2026, 5), (2026, 5),
                        precio=True, buscar=lambda x: X6C)
-        assert corridas == ["precios", "COPPEL", "SEARS"]
+        assert sorted(corridas) == ["COPPEL", "SEARS", "precios", "scrap"]
         assert [p.cadena for p in r.partes] == ["COPPEL", "SEARS"]
         # Con precio, el modelo va aunque no se pidiera: el precio es por modelo.
         assert "modelo" in r.columnas
@@ -213,7 +215,7 @@ class TestGenerar:
 
     def test_si_falla_una_cadena_o_los_precios_las_demas_salen(self):
         def ejecutar(sql, de_que):
-            if de_que in ("COPPEL", "precios"):
+            if de_que in ("COPPEL", "precios", "scrap"):
                 return None
             return _venta(("SEARS", 2026, 5, "T1", "HONOR X6C 256GB 4G", None, 10))
 
@@ -369,3 +371,67 @@ class TestPreciosQueUnicosNoTieneEnLaCadena:
     def test_el_catalogo_va_primero(self):
         assert rd.modelo_del_precio("COP X6C", {"COP X6C": "DEL CATALOGO"}.get, "Coppel",
                                     rd.IndiceDeModelos.de(self.MODELOS)) == "DEL CATALOGO"
+
+
+class TestRespaldoDeInternet:
+    """Pedido el 21/10/2026: si Prices no tiene el precio, el de la pagina de
+    la tienda (el scrap), marcado en 'Fuente del precio'."""
+
+    def _scrap(self, *filas):
+        crudos = pd.DataFrame(filas, columns=["Retail", "Producto", "Dia", "Precio"])
+        return rd.scrap_por_modelo(crudos, [X6C, "APPLE IPAD 128GB", "HONOR MAGIC 8 LITE 512GB 5G"])
+
+    def test_el_scrap_trae_su_modelo_homologado_y_su_cadena(self):
+        s = self._scrap(("Liverpool", "APPLE IPAD 128GB", "2026-09-03", 7999.0),
+                        ("Telcel CACS", "HONOR MAGIC8 LITE 512GB 5G", "2026-09-03", 9999.0),
+                        ("Coppel", "NO EXISTE EN UNICOS", "2026-09-03", 1.0))
+        assert sorted(zip(s["cadena"], s["Modelo"])) == [
+            ("LIVERPOOL", "APPLE IPAD 128GB"), ("TELCEL", "HONOR MAGIC 8 LITE 512GB 5G")]
+
+    def test_prices_primero_y_si_no_internet_dicho(self):
+        # Dos dias de precio (con uno solo la serie pareceria mensual, como Sears).
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0), ("Coppel", "COP X6C", "2026-09-02", 5000.0))
+        scrap = self._scrap(("Coppel", X6C, "2026-09-20", 4500.0),
+                            ("Liverpool", "APPLE IPAD 128GB", "2026-09-10", 7999.0))
+        dias = pd.DataFrame(
+            [("Coppel", 2026, 9, X6C, "2026-09-03", 10), ("Coppel", 2026, 9, X6C, "2026-09-21", 30),
+             ("Liverpool Offline", 2026, 9, "APPLE IPAD 128GB", "2026-09-12", 4)],
+            columns=["Canal", "Año", "Mes", "Modelo", "Dia", "Unidades"])
+        precio = rd.precio_por_fecha(dias, precios, LLAVES, scrap).set_index("Canal")
+        # Coppel: el 3 de Prices (5000) y el 21 sin Prices -> internet (4500).
+        assert precio.loc["Coppel", rd.PRECIO] == 4625.0 and precio.loc["Coppel", rd.FUENTE] == rd.DE_LOS_DOS
+        assert precio.loc["Liverpool Offline", rd.PRECIO] == 7999.0
+        assert precio.loc["Liverpool Offline", rd.FUENTE] == rd.DE_INTERNET
+
+    def test_en_el_reporte_va_la_columna_y_cuanto_salio_de_internet(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0))
+        scrap = self._scrap(("Liverpool", "APPLE IPAD 128GB", "2026-09-01", 7999.0))
+        ventas = pd.DataFrame(
+            [("Liverpool Offline", 2026, 9, "APPLE IPAD 128GB", None, None, 1, 4),
+             ("Liverpool Offline", 2026, 9, "APPLE IPAD 128GB", None, "2026-09-02", 0, 4)],
+            columns=["Canal", "Año", "Mes", "Modelo", rd.DESCRIPCION, "Dia", "_detalle", "Unidades"])
+        parte = rd.armar_parte("LIVERPOOL", ventas, ["modelo"], precios, "ponderado", scrap)
+        assert parte.tabla[rd.FUENTE].tolist() == [rd.DE_INTERNET] and parte.de_internet == 1.0
+        r = rd.Reporte(partes=[parte], desde=(2026, 9), hasta=(2026, 9), columnas=["modelo"], precio=True)
+        assert "100% con el precio de internet" in rd.como_texto(r, [], 1)
+        assert "página de la tienda" in rd.para_el_usuario(r, 1, [], [], "es")
+
+    def test_sin_nada_de_internet_no_va_la_columna(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0))
+        ventas = _venta(("Coppel", 2026, 9, "T1", X6C, None, 4))
+        parte = rd.armar_parte("COPPEL", ventas, ["tienda", "modelo"], precios, "ultimo", self._scrap())
+        assert rd.FUENTE not in parte.tabla.columns and parte.de_internet == 0.0
+
+    def test_el_ultimo_del_mes_tambien_usa_internet_si_falta(self):
+        precios = _precios(("Coppel", "COP X6C", "2026-09-01", 5000.0))
+        scrap = self._scrap(("Liverpool", "APPLE IPAD 128GB", "2026-09-01", 8999.0),
+                            ("Liverpool", "APPLE IPAD 128GB", "2026-09-28", 7999.0))
+        ventas = _venta(("Liverpool Offline", 2026, 9, "T1", "APPLE IPAD 128GB", None, 2))
+        tabla = rd.armar_parte("LIVERPOOL", ventas, ["tienda", "modelo"], precios, "ultimo", scrap).tabla
+        assert tabla[rd.MODOS_DE_PRECIO["ultimo"]].tolist() == [7999.0]
+        assert tabla[rd.FUENTE].tolist() == [rd.DE_INTERNET]
+
+    def test_la_consulta_del_scrap(self):
+        sql = rd.sql_de_scrap((2026, 5), (2026, 10))
+        assert "[Scrap].dbo.[Complete_Scrap]" in sql and "MIN([price])" in sql and "[price] > 0" in sql
+        assert "'Mercado Libre', 'Suburbia'" in sql

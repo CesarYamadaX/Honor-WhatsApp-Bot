@@ -24,6 +24,7 @@ misma. Lo que no esta en UNICOS$ va con el [Modelo] vacio (pedido el
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Iterable
@@ -34,6 +35,16 @@ import acceso
 import ventas_con_modelo
 
 PRECIOS = "[GTM BI Database].dbo.[Prices]"
+SCRAP = "[Scrap].dbo.[Complete_Scrap]"
+
+# De donde salio el precio de cada fila. Pedido el 21/10/2026: si Prices no
+# lo tiene, el de la pagina de la tienda (el scrap), dicho. No es el mismo
+# precio -- Prices es el de venta interno; el scrap, el publicado en linea --
+# y por eso nunca se mezclan sin que se note.
+FUENTE = "Fuente del precio"
+DE_PRICES = "Prices"
+DE_INTERNET = "Internet (pagina de la tienda)"
+DE_LOS_DOS = "Prices e internet"
 
 # Lo que se puede pedir, ademas del año y el mes que van siempre:
 # nombre que usa el modelo -> (expresion en vw_ETL_Con_Modelo, columna del Excel).
@@ -238,6 +249,28 @@ def sql_de_precios(desde, hasta) -> str:
     )
 
 
+def sql_de_scrap(desde, hasta) -> str:
+    """El precio publicado en la pagina de cada tienda, por modelo y dia.
+
+    El scrap ya trae el modelo homologado ([approved_name]). Un mismo modelo
+    sale varias veces el mismo dia (por operador, color o vendedor: 26% de
+    las veces, con 29% de diferencia tipica, medido el 21/10/2026); va el mas
+    bajo publicado, como cuando el bot responde un precio de internet.
+    Mercado Libre y Suburbia no son cadenas del bot. 14 s, medido.
+    """
+    (a1, m1), (a2, m2) = desde, hasta
+    return (
+        "SELECT [retail] AS [Retail], [approved_name] AS [Producto], "
+        "CAST([consultation_date] AS date) AS [Dia], MIN([price]) AS [Precio] "
+        f"FROM {SCRAP} WITH (NOLOCK) "
+        f"WHERE [consultation_date] >= DATEADD(MONTH, -1, '{a1:04d}-{m1:02d}-01') "
+        f"AND [consultation_date] < DATEADD(MONTH, 1, '{a2:04d}-{m2:02d}-01') "
+        "AND [price] > 0 AND [approved_name] IS NOT NULL "
+        "AND [retail] NOT IN ('Mercado Libre', 'Suburbia') "
+        "GROUP BY [retail], [approved_name], CAST([consultation_date] AS date)"
+    )
+
+
 # AT&T en Prices: 'AT&T CACS APPLE IPHONE 15 256GB 4G'; en UNICOS$:
 # 'AT&T CACS APPLE IPHONE 15 256GB', sin la red. Medido el 19/10/2026: tal
 # cual casaba el 0% de AT&T; sin la red, dos de cada tres productos. El resto
@@ -344,6 +377,55 @@ def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None
     return p[columnas]
 
 
+def scrap_por_modelo(scrap: pd.DataFrame | None, modelos: Iterable[str] | None) -> pd.DataFrame:
+    """El scrap en la forma de precios_por_modelo, solo por cadena (sus
+    tiendas no se parten en canales: 'Liverpool', no Offline/Online). El
+    modelo es el suyo si existe en UNICOS$, o el que case sin duda."""
+    columnas = ["retail", "cadena", "Modelo", "Dia", "Año", "Mes", "Precio", "mensual"]
+    if scrap is None or scrap.empty:
+        return pd.DataFrame(columns=columnas)
+    s = scrap.copy()
+    conocidos = set(modelos or ())
+    indice = IndiceDeModelos.de(conocidos) if conocidos else None
+    nombres = {}
+    for nombre in s["Producto"].dropna().unique():
+        limpio = re.sub(r"\s+", " ", str(nombre)).strip()
+        if not conocidos or limpio in conocidos:
+            nombres[nombre] = limpio
+        else:
+            nombres[nombre] = indice.buscar(limpio) if indice else None
+    s["Modelo"] = s["Producto"].map(nombres)
+    s["cadena"] = s["Retail"].map(cadena_de)
+    s = s.dropna(subset=["Modelo", "cadena"])
+    s["Dia"] = _como_dia(s["Dia"])
+    s["Año"], s["Mes"] = s["Dia"].dt.year, s["Dia"].dt.month
+    s["retail"] = ""
+    s["mensual"] = False
+    s["Precio"] = pd.to_numeric(s["Precio"], errors="coerce")
+    return s[columnas]
+
+
+def _precio_y_fuente(d: pd.DataFrame, precios: pd.DataFrame,
+                     scrap: pd.DataFrame | None) -> tuple[pd.Series, pd.Series]:
+    """El precio de cada dia y de donde salio: Prices (del canal exacto, si
+    no de su cadena) y, si no tiene, el scrap de esa cadena."""
+    precio = _precio_en(d, precios, "retail").fillna(_precio_en(d, precios, "cadena"))
+    fuente = pd.Series(None, index=d.index, dtype=object).where(precio.isna(), DE_PRICES)
+    if scrap is not None and not scrap.empty:
+        de_internet = _precio_en(d, scrap, "cadena")
+        hueco = precio.isna() & de_internet.notna()
+        precio = precio.where(~hueco, de_internet)
+        fuente = fuente.where(~hueco, DE_INTERNET)
+    return precio, fuente
+
+
+def _fuente_de(fuentes: pd.Series):
+    distintas = set(fuentes.dropna())
+    if not distintas:
+        return None
+    return distintas.pop() if len(distintas) == 1 else DE_LOS_DOS
+
+
 def _precio_en(dias: pd.DataFrame, precios: pd.DataFrame, llave: str) -> pd.Series:
     """El precio de cada fila de `dias` por `llave` (retail o cadena): el de
     su dia (o el ultimo de la semana anterior), o el de su mes si la serie es
@@ -376,32 +458,38 @@ def _precio_en(dias: pd.DataFrame, precios: pd.DataFrame, llave: str) -> pd.Seri
     return resultado
 
 
-def precio_por_fecha(dias: pd.DataFrame, precios: pd.DataFrame, llaves: list[str]) -> pd.DataFrame:
+def precio_por_fecha(dias: pd.DataFrame, precios: pd.DataFrame, llaves: list[str],
+                     scrap: pd.DataFrame | None = None) -> pd.DataFrame:
     """El precio de cada fila del reporte, de acuerdo con CUANDO se vendio.
 
     `dias` es la venta por modelo y dia. Cada dia toma el precio de ese dia
     (del canal exacto, si no de su cadena) y el precio de la fila es el
     promedio ponderado por las unidades de cada dia: si en septiembre se
     vendieron 10 a $5,000 y 30 a $4,000, el precio es $4,250. Devuelve
-    `llaves` + [Precio promedio]."""
+    `llaves` + [Precio promedio] + [Fuente del precio]."""
     if dias.empty:
-        return pd.DataFrame(columns=llaves + [PRECIO])
+        return pd.DataFrame(columns=llaves + [PRECIO, FUENTE])
     d = dias.copy()
     d["Dia"] = _como_dia(d["Dia"])
     d["retail"] = d["Canal"].astype(str).str.strip().str.casefold()
     d["cadena"] = d["Canal"].map(cadena_de)
-    d["Precio"] = _precio_en(d, precios, "retail").fillna(_precio_en(d, precios, "cadena"))
+    d["Precio"], d["fuente"] = _precio_y_fuente(d, precios, scrap)
     d["Unidades"] = pd.to_numeric(d["Unidades"], errors="coerce").fillna(0.0)
     con = d[d["Precio"].notna() & (d["Unidades"] > 0)].copy()
+    if con.empty:
+        return pd.DataFrame(columns=llaves + [PRECIO, FUENTE])
     con["importe"] = con["Precio"] * con["Unidades"]
-    suma = con.groupby(llaves, as_index=False)[["importe", "Unidades"]].sum()
+    grupos = con.groupby(llaves)
+    suma = grupos[["importe", "Unidades"]].sum().reset_index()
     suma[PRECIO] = (suma["importe"] / suma["Unidades"]).round(2)
-    return suma[llaves + [PRECIO]]
+    suma[FUENTE] = grupos["fuente"].agg(_fuente_de).values
+    return suma[llaves + [PRECIO, FUENTE]]
 
 
 def precio_del_mes(precios: pd.DataFrame, modo: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """El primero, el ultimo, el mas bajo o el mas alto de cada mes, por
-    [Retail] exacto y por cadena (el respaldo, como en el ponderado)."""
+    [Retail] exacto y por cadena (el respaldo, como en el ponderado). Con el
+    scrap da lo mismo, por cadena (su [retail] va vacio)."""
     funcion = {"primero": "first", "ultimo": "last", "minimo": "min", "maximo": "max"}[modo]
     ordenados = precios.sort_values("Dia")
     exacto = ordenados.groupby(["retail", "Modelo", "Año", "Mes"], as_index=False)["Precio"].agg(funcion)
@@ -436,6 +524,7 @@ class Parte:
     unidades: float = 0.0
     sin_modelo: float = 0.0  # fraccion de las unidades sin modelo homologado
     con_precio: float | None = None  # fraccion de las unidades con precio
+    de_internet: float = 0.0  # fraccion de las unidades con precio del scrap
 
 
 @dataclass
@@ -453,7 +542,8 @@ class Reporte:
 
 
 def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
-                precios: pd.DataFrame | None, modo: str = "ponderado") -> Parte:
+                precios: pd.DataFrame | None, modo: str = "ponderado",
+                scrap: pd.DataFrame | None = None) -> Parte:
     """Ordena la tabla de una cadena, le pone el precio y la mide.
 
     Con `precios`, `ventas` trae tambien la venta por dia ([_detalle] = 0,
@@ -476,6 +566,7 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
         if "Modelo" in t.columns and total else 0.0
     )
     cubierto = None
+    internet = 0.0
     if precios is not None and "Modelo" in t.columns:
         if modo == "desglosado" and "Dia" in t.columns:
             # Cada dia con su precio, y se suma lo vendido a cada precio: una
@@ -483,13 +574,13 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
             t["Dia"] = _como_dia(t["Dia"])
             t["retail"] = t["Canal"].astype(str).str.strip().str.casefold()
             t["cadena"] = t["Canal"].map(cadena_de)
-            t[nombre_del_precio] = _precio_en(t, precios, "retail").fillna(
-                _precio_en(t, precios, "cadena")).round(2)
+            precio, fuente = _precio_y_fuente(t, precios, scrap)
+            t[nombre_del_precio], t[FUENTE] = precio.round(2), fuente
             fila = [c for c in t.columns if c not in ("Dia", "retail", "cadena", "Unidades")]
             t = t.groupby(fila, as_index=False, dropna=False, sort=False)["Unidades"].sum()
         elif modo == "ponderado" and dias is not None:
             llaves = ["Canal", "Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Modelo"]
-            precio = precio_por_fecha(dias.dropna(subset=["Modelo"]), precios, llaves)
+            precio = precio_por_fecha(dias.dropna(subset=["Modelo"]), precios, llaves, scrap)
             t = t.merge(precio, on=llaves, how="left")
         elif modo in ("primero", "ultimo", "minimo", "maximo"):
             exacto, por_cadena = precio_del_mes(precios, modo)
@@ -497,22 +588,41 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
             t["cadena"] = t["Canal"].map(cadena_de)
             t = t.merge(exacto.rename(columns={"Precio": "_exacto"}), on=["retail", "Modelo", "Año", "Mes"], how="left")
             t = t.merge(por_cadena.rename(columns={"Precio": "_cadena"}), on=["cadena", "Modelo", "Año", "Mes"], how="left")
-            t[nombre_del_precio] = t["_exacto"].fillna(t["_cadena"]).round(2)
+            precio = t["_exacto"].fillna(t["_cadena"])
+            t[FUENTE] = pd.Series(None, index=t.index, dtype=object).where(precio.isna(), DE_PRICES)
+            if scrap is not None and not scrap.empty:
+                _, del_scrap = precio_del_mes(scrap, modo)
+                t = t.merge(del_scrap.rename(columns={"Precio": "_scrap"}),
+                            on=["cadena", "Modelo", "Año", "Mes"], how="left")
+                hueco = precio.isna().values & t["_scrap"].notna().values
+                precio = precio.where(~hueco, t["_scrap"])
+                t[FUENTE] = t[FUENTE].where(~hueco, DE_INTERNET)
+                t = t.drop(columns=["_scrap"])
+            t[nombre_del_precio] = precio.round(2)
             t = t.drop(columns=["retail", "cadena", "_exacto", "_cadena"])
         if nombre_del_precio in t.columns:
             cubierto = float(t.loc[t[nombre_del_precio].notna(), "Unidades"].sum()) / total if total else 0.0
+        if FUENTE in t.columns:
+            de_internet = t[FUENTE].isin([DE_INTERNET, DE_LOS_DOS])
+            internet = float(t.loc[de_internet, "Unidades"].sum()) / total if total else 0.0
+            if not de_internet.any():
+                # Todo de Prices: la columna no dice nada.
+                t = t.drop(columns=[FUENTE])
+    else:
+        internet = 0.0
     # Columnas en un orden que se lee: canal, periodo, lo pedido, unidades, precio.
     orden = ["Canal", "Año", "Mes"] + [COLUMNAS[c][1] for c in columnas if c != "canal"]
     if "modelo" in columnas and (t[DESCRIPCION] != "").any():
         orden.insert(orden.index("Modelo") + 1, DESCRIPCION)
     orden += ["Unidades"] + ([nombre_del_precio] if nombre_del_precio in t.columns else [])
+    orden += [FUENTE] if FUENTE in t.columns else []
     t = t[[c for c in orden if c in t.columns]]
     orden_de_filas = ["Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Canal"]
     if modo == "desglosado" and nombre_del_precio in t.columns:
         # Los precios de una misma fila, juntos y de menor a mayor.
-        orden_de_filas = [c for c in t.columns if c != "Unidades"]
+        orden_de_filas = [c for c in t.columns if c not in ("Unidades", FUENTE)]
     t = t[t["Unidades"] != 0].sort_values(orden_de_filas, kind="stable").reset_index(drop=True)
-    return Parte(cadena, t, total, sin_modelo, cubierto)
+    return Parte(cadena, t, total, sin_modelo, cubierto, internet)
 
 
 def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterable[str], columnas: list[str],
@@ -536,13 +646,24 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
     cadenas = list(cadenas)
     if precio and "modelo" not in columnas:
         columnas = columnas + ["modelo"]
-    # Los precios primero (3 s): cada cadena los necesita al terminar.
-    precios = None
+    # Los precios (8 s) y su respaldo de internet (14-18 s) se piden a la vez
+    # que la venta, y cada cadena los espera al terminar su consulta: antes
+    # iban primero y retrasaban todo ~25 s.
     if precio:
-        crudos = ejecutar(sql_de_precios(desde, hasta), "precios")
-        if crudos is None:
-            crudos = pd.DataFrame(columns=["Retail", "Producto", "Dia", "Precio"])
-        precios = precios_por_modelo(crudos, buscar or (lambda _t: None), modelos)
+        modelos = set(modelos) if modelos is not None else None
+        vacio = pd.DataFrame(columns=["Retail", "Producto", "Dia", "Precio"])
+
+        def traer_precios():
+            crudos = ejecutar(sql_de_precios(desde, hasta), "precios")
+            return precios_por_modelo(vacio if crudos is None else crudos, buscar or (lambda _t: None), modelos)
+
+        def traer_scrap():
+            return scrap_por_modelo(ejecutar(sql_de_scrap(desde, hasta), "scrap"), modelos)
+
+        apartado = ThreadPoolExecutor(max_workers=2)
+        futuros = (apartado.submit(traer_precios), apartado.submit(traer_scrap))
+    else:
+        apartado, futuros = None, None
 
     def una(cadena: str) -> Parte | None:
         # Solo el ponderado y el desglose necesitan la venta por dia; el
@@ -551,13 +672,18 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
         ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario), cadena)
         if ventas is None or ventas.empty:
             return None
-        parte = armar_parte(cadena, ventas, columnas, precios, modo)
+        precios, scrap = (futuros[0].result(), futuros[1].result()) if futuros else (None, None)
+        parte = armar_parte(cadena, ventas, columnas, precios, modo, scrap)
         if al_terminar is not None:
             al_terminar(parte)
         return parte
 
     trabajos: list[Callable[[], object]] = [(lambda c=c: una(c)) for c in cadenas]
-    resultados = en_paralelo(trabajos) if en_paralelo else [t() for t in trabajos]
+    try:
+        resultados = en_paralelo(trabajos) if en_paralelo else [t() for t in trabajos]
+    finally:
+        if apartado is not None:
+            apartado.shutdown(wait=True)
     reporte = Reporte(desde=desde, hasta=hasta, columnas=columnas, precio=precio, modo=modo)
     reporte.partes = [p for p in resultados if p is not None]
     return reporte
@@ -623,6 +749,8 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
             extra.append(f"{cuanto} de las unidades sin modelo en UNICOS$ (van con el modelo vacio)")
         if p.con_precio is not None:
             extra.append(f"{p.con_precio:.0%} de las unidades con precio")
+        if p.de_internet:
+            extra.append(f"{p.de_internet:.0%} con el precio de internet")
         lineas.append(f"- {p.cadena}: {p.unidades:,.0f} unidades" + (f" ({'; '.join(extra)})" if extra else ""))
     if sin_datos:
         lineas.append(f"Sin datos de ese periodo (todavia no lo cargan): {', '.join(sin_datos)}. "
@@ -635,6 +763,12 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
     )
     if r.precio:
         lineas.append(_COMO_ES_EL_PRECIO.get(r.modo, _COMO_ES_EL_PRECIO["ponderado"]))
+    if any(p.de_internet for p in r.partes):
+        lineas.append(
+            "Donde Prices no tenia precio va el de la pagina de la tienda (scrap de internet, el "
+            "mas bajo publicado ese dia), marcado en la columna 'Fuente del precio'. Dilo: que parte "
+            "salio de internet y que no es el precio de venta interno."
+        )
     return "\n".join(lineas)
 
 
@@ -724,6 +858,10 @@ _TEXTOS = {
         "archivo": "Va en un archivo.",
         "total": "Total: {total} unidades.",
         "sin_precio": "sin precio en el {pct} de las unidades",
+        "de_internet": "precio de internet en el {pct}",
+        "nota_internet": ("Donde la tabla de precios no tenía el precio va el de la página de la tienda "
+                          "(internet, el más bajo publicado ese día), marcado en la columna "
+                          "\"Fuente del precio\"."),
         "sin_venta": "Todavía sin datos de ese periodo: {cadenas}.",
         "fallas": "No pude sacar: {cadenas}. Pídemelo de nuevo si lo necesitas.",
         "falla": "No pude terminar el reporte que pediste ({error}). Pídemelo de nuevo, por favor.",
@@ -745,6 +883,9 @@ _TEXTOS = {
         "archivo": "It comes in one file.",
         "total": "Total: {total} units.",
         "sin_precio": "no price for {pct} of the units",
+        "de_internet": "online price for {pct}",
+        "nota_internet": ("Where the price table had no price, the store's website price is used "
+                          "(online, the lowest listed that day), marked in the \"Fuente del precio\" column."),
         "sin_venta": "No data loaded yet for that period: {cadenas}.",
         "fallas": "I couldn't get: {cadenas}. Ask me again if you need it.",
         "falla": "I couldn't finish the report you asked for ({error}). Please ask me again.",
@@ -765,6 +906,8 @@ _TEXTOS = {
         "archivo": "共一个文件。",
         "total": "合计：{total} 台。",
         "sin_precio": "{pct} 的销量没有价格",
+        "de_internet": "{pct} 使用网上价格",
+        "nota_internet": "价格表中没有的价格，使用门店官网价格（当日最低标价），在“Fuente del precio”列中标明。",
         "sin_venta": "该期间暂无数据：{cadenas}。",
         "fallas": "未能获取：{cadenas}。需要的话请再问我一次。",
         "falla": "我没能完成你要的报表（{error}）。请再问我一次。",
@@ -801,10 +944,15 @@ def para_el_usuario(r: Reporte, archivos: int, sin_venta: list[str], fallas: lis
         t["total"].format(total=f"{r.unidades:,.0f}"),
     ]
     for p in r.partes:
-        nota = ""
+        notas = []
         if p.con_precio is not None and p.con_precio < 0.95:
-            nota = f" ({t['sin_precio'].format(pct=f'{1 - p.con_precio:.0%}')})"
+            notas.append(t["sin_precio"].format(pct=f"{1 - p.con_precio:.0%}"))
+        if p.de_internet >= 0.005:
+            notas.append(t["de_internet"].format(pct=f"{p.de_internet:.0%}"))
+        nota = f" ({'; '.join(notas)})" if notas else ""
         lineas.append(f"- {acceso.NOMBRES.get(p.cadena, p.cadena)}: {p.unidades:,.0f} {t['unidades']}{nota}")
+    if any(p.de_internet for p in r.partes):
+        lineas.append(t["nota_internet"])
     if sin_venta:
         lineas.append(t["sin_venta"].format(cadenas=", ".join(acceso.NOMBRES.get(c, c) for c in sin_venta)))
     if fallas:

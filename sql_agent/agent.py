@@ -2470,6 +2470,10 @@ def reporte_detallado(
         )
         archivos += 1
     bitacora.paso(f"reporte detallado listo: {archivos} archivo(s)", bitacora.NOTA)
+    # Parte del precio salio de la pagina de la tienda: la respuesta lo dice
+    # al pie, como cualquier precio de internet.
+    if any(p.de_internet for p in reporte.partes):
+        ctx.de_internet = True
     ctx.varios_archivos = archivos > 1
     ctx.hubo_datos = True
     ctx.sugerencias = []
