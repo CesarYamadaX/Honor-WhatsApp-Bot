@@ -66,6 +66,10 @@ class Catalogo:
     por_descripcion: dict[str, str]
     por_codigo_att: dict[str, str]
 
+    def modelos(self) -> set[str]:
+        """Todos los modelos homologados que conoce."""
+        return {m for d in (self.por_final, self.por_descripcion) for m in d.values() if m}
+
     def buscar(self, texto) -> str | None:
         llave = _normal(texto)
         if not llave:

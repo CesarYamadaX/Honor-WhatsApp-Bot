@@ -246,10 +246,63 @@ def sql_de_precios(desde, hasta) -> str:
 _RED_AL_FINAL = re.compile(r"\s+\d(?:\.\d)?G$")
 
 
-def modelo_del_precio(texto: str, buscar: Callable[[str], str | None]) -> str | None:
+# Y lo que UNICOS$ no tiene dado de alta en la cadena, pero si existe como
+# modelo homologado: Prices lo escribe con el nombre de la cadena adelante y
+# casi igual que el modelo ('AT&T CACS HONOR X6C 256GB 4G' es 'HONOR X6C
+# 256GB 4G'). Medido el 21/10/2026, AT&T de mayo a octubre: las unidades con
+# precio pasaron de 44% a 95%. Solo se aceptan coincidencias sin duda: el
+# mismo texto sin espacios ('MAGIC8' = 'MAGIC 8'), con las marcas escritas
+# como en UNICOS$ (GALAXY, MOTO e IPHONE sin APPLE), o sin la red si ese
+# modelo existe en una sola.
+_MARCAS_DE_PRICES = (
+    (re.compile(r"\bSAMSUNG GALAXY\b"), "SAMSUNG"),
+    (re.compile(r"\bMOTOROLA MOTO\b"), "MOTOROLA"),
+    (re.compile(r"^IPHONE\b"), "APPLE IPHONE"),
+)
+
+
+def _compacto(texto) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(texto).upper())
+
+
+@dataclass
+class IndiceDeModelos:
+    """Los modelos homologados por su texto sin espacios, con y sin la red;
+    una llave que da dos modelos no sirve (es una duda)."""
+    por_nombre: dict[str, set[str]] = field(default_factory=dict)
+    por_base: dict[str, set[str]] = field(default_factory=dict)
+
+    @classmethod
+    def de(cls, modelos: Iterable[str]) -> "IndiceDeModelos":
+        indice = cls()
+        for modelo in {m for m in modelos if m}:
+            indice.por_nombre.setdefault(_compacto(modelo), set()).add(modelo)
+            indice.por_base.setdefault(_compacto(_RED_AL_FINAL.sub("", modelo)), set()).add(modelo)
+        return indice
+
+    def buscar(self, texto: str, retail: str = "") -> str | None:
+        t = re.sub(r"\s+", " ", texto.upper()).strip()
+        prefijo = re.sub(r"\s+", " ", str(retail or "").upper()).strip()
+        if prefijo and t.startswith(prefijo + " "):
+            t = t[len(prefijo) + 1:]
+        for patron, cambio in _MARCAS_DE_PRICES:
+            t = patron.sub(cambio, t)
+        for indice, llave in ((self.por_nombre, _compacto(t)),
+                              (self.por_base, _compacto(_RED_AL_FINAL.sub("", t)))):
+            encontrados = indice.get(llave, set())
+            if len(encontrados) == 1:
+                return next(iter(encontrados))
+        return None
+
+
+def modelo_del_precio(texto: str, buscar: Callable[[str], str | None], retail: str = "",
+                      indice: IndiceDeModelos | None = None) -> str | None:
     if not isinstance(texto, str):
         return None
-    return buscar(texto) or buscar(_RED_AL_FINAL.sub("", texto.strip()))
+    encontrado = buscar(texto) or buscar(_RED_AL_FINAL.sub("", texto.strip()))
+    if encontrado or indice is None:
+        return encontrado
+    return indice.buscar(texto, retail)
 
 
 # Un precio vale hasta una semana despues de su fecha: alcanza para el de
@@ -264,7 +317,8 @@ def _como_dia(columna: pd.Series) -> pd.Series:
     return pd.to_datetime(columna).dt.normalize().astype("datetime64[ns]")
 
 
-def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None]) -> pd.DataFrame:
+def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None],
+                       modelos: Iterable[str] | None = None) -> pd.DataFrame:
     """Los precios por dia con su modelo homologado y sus dos llaves: el
     [Retail] exacto (Liverpool Offline no cuesta lo que Online) y la cadena,
     para los canales que no tienen precio propio (Telcel Retail usa el de
@@ -274,7 +328,10 @@ def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None
     if precios is None or precios.empty:
         return pd.DataFrame(columns=columnas)
     p = precios.copy()
-    p["Modelo"] = p["Producto"].map({x: modelo_del_precio(x, buscar) for x in p["Producto"].dropna().unique()})
+    indice = IndiceDeModelos.de(modelos) if modelos is not None else None
+    pares = p[["Producto", "Retail"]].dropna().drop_duplicates()
+    modelo = {(x, r): modelo_del_precio(x, buscar, r, indice) for x, r in pares.itertuples(index=False)}
+    p["Modelo"] = [modelo.get((x, r)) for x, r in zip(p["Producto"], p["Retail"])]
     p = p.dropna(subset=["Modelo"])
     p["Dia"] = _como_dia(p["Dia"])
     p["Año"], p["Mes"] = p["Dia"].dt.year, p["Dia"].dt.month
@@ -462,6 +519,7 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
             desde, hasta, marca: str = "", precio: bool = False,
             buscar: Callable[[str], str | None] | None = None,
             modo: str = "ponderado",
+            modelos: Iterable[str] | None = None,
             en_paralelo: Callable[[list[Callable[[], object]]], list] | None = None,
             al_terminar: Callable[[Parte], None] | None = None) -> Reporte:
     """Corre las consultas y arma el reporte.
@@ -484,7 +542,7 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
         crudos = ejecutar(sql_de_precios(desde, hasta), "precios")
         if crudos is None:
             crudos = pd.DataFrame(columns=["Retail", "Producto", "Dia", "Precio"])
-        precios = precios_por_modelo(crudos, buscar or (lambda _t: None))
+        precios = precios_por_modelo(crudos, buscar or (lambda _t: None), modelos)
 
     def una(cadena: str) -> Parte | None:
         # Solo el ponderado y el desglose necesitan la venta por dia; el

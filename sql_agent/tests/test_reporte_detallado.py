@@ -335,3 +335,37 @@ def test_el_mensaje_de_entrega_se_lee_bien():
     assert "- Coppel: 100 unidades (sin precio en el 50% de las unidades)" in texto
     assert "Todavía sin datos de ese periodo: Movistar." in texto
     assert "by store and model" in rd.para_el_usuario(r, 1, [], [], "en")
+
+
+class TestPreciosQueUnicosNoTieneEnLaCadena:
+    """21/10/2026: en AT&T solo 44% de las unidades tenia precio. Prices
+    escribe 'AT&T CACS HONOR X6C 256GB 4G' y UNICOS$ no lo tiene dado de alta
+    en AT&T, pero el modelo homologado si existe."""
+
+    MODELOS = ["HONOR X6C 256GB 4G", "APPLE IPHONE 16 128GB 5G", "SAMSUNG A57 256GB 5G",
+               "MOTOROLA G17 256GB 4G", "HONOR MAGIC 8 LITE 512GB 5G", "HONOR X8B 256GB 4.5G",
+               "SAMSUNG A17 128GB 4G", "SAMSUNG A17 128GB 5G"]
+
+    def _buscar(self, producto, retail="AT&T CACS"):
+        return rd.modelo_del_precio(producto, lambda _t: None, retail, rd.IndiceDeModelos.de(self.MODELOS))
+
+    def test_con_la_cadena_adelante_y_las_marcas_como_en_unicos(self):
+        assert self._buscar("AT&T Dealers HONOR X6C 256GB 4G", "AT&T Dealers") == "HONOR X6C 256GB 4G"
+        assert self._buscar("AT&T CACS IPHONE 16 128GB 5G") == "APPLE IPHONE 16 128GB 5G"
+        assert self._buscar("AT&T CACS SAMSUNG GALAXY A57 256GB 5G") == "SAMSUNG A57 256GB 5G"
+        assert self._buscar("AT&T CACS MOTOROLA MOTO G17 256GB 4G") == "MOTOROLA G17 256GB 4G"
+
+    def test_sin_espacios_y_sin_la_red_si_no_hay_duda(self):
+        assert self._buscar("AT&T CACS HONOR MAGIC8 LITE 512GB 5G") == "HONOR MAGIC 8 LITE 512GB 5G"
+        assert self._buscar("AT&T CACS HONOR X8B 256GB 4G") == "HONOR X8B 256GB 4.5G"
+
+    def test_si_hay_duda_no_se_adivina(self):
+        # El A17 existe en 4G y en 5G: un precio "A17 4G" de otra red no se asigna...
+        assert self._buscar("AT&T CACS SAMSUNG GALAXY A17 128GB 3G") is None
+        # ...pero el que dice su red exacta si.
+        assert self._buscar("AT&T CACS SAMSUNG GALAXY A17 128GB 5G") == "SAMSUNG A17 128GB 5G"
+        assert self._buscar("AT&T CACS HONOR 8A 128GB 4G") is None
+
+    def test_el_catalogo_va_primero(self):
+        assert rd.modelo_del_precio("COP X6C", {"COP X6C": "DEL CATALOGO"}.get, "Coppel",
+                                    rd.IndiceDeModelos.de(self.MODELOS)) == "DEL CATALOGO"
