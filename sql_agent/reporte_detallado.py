@@ -351,7 +351,8 @@ def _como_dia(columna: pd.Series) -> pd.Series:
 
 
 def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None],
-                       modelos: Iterable[str] | None = None) -> pd.DataFrame:
+                       modelos: Iterable[str] | None = None,
+                       buscar_en_cadena: Callable[[str, str], str | None] | None = None) -> pd.DataFrame:
     """Los precios por dia con su modelo homologado y sus dos llaves: el
     [Retail] exacto (Liverpool Offline no cuesta lo que Online) y la cadena,
     para los canales que no tienen precio propio (Telcel Retail usa el de
@@ -363,7 +364,18 @@ def precios_por_modelo(precios: pd.DataFrame, buscar: Callable[[str], str | None
     p = precios.copy()
     indice = IndiceDeModelos.de(modelos) if modelos is not None else None
     pares = p[["Producto", "Retail"]].dropna().drop_duplicates()
-    modelo = {(x, r): modelo_del_precio(x, buscar, r, indice) for x, r in pares.itertuples(index=False)}
+    # Primero con la regla de la venta de su cadena (ver
+    # homologacion.buscar_como_la_venta): asi el precio y la venta del mismo
+    # producto salen con el mismo modelo.
+    def del_precio(x, r):
+        if buscar_en_cadena is not None:
+            cadena = cadena_de(r)
+            encontrado = buscar_en_cadena(x, cadena) if cadena else None
+            if encontrado:
+                return encontrado
+        return modelo_del_precio(x, buscar, r, indice)
+
+    modelo = {(x, r): del_precio(x, r) for x, r in pares.itertuples(index=False)}
     p["Modelo"] = [modelo.get((x, r)) for x, r in zip(p["Producto"], p["Retail"])]
     p = p.dropna(subset=["Modelo"])
     p["Dia"] = _como_dia(p["Dia"])
@@ -630,6 +642,7 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
             buscar: Callable[[str], str | None] | None = None,
             modo: str = "ponderado",
             modelos: Iterable[str] | None = None,
+            buscar_en_cadena: Callable[[str, str], str | None] | None = None,
             en_paralelo: Callable[[list[Callable[[], object]]], list] | None = None,
             al_terminar: Callable[[Parte], None] | None = None) -> Reporte:
     """Corre las consultas y arma el reporte.
@@ -655,7 +668,8 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
 
         def traer_precios():
             crudos = ejecutar(sql_de_precios(desde, hasta), "precios")
-            return precios_por_modelo(vacio if crudos is None else crudos, buscar or (lambda _t: None), modelos)
+            return precios_por_modelo(vacio if crudos is None else crudos, buscar or (lambda _t: None), modelos,
+                                      buscar_en_cadena)
 
         def traer_scrap():
             return scrap_por_modelo(ejecutar(sql_de_scrap(desde, hasta), "scrap"), modelos)

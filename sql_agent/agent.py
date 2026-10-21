@@ -2229,7 +2229,8 @@ def _cuanto_varia_el_precio(ctx: "ContextoPeticion", pedidas, inicio, fin) -> di
     catalogo_de_modelos = homologacion.catalogo()
     precios = detallado.precios_por_modelo(
         crudos, catalogo_de_modelos.buscar if catalogo_de_modelos else (lambda _t: None),
-        catalogo_de_modelos.modelos() if catalogo_de_modelos else None)
+        catalogo_de_modelos.modelos() if catalogo_de_modelos else None,
+        catalogo_de_modelos.buscar_como_la_venta if catalogo_de_modelos else None)
     return detallado.cuanto_varia(precios, pedidas, inicio, fin)
 
 
@@ -2302,6 +2303,7 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         precio=con_precio, modo=modo,
         buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
         modelos=catalogo_de_modelos.modelos() if catalogo_de_modelos else None,
+        buscar_en_cadena=catalogo_de_modelos.buscar_como_la_venta if catalogo_de_modelos else None,
         en_paralelo=en_paralelo,
         al_terminar=al_terminar if por_cadena else None,
     )

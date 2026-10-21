@@ -66,6 +66,36 @@ class Catalogo:
     por_descripcion: dict[str, str]
     por_codigo_att: dict[str, str]
 
+    def buscar_como_la_venta(self, texto, cadena: str) -> str | None:
+        """El modelo con la MISMA regla con que se homologa la venta de esa
+        cadena (ver ventas_con_modelo.VISTAS), y si no, buscar().
+
+        Visto el 21/10/2026: UNICOS$ tiene el iPad '1173978126 11" iPad WiFi
+        128GB Plata' homologado dos veces -- por DESCRIPCION 'APPLE IPAD
+        128GB' y por FINAL 'APPLE IPAD WIFI 11" 128GB'. La venta de Liverpool
+        usa DESCRIPCION; su precio, por buscar(), salia con FINAL, y con otro
+        nombre no se pegaba a la venta.
+        """
+        llave = _normal(texto)
+        if not llave:
+            return None
+        sin_codigo = llave.split(" ", 1)[1] if " " in llave else ""
+        # El texto entero primero: hay precios que vienen sin codigo, y
+        # "quitarles el codigo" les quitaria la primera palabra (Elektra perdia
+        # medio punto de precio asi, medido).
+        reglas = {
+            "LIVERPOOL": ((self.por_descripcion, llave), (self.por_descripcion, sin_codigo)),
+            "ELEKTRA": ((self.por_descripcion, llave), (self.por_descripcion, sin_codigo)),
+            "TELCEL": ((self.por_descripcion, llave), (self.por_descripcion, sin_codigo)),
+            "MOVISTAR": ((self.por_final, llave), (self.por_final, sin_codigo)),
+            "COPPEL": ((self.por_final, llave),),
+            "SEARS": ((self.por_final, llave),),
+        }.get(cadena, ())
+        for indice, clave in reglas:
+            if clave and indice.get(clave):
+                return indice[clave]
+        return self.buscar(texto)
+
     def modelos(self) -> set[str]:
         """Todos los modelos homologados que conoce."""
         return {m for d in (self.por_final, self.por_descripcion) for m in d.values() if m}

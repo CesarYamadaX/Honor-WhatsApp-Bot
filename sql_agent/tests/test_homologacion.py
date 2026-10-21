@@ -61,3 +61,28 @@ def test_el_excel_lleva_la_columna(tmp_path, monkeypatch):
 def test_sin_base_sale_como_estaba():
     df = pd.DataFrame({"Material Description": ["HONOR X6C 256GB"]})
     assert con_modelo(df) is df
+
+
+class TestComoLaVenta:
+    """21/10/2026: UNICOS$ tiene el mismo iPad homologado dos veces; el
+    precio tiene que salir con el modelo que tiene la venta de su cadena."""
+
+    IPAD = Catalogo(
+        {'1173978126 11" IPAD WIFI 128GB PLATA': 'APPLE IPAD WIFI 11" 128GB',
+         "COP X6C": "HONOR X6C 256GB 4G"},
+        {'11" IPAD WIFI 128GB PLATA': "APPLE IPAD 128GB",
+         "SAMSUNG GALAXY A57, 256GB, GRIS": "SAMSUNG A57 256GB 5G"},
+        {},
+    )
+
+    def test_liverpool_como_su_venta_por_descripcion_sin_codigo(self):
+        texto = '1173978126 11" iPad WiFi 128GB Plata'
+        assert self.IPAD.buscar(texto) == 'APPLE IPAD WIFI 11" 128GB'  # lo de antes
+        assert self.IPAD.buscar_como_la_venta(texto, "LIVERPOOL") == "APPLE IPAD 128GB"
+
+    def test_un_precio_sin_codigo_no_pierde_su_primera_palabra(self):
+        assert self.IPAD.buscar_como_la_venta("SAMSUNG GALAXY A57, 256GB, GRIS", "LIVERPOOL") == "SAMSUNG A57 256GB 5G"
+
+    def test_coppel_por_final_y_lo_demas_como_siempre(self):
+        assert self.IPAD.buscar_como_la_venta("COP X6C", "COPPEL") == "HONOR X6C 256GB 4G"
+        assert self.IPAD.buscar_como_la_venta("COP X6C", "AT&T") == "HONOR X6C 256GB 4G"
