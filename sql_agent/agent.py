@@ -2245,7 +2245,7 @@ class _Armado:
 
 def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: list[str], inicio, fin,
                              marca: str, con_precio: bool, por_cadena: bool, plazo: int,
-                             modo: str = "ponderado") -> _Armado:
+                             modo: str = "ponderado", canales: tuple[str, ...] = ()) -> _Armado:
     """Las consultas, el cruce y los Excel; lo mismo en linea que aparte."""
     fallas: dict[str, str] = {}
     comenzo = time.monotonic()
@@ -2304,6 +2304,7 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         buscar=catalogo_de_modelos.buscar if catalogo_de_modelos else None,
         modelos=catalogo_de_modelos.modelos() if catalogo_de_modelos else None,
         buscar_en_cadena=catalogo_de_modelos.buscar_como_la_venta if catalogo_de_modelos else None,
+        canales=canales,
         en_paralelo=en_paralelo,
         al_terminar=al_terminar if por_cadena else None,
     )
@@ -2335,16 +2336,19 @@ def reporte_detallado(
     un_archivo_por_cadena: bool = False,
     marca: str = "",
     tipo_de_precio: str = "",
+    canales: str = "",
 ) -> str:
     """El reporte detallado de venta, ya hecho: por cadena, mes, tienda,
     modelo, operador o region, de una o varias cadenas, con precio si se pide,
     en un Excel o uno por cadena.
 
-    Usala SIEMPRE que pidan un reporte o un archivo de venta con detalle
-    (tienda, modelo, mes, operador, region) o con precio, o un archivo por
-    cadena. No lo armes con `consultar_sql`: el 19/10/2026 ese cruce a mano
-    se corto a los 507 s, y el de "un archivo por cadena" dejo fuera a cinco
-    cadenas. Llamala UNA vez, con todo lo que se pidio.
+    Usala SIEMPRE que pidan un reporte NUEVO o un archivo de venta con
+    detalle (tienda, modelo, mes, operador, region) o con precio, o un
+    archivo por cadena. No lo armes con `consultar_sql`: el 19/10/2026 ese
+    cruce a mano se corto a los 507 s, y el de "un archivo por cadena" dejo
+    fuera a cinco cadenas. Llamala UNA vez, con todo lo que se pidio.
+    NO es para el archivo de lo que acabas de contestar: eso es la misma
+    consulta otra vez con `consultar_sql` y `entregar_archivo=True`.
 
     `cadenas`: separadas por comas (Coppel, Telcel, AT&T, Movistar,
     Liverpool, Elektra, Sears) o "todas". Cada cadena trae todos sus canales
@@ -2355,6 +2359,9 @@ def reporte_detallado(
     `con_precio`: el precio promedio de venta del mes (de la tabla Prices).
     `un_archivo_por_cadena`: True si pide un archivo por cadena o separados.
     `marca`: solo una marca ("HONOR"); vacio, todas.
+    `canales`: solo esos canales de la cadena, tal como se escriben en
+    [Retail] ("Liverpool Offline", "TELCEL CAC"), separados por comas;
+    vacio, todos.
     `tipo_de_precio`, si el precio cambio dentro del mes: ponderado (por lo
     vendido cada dia), ultimo, primero, minimo, maximo, o desglosado (una
     fila por precio con lo vendido a cada uno). Si el usuario no lo dijo,
@@ -2370,6 +2377,7 @@ def reporte_detallado(
         inicio = detallado.mes_de(desde, hoy)
         fin = detallado.mes_de(hasta, hoy)
         modo = detallado.modo_de_precio(tipo_de_precio)
+        solo_canales = detallado.canales_pedidos(canales, pedidas)
     except ValueError as error:
         return str(error)
     con_precio = con_precio or bool(modo)
@@ -2389,7 +2397,9 @@ def reporte_detallado(
     # de filas, y un solo Excel asi pasaria de 80 MB.
     por_cadena = un_archivo_por_cadena or len(pedidas) == 1 or "tienda" in lista
     descripcion = (
-        f"{', '.join(pedidas)}, {detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
+        f"{', '.join(pedidas)}{' (' + ', '.join(solo_canales) + ')' if solo_canales else ''}, "
+        f"{detallado.periodo(inicio, fin)}, por {', '.join(lista)}"
+        + (f", solo {marca}" if marca else "")
         + (", con precio" if con_precio else "")
     )
 
@@ -2417,7 +2427,7 @@ def reporte_detallado(
         def trabajo(cancelacion: threading.Event) -> tuple[str, list[str]]:
             armado = _armar_reporte_detallado(
                 motor, cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena,
-                PLAZO_APARTE_S, modo,
+                PLAZO_APARTE_S, modo, solo_canales,
             )
             if not armado.reporte.partes and armado.fallas:
                 raise RuntimeError("; ".join(f"{k}: {v}" for k, v in armado.fallas.items()))
@@ -2448,7 +2458,7 @@ def reporte_detallado(
     bitacora.paso(f"armando el reporte detallado: {descripcion}", bitacora.NOTA)
     armado = _armar_reporte_detallado(
         ctx.engine, ctx.cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena, queda,
-        modo,
+        modo, solo_canales,
     )
     reporte, fallas = armado.reporte, armado.fallas
     if fallas:
@@ -3303,8 +3313,16 @@ class SQLAgent:
            Si preguntan si las tiendas con promotor venden mas (el efecto o
            el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
            cruce propio de HCReport con la venta.
-           Un reporte o archivo de venta con detalle (por tienda, modelo,
-           mes, operador o region), con precio, o un archivo por cadena:
+           Si pide el archivo de lo que ACABAS de contestar ("dame el
+           excel", "pasamelo en archivo"), vuelve a correr ESA misma
+           consulta con `consultar_sql` y `entregar_archivo=True`: el archivo
+           trae lo mismo que el mensaje -- el mismo canal, la misma marca, las
+           mismas columnas (el share incluido). Visto el 22/10/2026: se
+           contesto Liverpool Offline, solo Honor, con share (7,268), y el
+           Excel salio de Liverpool entero, todas las marcas y sin share
+           (82,389).
+           Un reporte NUEVO de venta con detalle (por tienda, modelo, mes,
+           operador o region), con precio, o un archivo por cadena:
            `reporte_detallado`, UNA vez y con todo lo pedido; nunca un
            SELECT propio ni otra consulta despues.
            Para explorar tienes tres herramientas que NO generan reporte:

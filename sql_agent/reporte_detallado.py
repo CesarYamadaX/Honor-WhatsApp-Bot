@@ -137,6 +137,20 @@ def cadenas_pedidas(texto: str) -> list[str]:
     return vistas
 
 
+def canales_pedidos(texto: str, cadenas: Iterable[str]) -> tuple[str, ...]:
+    """'Liverpool Offline' -> ('Liverpool Offline',). Cada canal tiene que ser
+    de una de las cadenas pedidas; vacio, todos."""
+    canales = tuple(re.sub(r"\s+", " ", c).strip() for c in (texto or "").split(",") if c.strip())
+    validas = set(cadenas)
+    for canal in canales:
+        if cadena_de(canal) not in validas:
+            raise ValueError(
+                f"El canal {canal!r} no es de {', '.join(sorted(validas))}: pide tambien su cadena "
+                "o escribelo como en [Retail] ('Liverpool Offline', 'TELCEL CAC')."
+            )
+    return canales
+
+
 def mes_de(texto: str, defecto: date) -> tuple[int, int]:
     """'2026-05' o '05/2026' -> (2026, 5)."""
     if not (texto or "").strip():
@@ -178,7 +192,7 @@ def columnas_pedidas(texto: str) -> list[str]:
 
 
 def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "",
-                  diario: bool | str = False) -> str:
+                  diario: bool | str = False, canales: Iterable[str] = ()) -> str:
     """La venta de UNA cadena, agrupada. Siempre por [Retail] (para saber la
     cadena de cada fila y cruzar el precio) y por año y mes.
 
@@ -207,6 +221,10 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
     filtros = [_filtro_de_periodo(desde, hasta)]
     if marca:
         filtros.append(f"[Brand] = '{marca.replace(chr(39), chr(39) * 2)}'")
+    de_la_cadena = [c for c in canales if cadena_de(c) == cadena]
+    if de_la_cadena:
+        lista = ", ".join("'" + c.replace("'", "''") + "'" for c in de_la_cadena)
+        filtros.append(f"RTRIM([Retail]) IN ({lista})")
     if diario == "completo":
         if "[Modelo]" not in agrupar:
             raise ValueError("el precio va por modelo: pide la columna modelo")
@@ -643,6 +661,7 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
             modo: str = "ponderado",
             modelos: Iterable[str] | None = None,
             buscar_en_cadena: Callable[[str, str], str | None] | None = None,
+            canales: Iterable[str] = (),
             en_paralelo: Callable[[list[Callable[[], object]]], list] | None = None,
             al_terminar: Callable[[Parte], None] | None = None) -> Reporte:
     """Corre las consultas y arma el reporte.
@@ -683,7 +702,7 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
         # Solo el ponderado y el desglose necesitan la venta por dia; el
         # primero, ultimo, minimo y maximo salen de los precios del mes.
         diario = {"ponderado": True, "desglosado": "completo"}.get(modo, False) if precio else False
-        ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario), cadena)
+        ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario, canales=canales), cadena)
         if ventas is None or ventas.empty:
             return None
         precios, scrap = (futuros[0].result(), futuros[1].result()) if futuros else (None, None)

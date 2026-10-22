@@ -2369,8 +2369,8 @@ class TestQuePrecioQuiere:
 
     def test_si_no_cambio_arma_con_el_ponderado(self, engine, monkeypatch):
         _, llamadas = self._pedir(engine, monkeypatch, {})
-        assert llamadas and llamadas[0][-1] == "ponderado"
+        assert llamadas and llamadas[0][-2] == "ponderado"
 
     def test_si_ya_dijo_cual_no_pregunta(self, engine, monkeypatch):
         _, llamadas = self._pedir(engine, monkeypatch, {"SEARS": 0.3}, tipo_de_precio="desglosado")
-        assert llamadas and llamadas[0][-1] == "desglosado"
+        assert llamadas and llamadas[0][-2] == "desglosado"

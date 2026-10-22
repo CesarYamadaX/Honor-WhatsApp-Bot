@@ -435,3 +435,20 @@ class TestRespaldoDeInternet:
         sql = rd.sql_de_scrap((2026, 5), (2026, 10))
         assert "[Scrap].dbo.[Complete_Scrap]" in sql and "MIN([price])" in sql and "[price] > 0" in sql
         assert "'Mercado Libre', 'Suburbia'" in sql
+
+
+class TestCanales:
+    """22/10/2026: se pidio Liverpool Offline y el reporte trajo tambien Online."""
+
+    def test_solo_los_canales_pedidos_y_de_su_cadena(self):
+        assert rd.canales_pedidos("Liverpool Offline", ["LIVERPOOL"]) == ("Liverpool Offline",)
+        assert rd.canales_pedidos("", ["LIVERPOOL"]) == ()
+        with pytest.raises(ValueError, match="no es de"):
+            rd.canales_pedidos("TELCEL CAC", ["LIVERPOOL"])
+
+    def test_el_filtro_va_en_la_consulta_de_su_cadena(self):
+        canales = ("Liverpool Offline", "TELCEL CAC")
+        liverpool = rd.sql_de_ventas("LIVERPOOL", ["region"], (2026, 9), (2026, 9), canales=canales)
+        assert "RTRIM([Retail]) IN ('Liverpool Offline')" in liverpool
+        assert "IN ('TELCEL CAC')" in rd.sql_de_ventas("TELCEL", ["region"], (2026, 9), (2026, 9), canales=canales)
+        assert "RTRIM([Retail]) IN" not in rd.sql_de_ventas("COPPEL", ["region"], (2026, 9), (2026, 9), canales=canales)
