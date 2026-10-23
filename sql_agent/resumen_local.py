@@ -50,6 +50,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import ventas_con_modelo
 from catalogo import _VISTAS_DE_LA_CONSOLIDADA, _VISTAS_PARTIDAS, _reemplazar_objeto
 
 logger = logging.getLogger("sql_agent.resumen_local")
@@ -104,6 +105,27 @@ _TIPOS_DE_FECHA = ("date", "datetime", "datetime2", "smalldatetime")
 _TEXTO = ("Retail", "Brand", "Material_Description", "Carrier")
 _NUMERO = ("Year", "Month", "WEEK")
 COLUMNAS = _TEXTO + _NUMERO + ("QTY",)
+
+# La venta con su modelo homologado y su region (la vista virtual del bot,
+# ver ventas_con_modelo.py), agrupada sin tienda ni descripcion. Pedido el
+# 22/10/2026: "sell out y share de Telcel por region" tardo 176 s porque la
+# vista con modelo y region siempre iba al servidor (Telcel es la mas lenta).
+# Aqui contesta en menos de un segundo lo que pida region, modelo o
+# clasificacion por cadena, marca, operador, ano, mes y semana.
+CON_MODELO = ventas_con_modelo.NOMBRE
+# Va en su propio archivo y se rehace cada 12 horas, no cada 3: medido el
+# 22/10/2026, armarlo cuesta ~23 minutos de servidor (Telcel 759 s, Coppel
+# 370 s) contra ~7 del resumen de siempre, y la venta casi siempre se carga
+# por semana. Unos 2 millones de filas.
+ARCHIVO_CON_MODELO = ARCHIVO.with_name("resumen_con_modelo.sqlite")
+HORAS_ENTRE_CON_MODELO = float(os.getenv("RESUMEN_CON_MODELO_CADA_HORAS", "12"))
+MAX_HORAS_DE_ATRASO_CON_MODELO = HORAS_ENTRE_CON_MODELO * 2
+_TEXTO_CON_MODELO = ("Retail", "Brand", "Carrier", "Modelo", "Clasificacion", "Region")
+COLUMNAS_CON_MODELO = _TEXTO_CON_MODELO + _NUMERO + ("QTY",)
+# Lo que esa tabla no tiene: la tienda, la descripcion y el dia.
+_COLUMNA_QUE_NO_ESTA_CON_MODELO = re.compile(
+    r"(?<![\w\[])\[?(Store|Date|Day|Key\s+prices|Material_Description)\]?(?![\w])", re.IGNORECASE
+)
 
 # Columnas de las vistas que el resumen NO tiene: si la consulta las nombra,
 # va al servidor.
@@ -283,7 +305,7 @@ def traducir(query: str) -> str | None:
     nombrados = _OBJETO_EN_FROM.findall(texto)
     if not nombrados:
         return None
-    usa_ventas = usa_copias = False
+    usa_ventas = usa_copias = usa_con_modelo = False
     for completo in nombrados:
         if completo.startswith("("):
             continue
@@ -295,19 +317,29 @@ def traducir(query: str) -> str | None:
         base = partes[0].strip("[]").casefold() if len(partes) > 1 else None
         if nombre in permitidos and base in (None, "raw_data_b2b"):
             usa_ventas = True
+        elif nombre == CON_MODELO.casefold() and base in (None, "raw_data_b2b"):
+            usa_con_modelo = True
         elif nombre in copias and base in (None, "gtm bi database"):
             usa_copias = True
         else:
             return None
     # Las ventas estan agrupadas y las copias no: mezclarlas daria otra
-    # cuenta. Y una consulta sin ninguna de las dos no es para aqui.
-    if usa_ventas == usa_copias:
+    # cuenta. Y una consulta sin ninguna de las dos no es para aqui. La vista
+    # con modelo va sola: esta agrupada distinto que las otras.
+    if usa_con_modelo:
+        if usa_ventas or usa_copias:
+            return None
+        texto = _sin_partes_de_la_fecha(texto)
+        if _COLUMNA_QUE_NO_ESTA_CON_MODELO.search(texto) or _NO_SE_TRADUCE.search(texto):
+            return None
+        usa_ventas = True
+    elif usa_ventas == usa_copias:
         return None
 
-    if usa_ventas:
+    if usa_ventas and not usa_con_modelo:
         texto = _sin_partes_de_la_fecha(texto)
-    if usa_ventas and (_COLUMNA_QUE_NO_ESTA.search(texto) or _NO_SE_TRADUCE.search(texto)):
-        return None
+        if _COLUMNA_QUE_NO_ESTA.search(texto) or _NO_SE_TRADUCE.search(texto):
+            return None
     if usa_copias:
         texto = _SIN_NOLOCK.sub("", texto)
         if _COLUMNA_QUE_NO_SE_COPIO.search(texto) or _NO_SE_TRADUCE_EN_COPIAS.search(texto):
@@ -368,17 +400,24 @@ def _abrir(archivo: Path, solo_lectura: bool = True) -> sqlite3.Connection:
     return conexion
 
 
-def consultar(query: str, archivo: Path | None = None) -> tuple[pd.DataFrame, str] | None:
+_NOMBRA_CON_MODELO = re.compile(rf"(?<![\w]){re.escape(CON_MODELO)}(?![\w])", re.IGNORECASE)
+
+
+def consultar(query: str, archivo: Path | None = None,
+              archivo_con_modelo: Path | None = None) -> tuple[pd.DataFrame, str] | None:
     """El resultado desde el resumen y el SQL que corrio, o None si no aplica.
 
     None tambien si el resumen no existe todavia o la consulta falla aqui:
     entonces va al servidor como siempre.
     """
-    archivo = Path(archivo or ARCHIVO)
+    if _NOMBRA_CON_MODELO.search(query or ""):
+        archivo, maximo = Path(archivo_con_modelo or ARCHIVO_CON_MODELO), MAX_HORAS_DE_ATRASO_CON_MODELO
+    else:
+        archivo, maximo = Path(archivo or ARCHIVO), MAX_HORAS_DE_ATRASO
     if not archivo.exists():
         return None
     horas = _horas_desde_la_ultima(archivo)
-    if horas is None or horas > MAX_HORAS_DE_ATRASO:
+    if horas is None or horas > maximo:
         return None
     local = traducir(query)
     if local is None:
@@ -565,6 +604,70 @@ def construir(engine, archivo: Path | None = None) -> dict:
     return meta
 
 
+def construir_con_modelo(engine, archivo: Path | None = None) -> dict:
+    """Arma el archivo de la venta con modelo y region; lo reemplaza al
+    terminar, como el resumen de siempre."""
+    archivo = Path(archivo or ARCHIVO_CON_MODELO)
+    archivo.parent.mkdir(parents=True, exist_ok=True)
+    temporal = archivo.with_suffix(".construyendo")
+    temporal.unlink(missing_ok=True)
+    comenzo = time.monotonic()
+    with closing(_abrir(temporal, solo_lectura=False)) as destino:
+        filas = _con_modelo(engine, destino)
+        meta = {
+            f"filas {CON_MODELO}": str(filas),
+            "construido": datetime.now().isoformat(timespec="seconds"),
+            "segundos": f"{time.monotonic() - comenzo:.0f}",
+        }
+        destino.execute("CREATE TABLE resumen_meta (clave TEXT PRIMARY KEY, valor TEXT)")
+        destino.executemany("INSERT INTO resumen_meta VALUES (?, ?)", list(meta.items()))
+        destino.commit()
+    _poner_en_su_lugar(temporal, archivo)
+    logger.info("Resumen local de %s listo en %ss", CON_MODELO, meta["segundos"])
+    return meta
+
+
+def _con_modelo(engine, destino: sqlite3.Connection) -> int:
+    """La vista con modelo y region, agrupada, una cadena a la vez (con el
+    mismo cruce con UNICOS$ y CustomerStores que usa el servidor)."""
+    columnas_sql = ", ".join(
+        [f"RTRIM([{c}])" for c in _TEXTO_CON_MODELO] + [f"[{c}]" for c in _NUMERO] + ["SUM([QTY])"]
+    )
+    grupo = ", ".join(f"[{c}]" for c in _TEXTO_CON_MODELO + _NUMERO)
+    destino.execute(
+        f"CREATE TABLE [{CON_MODELO}] ("
+        + ", ".join([f"[{c}] TEXT COLLATE NOCASE" for c in _TEXTO_CON_MODELO]
+                    + [f"[{c}] INTEGER" for c in _NUMERO] + ["[QTY] REAL"])
+        + ")"
+    )
+    total = 0
+    for cadena in dict.fromkeys(c for c, *_ in ventas_con_modelo.VISTAS.values()):
+        comenzo = time.monotonic()
+        crudo = engine.raw_connection()
+        try:
+            cursor = crudo.cursor()
+            cursor.execute(
+                f"SELECT {columnas_sql} FROM {ventas_con_modelo.derivada([cadena])} AS [v] GROUP BY {grupo}"
+            )
+            filas = 0
+            while True:
+                lote = cursor.fetchmany(50_000)
+                if not lote:
+                    break
+                destino.executemany(
+                    f"INSERT INTO [{CON_MODELO}] VALUES ({', '.join('?' * len(COLUMNAS_CON_MODELO))})",
+                    [tuple(f) for f in lote],
+                )
+                filas += len(lote)
+        finally:
+            crudo.close()
+        total += filas
+        logger.info("Resumen local: %s de %s, %d filas en %.0fs", CON_MODELO, cadena, filas,
+                    time.monotonic() - comenzo)
+    destino.execute(f"CREATE INDEX [ix_{CON_MODELO}] ON [{CON_MODELO}] ([Year], [Month])")
+    return total
+
+
 def _como_texto_de_fecha(valor):
     if valor is None or not hasattr(valor, "isoformat"):
         return valor
@@ -672,8 +775,10 @@ def mantener_al_dia(crear_engine, archivo: Path | None = None,
     construye el nuevo, las consultas van al servidor.
     """
     archivo = Path(archivo or ARCHIVO)
+    con_modelo = archivo.with_name(ARCHIVO_CON_MODELO.name)
     detener = detener or threading.Event()
     borrar(archivo)
+    borrar(con_modelo)
 
     def ciclo():
         while not detener.is_set():
@@ -683,6 +788,13 @@ def mantener_al_dia(crear_engine, archivo: Path | None = None,
                     construir(crear_engine(), archivo)
                 except Exception:  # noqa: BLE001 - se reintenta en el siguiente ciclo
                     logger.exception("No se pudo construir el resumen local")
+            # Despues del de siempre: el que mas se pregunta queda listo primero.
+            horas = _horas_desde_la_ultima(con_modelo) if con_modelo.exists() else None
+            if horas is None or horas >= HORAS_ENTRE_CON_MODELO:
+                try:
+                    construir_con_modelo(crear_engine(), con_modelo)
+                except Exception:  # noqa: BLE001
+                    logger.exception("No se pudo construir el resumen de %s", CON_MODELO)
             detener.wait(15 * 60)
 
     hilo = threading.Thread(target=ciclo, name="resumen-local", daemon=True)
