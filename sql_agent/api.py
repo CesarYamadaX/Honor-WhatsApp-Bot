@@ -294,20 +294,35 @@ def crear_app(
         # expira, asyncio cancela la espera pero el hilo sigue corriendo, y
         # soltar el lock antes dejaria entrar una segunda consulta del mismo
         # chat mientras la primera todavia golpea la base.
-        numero = normalizar_chat_id(chat_id)
-        cadenas_del_usuario = usuarios.cadenas_de(numero) if numero else None
-        # Antes de anotar este turno: si no tiene ninguno, es su primera vez.
-        primera_vez = diario.cuantos(chat_id) == 0
-        turno = diario.comenzar(chat_id, pregunta)
-        comenzo = time.monotonic()
-        # Un saludo o un "que puedes hacer?": la bienvenida con ejemplos, al
-        # instante y sin el modelo (ver bienvenida.py).
-        if bienvenida.ACTIVA and bienvenida.es_saludo(pregunta):
-            idioma_saludo = idiomas.detectar(pregunta) or idioma
-            texto = bienvenida.texto(idioma_saludo, cadenas_del_usuario)
-            diario.terminar(turno, respuesta=texto, idioma=idioma_saludo,
-                            segundos=time.monotonic() - comenzo)
-            return Respuesta(reply=texto, files=[], idioma=idioma_saludo, turno=turno.id)
+        #
+        # TODO lo de aqui va dentro del try: cualquier salida tiene que soltar
+        # el lock. Visto el 27/10/2026: la bienvenida salia ANTES del try, y
+        # despues de un "Hola" el chat quedaba ocupado hasta medianoche --
+        # cada pregunta siguiente "cancelaba" una consulta que no existia,
+        # esperaba 25 s y contestaba "sigo trabajando en tu pregunta anterior".
+        try:
+            numero = normalizar_chat_id(chat_id)
+            cadenas_del_usuario = usuarios.cadenas_de(numero) if numero else None
+            # Antes de anotar este turno: si no tiene ninguno, es su primera vez.
+            primera_vez = diario.cuantos(chat_id) == 0
+            turno = diario.comenzar(chat_id, pregunta)
+            comenzo = time.monotonic()
+            # Un saludo o un "que puedes hacer?": la bienvenida con ejemplos, al
+            # instante y sin el modelo (ver bienvenida.py).
+            if bienvenida.ACTIVA and bienvenida.es_saludo(pregunta):
+                idioma_saludo = idiomas.detectar(pregunta) or idioma
+                texto = bienvenida.texto(idioma_saludo, cadenas_del_usuario)
+                diario.terminar(turno, respuesta=texto, idioma=idioma_saludo,
+                                segundos=time.monotonic() - comenzo)
+                return Respuesta(reply=texto, files=[], idioma=idioma_saludo, turno=turno.id)
+            return _responder(sesion, pregunta, chat_id, idioma, cadenas_del_usuario,
+                              primera_vez, turno, comenzo)
+        finally:
+            sesion.lock.release()
+
+    def _responder(sesion, pregunta: str, chat_id: str, idioma: str, cadenas_del_usuario,
+                   primera_vez: bool, turno, comenzo: float) -> Respuesta | None:
+        """La respuesta del agente a una pregunta. El lock lo suelta _ejecutar."""
         try:
             # Las cadenas se leen en cada pregunta, no al abrir la sesion:
             # un cambio en el panel vale desde el siguiente mensaje.
@@ -394,8 +409,6 @@ def crear_app(
                 reply=idiomas.texto("error_interno", idioma), files=[], idioma=idioma,
                 turno=turno.id,
             )
-        finally:
-            sesion.lock.release()
 
     @app.post("/ask", response_model=Respuesta)
     async def ask(peticion: Peticion) -> Respuesta:

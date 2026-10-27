@@ -65,3 +65,18 @@ def test_los_ejemplos_son_de_las_cadenas_que_puede_ver():
 def test_en_su_idioma():
     assert "for example" in bienvenida.texto("en")
     assert "例如" in bienvenida.texto("zh")
+
+
+def test_despues_de_un_hola_la_pregunta_se_contesta(cliente):
+    # Visto el 27/10/2026: la bienvenida salia sin soltar el lock del chat, y
+    # la pregunta siguiente esperaba 25 s a "cancelar" una consulta que no
+    # existia y contestaba 429 ("sigo trabajando en tu pregunta anterior").
+    c, llamadas = cliente
+    _preguntar(c, "Hola")
+    respuesta = c.post("/ask", json={"chat_id": AUTORIZADO, "text": "ventas de Honor en septiembre"})
+    assert respuesta.status_code == 200
+    assert "500 unidades" in respuesta.json()["reply"] and llamadas == ["ventas de Honor en septiembre"]
+    # Y dos saludos seguidos tampoco lo dejan ocupado.
+    _preguntar(c, "Hola")
+    _preguntar(c, "buenos días")
+    assert c.post("/ask", json={"chat_id": AUTORIZADO, "text": "y en agosto?"}).status_code == 200
