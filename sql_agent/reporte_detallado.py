@@ -60,11 +60,16 @@ COLUMNAS = {
     # semana. No va por defecto: por tienda, Coppel pasaria de un millon de
     # filas a varios.
     "semana": ("[WEEK]", "Semana"),
+    # El dia de la venta. Visto el 5/11/2026: "por tienda, modelo y dia" se
+    # entrego por mes porque no estaba. Con precio, cada fila lleva el de su
+    # dia (PRECIO_DEL_DIA): no hay que escoger cual.
+    "dia": ("CAST([Date] AS date)", "Día"),
 }
 # Lo que no esta en UNICOS$: su texto de la cadena, solo en esas filas.
 DESCRIPCION = "Descripcion de la cadena"
 _EXPRESION_DESCRIPCION = "CASE WHEN [Modelo] IS NULL THEN RTRIM([Material_Description]) END"
 PRECIO = "Precio promedio"
+PRECIO_DEL_DIA = "Precio del dia"
 
 # Que precio va cuando cambio dentro del mes. Pedido el 19/10/2026: que se le
 # pregunte al usuario cual prefiere, y que se puedan ver todos los precios con
@@ -178,7 +183,8 @@ def columnas_pedidas(texto: str) -> list[str]:
         parte = parte.strip()
         parte = {"cadena": "canal", "retail": "canal", "store": "tienda", "carrier": "operador",
                  "brand": "marca", "model": "modelo", "región": "region", "clasificación": "clasificacion",
-                 "week": "semana", "semanas": "semana", "mes": "", "año": "", "anio": "", "fecha": "", "precio": "", "ventas": "",
+                 "week": "semana", "semanas": "semana", "día": "dia", "días": "dia", "dias": "dia",
+                 "diario": "dia", "day": "dia", "mes": "", "año": "", "anio": "", "fecha": "", "precio": "", "ventas": "",
                  "unidades": ""}.get(parte, parte)
         if not parte:
             continue
@@ -191,8 +197,17 @@ def columnas_pedidas(texto: str) -> list[str]:
     return nombres or ["canal", "modelo"]
 
 
+def va_del_resumen(columnas: list[str], precio: bool, modo: str) -> bool:
+    """Si la venta puede salir del resumen local (resumen_local.leer_con_modelo):
+    no tiene la tienda ni el dia, ni la venta por dia que necesitan el
+    ponderado y el desglose. Medido el 5/11/2026: todas las marcas por modelo
+    y mes de las siete cadenas tardo 6.5 min en el servidor."""
+    return not {"tienda", "dia"} & set(columnas) and not (precio and modo in ("ponderado", "desglosado"))
+
+
 def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "",
-                  diario: bool | str = False, canales: Iterable[str] = ()) -> str:
+                  diario: bool | str = False, canales: Iterable[str] = (),
+                  del_resumen: bool = False) -> str:
     """La venta de UNA cadena, agrupada. Siempre por [Retail] (para saber la
     cadena de cada fila y cruzar el precio) y por año y mes.
 
@@ -203,7 +218,11 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
 
     Con `diario="completo"` (el desglose de precios), cada fila del reporte
     por dia: para saber cuanto vendio esa tienda a cada precio.
+
+    Con `del_resumen`, la consulta es para la tabla del resumen local (ver
+    va_del_resumen), que ya trae el texto de la cadena y la cadena de cada fila.
     """
+    descripcion = "[Descripcion]" if del_resumen else _EXPRESION_DESCRIPCION
     expresiones = ["[Retail] AS [Canal]", "[Year] AS [Año]", "[Month] AS [Mes]"]
     agrupar = ["[Retail]", "[Year]", "[Month]"]
     por_dia = ["[Retail]", "[Year]", "[Month]", "[Modelo]", "[Date]"]
@@ -216,9 +235,11 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
         if nombre == "semana":
             por_dia.append(expresion)
         if nombre == "modelo":
-            expresiones.append(f"{_EXPRESION_DESCRIPCION} AS [{DESCRIPCION}]")
-            agrupar.append(_EXPRESION_DESCRIPCION)
+            expresiones.append(f"{descripcion} AS [{DESCRIPCION}]")
+            agrupar.append(descripcion)
     filtros = [_filtro_de_periodo(desde, hasta)]
+    if del_resumen:
+        filtros.append(f"[Cadena] = '{cadena.replace(chr(39), chr(39) * 2)}'")
     if marca:
         filtros.append(f"[Brand] = '{marca.replace(chr(39), chr(39) * 2)}'")
     de_la_cadena = [c for c in canales if cadena_de(c) == cadena]
@@ -239,7 +260,7 @@ def sql_de_ventas(cadena: str, columnas: list[str], desde, hasta, marca: str = "
         grupos = ", ".join(agrupar)
     return (
         f"SELECT {', '.join(expresiones)}, SUM([QTY]) AS [Unidades] "
-        f"FROM {ventas_con_modelo.derivada([cadena])} AS [v] "
+        f"FROM {f'[{ventas_con_modelo.NOMBRE}]' if del_resumen else ventas_con_modelo.derivada([cadena])} AS [v] "
         f"WHERE {' AND '.join(filtros)} "
         f"GROUP BY {grupos}"
     )
@@ -586,7 +607,8 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
         dias = t[t["_detalle"] == 0]
         t = t[t["_detalle"] == 1].drop(columns=["_detalle", "Dia"])
     t["Unidades"] = pd.to_numeric(t["Unidades"], errors="coerce").fillna(0.0)
-    nombre_del_precio = MODOS_DE_PRECIO.get(modo, PRECIO)
+    por_dia = "Día" in t.columns
+    nombre_del_precio = PRECIO_DEL_DIA if por_dia else MODOS_DE_PRECIO.get(modo, PRECIO)
     if "Modelo" in t.columns:
         t["Modelo"] = t["Modelo"].fillna("")
         t[DESCRIPCION] = t[DESCRIPCION].fillna("")
@@ -598,7 +620,12 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
     cubierto = None
     internet = 0.0
     if precios is not None and "Modelo" in t.columns:
-        if modo == "desglosado" and "Dia" in t.columns:
+        if por_dia:
+            con_fecha = t.assign(Dia=_como_dia(t["Día"]), retail=t["Canal"].astype(str).str.strip().str.casefold(),
+                                 cadena=t["Canal"].map(cadena_de))
+            precio, fuente = _precio_y_fuente(con_fecha, precios, scrap)
+            t[nombre_del_precio], t[FUENTE] = precio.round(2), fuente
+        elif modo == "desglosado" and "Dia" in t.columns:
             # Cada dia con su precio, y se suma lo vendido a cada precio: una
             # fila por precio, con sus unidades.
             t["Dia"] = _como_dia(t["Dia"])
@@ -647,7 +674,7 @@ def armar_parte(cadena: str, ventas: pd.DataFrame, columnas: list[str],
     orden += ["Unidades"] + ([nombre_del_precio] if nombre_del_precio in t.columns else [])
     orden += [FUENTE] if FUENTE in t.columns else []
     t = t[[c for c in orden if c in t.columns]]
-    orden_de_filas = ["Año", "Mes"] + (["Semana"] if "Semana" in t.columns else []) + ["Canal"]
+    orden_de_filas = ["Año", "Mes"] + [c for c in ("Semana", "Día") if c in t.columns] + ["Canal"]
     if modo == "desglosado" and nombre_del_precio in t.columns:
         # Los precios de una misma fila, juntos y de menor a mayor.
         orden_de_filas = [c for c in t.columns if c not in ("Unidades", FUENTE)]
@@ -663,7 +690,8 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
             buscar_en_cadena: Callable[[str, str], str | None] | None = None,
             canales: Iterable[str] = (),
             en_paralelo: Callable[[list[Callable[[], object]]], list] | None = None,
-            al_terminar: Callable[[Parte], None] | None = None) -> Reporte:
+            al_terminar: Callable[[Parte], None] | None = None,
+            leer_del_resumen: Callable[[str], pd.DataFrame | None] | None = None) -> Reporte:
     """Corre las consultas y arma el reporte.
 
     `ejecutar(sql, de_que)` devuelve la tabla, o None si esa consulta fallo
@@ -674,6 +702,9 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
     `al_terminar(parte)` se llama con cada cadena en cuanto esta lista, desde
     su hilo: asi su Excel se escribe mientras la mas lenta (Telcel, ~4 min)
     sigue en el servidor.
+
+    `leer_del_resumen(sql)` lee la venta del resumen local cuando se puede
+    (ver va_del_resumen); si devuelve None, va al servidor.
     """
     cadenas = list(cadenas)
     if precio and "modelo" not in columnas:
@@ -702,7 +733,15 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
         # Solo el ponderado y el desglose necesitan la venta por dia; el
         # primero, ultimo, minimo y maximo salen de los precios del mes.
         diario = {"ponderado": True, "desglosado": "completo"}.get(modo, False) if precio else False
-        ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario, canales=canales), cadena)
+        if "dia" in columnas:
+            diario = False
+        ventas = None
+        if leer_del_resumen is not None and va_del_resumen(columnas, precio, modo):
+            ventas = leer_del_resumen(sql_de_ventas(cadena, columnas, desde, hasta, marca, canales=canales,
+                                                    del_resumen=True))
+        if ventas is None:
+            ventas = ejecutar(sql_de_ventas(cadena, columnas, desde, hasta, marca, diario=diario, canales=canales),
+                              cadena)
         if ventas is None or ventas.empty:
             return None
         precios, scrap = (futuros[0].result(), futuros[1].result()) if futuros else (None, None)
@@ -741,10 +780,16 @@ _COMO_ES_EL_PRECIO = {
     "primero": "El precio es el primero del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
     "minimo": "El precio es el mas bajo del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
     "maximo": "El precio es el mas alto del mes (tabla Prices). Vacio si ese mes no hay precio. Dilo asi.",
+    "dia": ("El precio de cada fila es el de ese dia (tabla Prices). Vacio si ese dia no hay "
+            "precio. Dilo asi."),
     "desglosado": ("Cada precio va en su propia fila, con las unidades que se vendieron a ese precio "
                    "(el de la fecha de cada venta, tabla Prices): un modelo que cambio de precio en el "
                    "mes sale en varias filas. Dilo asi."),
 }
+
+
+def _nombre_del_precio(r: "Reporte") -> str:
+    return PRECIO_DEL_DIA if "dia" in r.columnas else MODOS_DE_PRECIO.get(r.modo, PRECIO)
 
 
 def pregunta_de_precio(varia: dict[str, float]) -> str:
@@ -771,7 +816,7 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
     lineas = [
         f"Reporte detallado de venta, {periodo(r.desde, r.hasta)}, con: "
         f"año, mes, {', '.join(r.columnas)}, unidades"
-        + (f", {MODOS_DE_PRECIO.get(r.modo, PRECIO).lower()}" if r.precio else "") + ".",
+        + (f", {_nombre_del_precio(r).lower()}" if r.precio else "") + ".",
         f"Total: {r.unidades:,.0f} unidades.",
         "Por cadena:",
     ]
@@ -795,7 +840,8 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
         "una o dos frases con el total y lo que se pidio."
     )
     if r.precio:
-        lineas.append(_COMO_ES_EL_PRECIO.get(r.modo, _COMO_ES_EL_PRECIO["ponderado"]))
+        lineas.append(_COMO_ES_EL_PRECIO.get("dia" if "dia" in r.columnas else r.modo,
+                                             _COMO_ES_EL_PRECIO["ponderado"]))
     if any(p.de_internet for p in r.partes):
         lineas.append(
             "Donde Prices no tenia precio va el de la pagina de la tienda (scrap de internet, el "
@@ -887,6 +933,7 @@ _TEXTOS = {
         "precio_minimo": ", con el precio más bajo de cada mes",
         "precio_maximo": ", con el precio más alto de cada mes",
         "precio_desglosado": ", con cada precio en su fila y lo que se vendió a ese precio",
+        "precio_dia": ", con el precio de cada día",
         "archivos": "Va en {n} archivos, uno por cadena.",
         "archivo": "Va en un archivo.",
         "total": "Total: {total} unidades.",
@@ -902,7 +949,7 @@ _TEXTOS = {
         "y": " y ",
         "columnas": {"canal": "canal", "tienda": "tienda", "region": "región", "operador": "operador",
                      "marca": "marca", "modelo": "modelo", "clasificacion": "clasificación",
-                     "semana": "semana"},
+                     "semana": "semana", "dia": "día"},
     },
     "en": {
         "listo": "Done, here is the report you asked for: sales for {periodo}, by {columnas}{precio}.",
@@ -912,6 +959,7 @@ _TEXTOS = {
         "precio_minimo": ", with the lowest price of each month",
         "precio_maximo": ", with the highest price of each month",
         "precio_desglosado": ", with each price on its own row and the units sold at it",
+        "precio_dia": ", with each day's price",
         "archivos": "It comes in {n} files, one per retailer.",
         "archivo": "It comes in one file.",
         "total": "Total: {total} units.",
@@ -925,7 +973,8 @@ _TEXTOS = {
         "unidades": "units",
         "y": " and ",
         "columnas": {"canal": "channel", "tienda": "store", "region": "region", "operador": "carrier",
-                     "marca": "brand", "modelo": "model", "clasificacion": "category", "semana": "week"},
+                     "marca": "brand", "modelo": "model", "clasificacion": "category", "semana": "week",
+                     "dia": "day"},
     },
     "zh": {
         "listo": "好了，这是你要的报表：{periodo}的销量，按{columnas}{precio}。",
@@ -935,6 +984,7 @@ _TEXTOS = {
         "precio_minimo": "，价格为每月最低价",
         "precio_maximo": "，价格为每月最高价",
         "precio_desglosado": "，每个价格单独一行，附该价格的销量",
+        "precio_dia": "，价格为每天的价格",
         "archivos": "共 {n} 个文件，每个渠道一个。",
         "archivo": "共一个文件。",
         "total": "合计：{total} 台。",
@@ -947,7 +997,7 @@ _TEXTOS = {
         "unidades": "台",
         "y": "和",
         "columnas": {"canal": "渠道", "tienda": "门店", "region": "区域", "operador": "运营商",
-                     "marca": "品牌", "modelo": "型号", "clasificacion": "类别", "semana": "周"},
+                     "marca": "品牌", "modelo": "型号", "clasificacion": "类别", "semana": "周", "dia": "日"},
     },
 }
 
@@ -971,7 +1021,7 @@ def para_el_usuario(r: Reporte, archivos: int, sin_venta: list[str], fallas: lis
     lineas = [
         t["listo"].format(periodo=periodo(r.desde, r.hasta), columnas=_lista(
                               [t["columnas"].get(c, c) for c in r.columnas], t["y"]),
-                          precio=t["precio_" + r.modo] if r.precio else ""),
+                          precio=t["precio_" + ("dia" if "dia" in r.columnas else r.modo)] if r.precio else ""),
         t["archivos"].format(n=archivos) if archivos > 1 else t["archivo"],
         "",
         t["total"].format(total=f"{r.unidades:,.0f}"),

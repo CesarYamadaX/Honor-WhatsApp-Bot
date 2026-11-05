@@ -2032,6 +2032,39 @@ _PIDE_DESGLOSE = re.compile(
 )
 
 
+def sin_el_crudo_repetido(contexto: dict, consulta: pd.DataFrame) -> dict:
+    """Sin la hoja Raw_Data cuando la consulta que va en el archivo ya es
+    igual de detallada (la mitad de sus filas o mas): el crudo repetiria lo
+    mismo, y con los nombres de la cadena en vez de los de UNICOS$. Visto el
+    5/11/2026: "raw data de Coppel por tienda y dia" llevo 456,133 filas en
+    Consulta y 456,550 en Raw_Data, 42 MB, con dos nombres para cada modelo."""
+    crudo = contexto.get("Raw_Data")
+    if crudo is None or len(consulta) * 2 < len(crudo):
+        return contexto
+    return {hoja: tabla for hoja, tabla in contexto.items() if hoja != "Raw_Data"}
+
+
+def instruccion_de_fecha(hoy) -> str:
+    """La fecha de hoy, con cada pregunta: el prompt no la tenia. Visto el
+    5/11/2026: a "septiembre a octubre" el bot pregunto de que año."""
+    mes = detallado._MESES[hoy.month - 1]
+    return (
+        f"Hoy es {hoy.day} de {mes} de {hoy.year}. Un mes sin año es el mas reciente que ya "
+        f"empezo: \"septiembre\" es septiembre de {hoy.year if hoy.month >= 9 else hoy.year - 1}. "
+        "No preguntes el año."
+    )
+
+
+# Visto el 5/11/2026, dos veces: "todas las marcas por modelo y mes" salio
+# sin la columna de la marca. No depende de que el modelo la ponga.
+_PIDE_MARCAS = re.compile(r"todas las marcas|por marcas?\b|\ball brands\b|\bby brand\b|所有品牌|按品牌",
+                          re.IGNORECASE)
+
+
+def pidio_marcas(pregunta: str) -> bool:
+    return bool(_PIDE_MARCAS.search(pregunta or ""))
+
+
 def pidio_desglose(pregunta: str) -> bool:
     return bool(_PIDE_DESGLOSE.search(pregunta or ""))
 
@@ -2186,6 +2219,8 @@ RESERVA_PARA_LOS_EXCEL = 150
 # arma aparte y se entrega al acabar (pedido el 19/10/2026: sin limite de
 # tiempo para los archivos grandes, avisando cuanto tardara).
 EN_LINEA_MAX_S = 60
+# Un reporte que sale del resumen local: la lectura y los Excel.
+SEGUNDOS_DEL_RESUMEN = 20
 # Aparte no hay limite de la peticion; esto es solo para que una consulta
 # trabada no se quede para siempre.
 PLAZO_APARTE_S = 2 * 3600
@@ -2245,7 +2280,8 @@ class _Armado:
 
 def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: list[str], inicio, fin,
                              marca: str, con_precio: bool, por_cadena: bool, plazo: int,
-                             modo: str = "ponderado", canales: tuple[str, ...] = ()) -> _Armado:
+                             modo: str = "ponderado", canales: tuple[str, ...] = (),
+                             del_resumen: bool = False) -> _Armado:
     """Las consultas, el cruce y los Excel; lo mismo en linea que aparte."""
     fallas: dict[str, str] = {}
     comenzo = time.monotonic()
@@ -2307,6 +2343,7 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         canales=canales,
         en_paralelo=en_paralelo,
         al_terminar=al_terminar if por_cadena else None,
+        leer_del_resumen=resumen_local.leer_con_modelo if del_resumen else None,
     )
     if por_cadena:
         grupos = [
@@ -2320,8 +2357,9 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
         grupos = [(None, reporte.partes, escribir(nombre, tabla))]
     else:
         grupos = []
-    _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, modo if con_precio else False,
-                    detallado.meses_entre(inicio, fin), "tienda" in lista)
+    if not del_resumen:  # lo que tarda el resumen no dice nada del servidor
+        _anotar_tiempos({c: s for c, s in tiempos.items() if c in pedidas}, modo if con_precio else False,
+                        detallado.meses_entre(inicio, fin), "tienda" in lista)
     sin_venta = [c for c in pedidas if c not in fallas and c not in {p.cadena for p in reporte.partes}]
     return _Armado(reporte, grupos, fallas, sin_venta)
 
@@ -2349,13 +2387,22 @@ def reporte_detallado(
     fuera a cinco cadenas. Llamala UNA vez, con todo lo que se pidio.
     NO es para el archivo de lo que acabas de contestar: eso es la misma
     consulta otra vez con `consultar_sql` y `entregar_archivo=True`.
+    NO es para un top, un ranking, un share o una comparacion: solo lista la
+    venta, fila por fila, sin ordenar ni calcular. Eso va con `consultar_sql`
+    (con `entregar_archivo=True` si lo piden en Excel). Visto el 5/11/2026:
+    "top 20 de modelos por cadena y mes con su share" salio de aqui, 57,824
+    filas sin top ni share, en 12 minutos.
 
     `cadenas`: separadas por comas (Coppel, Telcel, AT&T, Movistar,
     Liverpool, Elektra, Sears) o "todas". Cada cadena trae todos sus canales
     ("Telcel CAC" es Telcel; el canal sale en la columna Canal).
     `desde`, `hasta`: meses AAAA-MM ("2026-05"); "a la fecha" es `hasta`
     vacio (el mes en curso). `columnas`: de canal, tienda, region, operador,
-    marca, modelo, clasificacion; año, mes y unidades van siempre.
+    marca, modelo, clasificacion, semana, dia; año, mes y unidades van
+    siempre. Pon TODAS las que pidio: si pidio por dia, va `dia`. "Raw
+    data", "el detalle" o "la base" llevan ademas marca, modelo y operador;
+    "todas las marcas" lleva marca. Visto el 5/11/2026: "raw data de Coppel
+    por tienda y dia, todas las marcas" salio solo con tienda y dia.
     `con_precio`: el precio promedio de venta del mes (de la tabla Prices).
     `un_archivo_por_cadena`: True si pide un archivo por cadena o separados.
     `marca`: solo una marca ("HONOR"); vacio, todas.
@@ -2374,6 +2421,8 @@ def reporte_detallado(
     try:
         pedidas = detallado.cadenas_pedidas(cadenas)
         lista = detallado.columnas_pedidas(columnas)
+        if "marca" not in lista and pidio_marcas(ctx.pregunta):
+            lista.append("marca")
         inicio = detallado.mes_de(desde, hoy)
         fin = detallado.mes_de(hasta, hoy)
         modo = detallado.modo_de_precio(tipo_de_precio)
@@ -2383,6 +2432,10 @@ def reporte_detallado(
     con_precio = con_precio or bool(modo)
     if inicio > fin:
         inicio, fin = fin, inicio
+    # "Todo 2026" llega hasta diciembre: lo que no ha pasado no se cuenta ni se
+    # dice ("enero a diciembre", visto el 5/11/2026).
+    fin = min(fin, (hoy.year, hoy.month))
+    inicio = min(inicio, fin)
     if ctx.cadenas:
         fuera = [c for c in pedidas if c not in ctx.cadenas]
         pedidas = [c for c in pedidas if c in ctx.cadenas]
@@ -2405,7 +2458,8 @@ def reporte_detallado(
 
     # Precio sin decir cual: si cambio dentro del mes, primero se pregunta
     # (pedido el 19/10/2026). Mirar los precios cuesta ~7 s.
-    if con_precio and not modo:
+    # Por dia no: cada fila lleva el precio de ese dia.
+    if con_precio and not modo and "dia" not in lista:
         varia = _cuanto_varia_el_precio(ctx, pedidas, inicio, fin)
         if varia:
             bitacora.paso("el precio cambio dentro del mes: se pregunta cual quiere", bitacora.NOTA)
@@ -2418,6 +2472,11 @@ def reporte_detallado(
     modo = modo or "ponderado"
     estimado = detallado.estimar(pedidas, modo if con_precio else False, _tiempos_de_reportes(),
                                  CONSULTAS_A_LA_VEZ, detallado.meses_entre(inicio, fin), "tienda" in lista)
+    # Sin tienda ni dia sale del resumen local, en segundos (sin precio: los
+    # precios y el scrap si van al servidor).
+    del_resumen = detallado.va_del_resumen(lista, con_precio, modo) and resumen_local.con_modelo_al_dia()
+    if del_resumen and not con_precio:
+        estimado = SEGUNDOS_DEL_RESUMEN
 
     # Grande: se arma aparte, sin el limite de la peticion, y se entrega solo.
     if ctx.programar is not None and estimado > EN_LINEA_MAX_S:
@@ -2427,7 +2486,7 @@ def reporte_detallado(
         def trabajo(cancelacion: threading.Event) -> tuple[str, list[str]]:
             armado = _armar_reporte_detallado(
                 motor, cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena,
-                PLAZO_APARTE_S, modo, solo_canales,
+                PLAZO_APARTE_S, modo, solo_canales, del_resumen,
             )
             if not armado.reporte.partes and armado.fallas:
                 raise RuntimeError("; ".join(f"{k}: {v}" for k, v in armado.fallas.items()))
@@ -2458,7 +2517,7 @@ def reporte_detallado(
     bitacora.paso(f"armando el reporte detallado: {descripcion}", bitacora.NOTA)
     armado = _armar_reporte_detallado(
         ctx.engine, ctx.cancelacion, pedidas, lista, inicio, fin, marca, con_precio, por_cadena, queda,
-        modo, solo_canales,
+        modo, solo_canales, del_resumen,
     )
     reporte, fallas = armado.reporte, armado.fallas
     if fallas:
@@ -2889,6 +2948,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
                     contexto = {"Consulta": df, **contexto}
                 else:
                     contexto["Consulta"] = df
+                contexto = sin_el_crudo_repetido(contexto, df)
             # Si el resultado lleva pivot (ver config_generica), la hoja Datos
             # va siempre: es de donde sale.
             con_datos = not reporte_de_cadena and (
@@ -3580,7 +3640,7 @@ class SQLAgent:
         with contexto_peticion(
             self.engine, cancelacion, pregunta, self.idioma, cadenas, programar
         ) as ctx:
-            instruccion = idiomas.INSTRUCCION[self.idioma]
+            instruccion = f"{idiomas.INSTRUCCION[self.idioma]}\n\n{instruccion_de_fecha(datetime.now().date())}"
             if notas:
                 # Los comentarios del panel sobre respuestas calificadas
                 # (Calificaciones.notas_para_el_bot). Antes que lo de acceso:

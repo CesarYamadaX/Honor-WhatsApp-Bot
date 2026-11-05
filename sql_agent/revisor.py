@@ -48,6 +48,11 @@ SEGUNDOS_DE_PLAZO = 45
 # falta: el mensaje se escribio con esto).
 MAX_POR_RESULTADO = 6000
 MAX_EN_TOTAL = 24000
+# De un resultado mas largo va el principio y este final: despues de las
+# filas van el total y las notas. Visto el 5/11/2026: de 456,133 filas de
+# Coppel el revisor solo vio el principio y quito el total (545,787), que
+# estaba bien.
+FINAL_DE_UN_RESULTADO_LARGO = 2000
 
 # Hojas que SON lo que se pidio: el resultado y el detalle de su cadena.
 _HOJAS_DEL_RESULTADO = {"Datos", "Raw_Data", "Consulta"}
@@ -199,7 +204,10 @@ def _objeto_de_la_respuesta(contenido: str) -> dict:
 def _datos_para_el_revisor(vistos: list[str]) -> str:
     partes, largo = [], 0
     for visto in vistos:
-        trozo = visto[:MAX_POR_RESULTADO]
+        trozo = visto
+        if len(visto) > MAX_POR_RESULTADO:
+            trozo = (visto[:MAX_POR_RESULTADO - FINAL_DE_UN_RESULTADO_LARGO] + "\n[...]\n"
+                     + visto[-FINAL_DE_UN_RESULTADO_LARGO:])
         if largo + len(trozo) > MAX_EN_TOTAL:
             break
         partes.append(trozo)

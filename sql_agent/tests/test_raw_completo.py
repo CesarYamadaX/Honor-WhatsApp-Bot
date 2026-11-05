@@ -204,6 +204,17 @@ class TestCuandoVaLaHojaConsulta:
         assert not agent.pidio_desglose("ventas de Elektra de enero")
         assert not agent.pidio_desglose("mandame el excel de Coppel")
 
+    def test_si_la_consulta_es_igual_de_detallada_el_crudo_no_va(self):
+        # Visto el 5/11/2026: raw data de Coppel por tienda y dia, dos veces.
+        import agent
+
+        crudo, datos = pd.DataFrame({"x": range(10)}), pd.DataFrame({"y": [1]})
+        hojas = {"Datos": datos, "Raw_Data": crudo}
+        assert list(agent.sin_el_crudo_repetido({**hojas, "Consulta": pd.DataFrame({"z": range(9)})},
+                                                pd.DataFrame({"z": range(9)}))) == ["Datos", "Consulta"]
+        # Una consulta resumida (por tienda) deja el crudo: es el detalle.
+        assert "Raw_Data" in agent.sin_el_crudo_repetido(hojas, pd.DataFrame({"z": range(3)}))
+
 
 class TestElPeriodoSaleDeLaConsulta:
     """'Ventas de Honor por tienda en Elektra en enero 2026' devuelve tienda y

@@ -452,3 +452,38 @@ class TestCanales:
         assert "RTRIM([Retail]) IN ('Liverpool Offline')" in liverpool
         assert "IN ('TELCEL CAC')" in rd.sql_de_ventas("TELCEL", ["region"], (2026, 9), (2026, 9), canales=canales)
         assert "RTRIM([Retail]) IN" not in rd.sql_de_ventas("COPPEL", ["region"], (2026, 9), (2026, 9), canales=canales)
+
+
+class TestPorDia:
+    """Visto el 5/11/2026: "por tienda, modelo y dia" se entrego por mes, sin
+    decirlo, porque el reporte no tenia el dia."""
+
+    def test_se_puede_pedir(self):
+        assert rd.columnas_pedidas("tienda, modelo y día") == ["tienda", "modelo", "dia"]
+        assert rd.columnas_pedidas("diario, modelo") == ["dia", "modelo"]
+
+    def test_la_consulta_agrupa_por_la_fecha(self):
+        sql = rd.sql_de_ventas("COPPEL", ["tienda", "modelo", "dia"], (2026, 9), (2026, 10))
+        assert "CAST([Date] AS date) AS [Día]" in sql and "GROUP BY" in sql
+
+    def test_con_precio_lee_la_vista_una_vez(self):
+        consultas = {}
+
+        def ejecutar(sql, de_que):
+            consultas[de_que] = sql
+            return None
+
+        rd.generar(ejecutar, ["SEARS"], ["tienda", "modelo", "dia"], (2026, 9), (2026, 9), precio=True)
+        assert "GROUPING SETS" not in consultas["SEARS"] and "AS [Dia]" not in consultas["SEARS"]
+
+    def test_cada_fila_con_el_precio_de_su_dia(self):
+        precios = _precios(*[("Coppel", "COP X6C", f"2026-09-{d:02d}", 5000.0 if d < 15 else 4000.0)
+                             for d in range(1, 31)])
+        ventas = _venta(("Coppel", 2026, 9, "T1", X6C, None, date(2026, 9, 3), 4),
+                        ("Coppel", 2026, 9, "T1", X6C, None, date(2026, 9, 20), 30),
+                        columnas=("Canal", "Año", "Mes", "Tienda", "Modelo", rd.DESCRIPCION, "Día", "Unidades"))
+        for modo in ("ponderado", "ultimo", "desglosado"):
+            tabla = rd.armar_parte("COPPEL", ventas, ["tienda", "modelo", "dia"], precios, modo).tabla
+            assert tabla["Unidades"].tolist() == [4.0, 30.0], modo
+            assert tabla[rd.PRECIO_DEL_DIA].tolist() == [5000.0, 4000.0], modo
+            assert list(tabla.columns)[:7] == ["Canal", "Año", "Mes", "Tienda", "Modelo", "Día", "Unidades"]

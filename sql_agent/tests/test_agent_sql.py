@@ -2341,6 +2341,21 @@ class TestReporteGrandeAparte:
         assert mensaje.startswith("Listo") and archivos == [] and idioma == ctx.idioma
         assert "No pude terminar" in si_falla(RuntimeError("x"))
 
+    def test_sin_tienda_y_con_el_resumen_al_dia_va_en_la_conversacion(self, engine, monkeypatch):
+        # Visto el 5/11/2026: todas las marcas por modelo y mes, 6.5 min de servidor.
+        monkeypatch.setattr(modulo_agente, "_tiempos_de_reportes", lambda: {})
+        monkeypatch.setattr(modulo_agente.resumen_local, "con_modelo_al_dia", lambda *a: True)
+        llamadas, programados = [], []
+
+        def armar(*args, **kwargs):
+            llamadas.append(args)
+            return modulo_agente._Armado(detallado.Reporte(), [], {}, [])
+
+        monkeypatch.setattr(modulo_agente, "_armar_reporte_detallado", armar)
+        with contexto_peticion(engine, pregunta="reporte", programar=lambda *a: programados.append(a)):
+            modulo_agente.reporte_detallado.invoke({"cadenas": "todas", "desde": "2026-01", "columnas": "marca, modelo"})
+        assert programados == [] and llamadas and llamadas[0][-1] is True
+
     def test_si_es_rapido_va_en_la_conversacion(self, engine, monkeypatch):
         programados = []
         _, texto = self._pedir(engine, monkeypatch, "sears", programados)
@@ -2369,8 +2384,35 @@ class TestQuePrecioQuiere:
 
     def test_si_no_cambio_arma_con_el_ponderado(self, engine, monkeypatch):
         _, llamadas = self._pedir(engine, monkeypatch, {})
-        assert llamadas and llamadas[0][-2] == "ponderado"
+        assert llamadas and llamadas[0][-3] == "ponderado"
 
     def test_si_ya_dijo_cual_no_pregunta(self, engine, monkeypatch):
         _, llamadas = self._pedir(engine, monkeypatch, {"SEARS": 0.3}, tipo_de_precio="desglosado")
-        assert llamadas and llamadas[0][-2] == "desglosado"
+        assert llamadas and llamadas[0][-3] == "desglosado"
+
+    def test_por_dia_no_pregunta(self, engine, monkeypatch):
+        # Por dia, el precio de cada fila es el de ese dia: no hay que escoger.
+        _, llamadas = self._pedir(engine, monkeypatch, {"SEARS": 0.3}, columnas="modelo, dia")
+        assert llamadas
+
+    def test_todo_el_ano_llega_hasta_el_mes_en_curso(self, engine, monkeypatch):
+        _, llamadas = self._pedir(engine, monkeypatch, {}, desde="2026-01", hasta="2099-12")
+        hoy = datetime.now().date()
+        assert llamadas[0][5] == (hoy.year, hoy.month)
+
+
+def test_cada_pregunta_lleva_la_fecha_de_hoy():
+    # Visto el 5/11/2026: a "septiembre a octubre" el bot pregunto de que año.
+    from datetime import date
+
+    texto = modulo_agente.instruccion_de_fecha(date(2026, 11, 5))
+    assert "Hoy es 5 de noviembre de 2026" in texto and "septiembre de 2026" in texto
+    assert "septiembre de 2025" in modulo_agente.instruccion_de_fecha(date(2026, 3, 1))
+
+
+def test_todas_las_marcas_lleva_la_columna_de_la_marca():
+    # Visto el 5/11/2026, dos veces: salio sin la columna de la marca.
+    assert modulo_agente.pidio_marcas("archivo por cadena con la venta de todas las marcas por modelo")
+    assert modulo_agente.pidio_marcas("sales by brand and model")
+    assert not modulo_agente.pidio_marcas("venta de Honor por modelo")
+    assert not modulo_agente.pidio_marcas("venta por marcador")

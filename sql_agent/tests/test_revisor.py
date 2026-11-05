@@ -115,6 +115,17 @@ class TestLaRespuesta:
         r = revisor.revisar_respuesta("p", self.DATOS, "corto")
         assert not r.ok and r.texto == ""
 
+    def test_de_un_resultado_largo_ve_tambien_el_final(self, modelo):
+        # Visto el 5/11/2026: 456,133 filas de Coppel; el total va despues de
+        # las filas y el revisor, que solo veia el principio, lo quito.
+        filas = "\n".join(f"{i}. Tienda: T{i} | Unidades: 1" for i in range(2000))
+        visto = f"Consulta: ...\n{filas}\n\nLa cifra principal de este resultado es 545,787 (total de [Unidades])."
+        enviados = modelo(json.dumps({"ok": True}))
+        revisor.revisar_respuesta("raw data de Coppel", [visto], "Se vendieron **545,787** equipos.")
+        usuario = enviados[0]["messages"][1]["content"]
+        assert "545,787 (total de [Unidades])" in usuario and "1. Tienda: T1 |" in usuario
+        assert len(usuario) < revisor.MAX_POR_RESULTADO + 1000
+
     def test_sin_datos_no_hay_nada_que_revisar(self, modelo):
         enviados = modelo(json.dumps({"ok": False}))
         assert revisor.revisar_respuesta("hola", [], "Hola, ¿en que te ayudo?").ok

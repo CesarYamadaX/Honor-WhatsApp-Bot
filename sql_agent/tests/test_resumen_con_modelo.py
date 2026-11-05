@@ -6,15 +6,15 @@ import pytest
 import resumen_local as rl
 from tests import test_resumen_local as base
 
-# (Retail, Brand, Carrier, Modelo, Clasificacion, Region, Year, Month, WEEK, QTY)
+# (Retail, Brand, Carrier, Modelo, Clasificacion, Region, Year, Month, WEEK, Descripcion, QTY)
 _CON_MODELO = {
     "vw_ETL_TELCEL_B2B": [
-        ("TELCEL CAC", "HONOR", "Telcel", "HONOR X6C 256GB 4G", "SMARTPHONE", "R7", 2026, 9, 37, 16.0),
-        ("TELCEL CAC", "SAMSUNG", "Telcel", "SAMSUNG A17 128GB 4G", "SMARTPHONE", "R7", 2026, 9, 37, 184.0),
-        ("TELCEL RETAIL", "HONOR", "Telcel", "HONOR X6C 256GB 4G", "SMARTPHONE", "R1", 2026, 9, 38, 4.0),
+        ("TELCEL CAC", "HONOR", "Telcel", "HONOR X6C 256GB 4G", "SMARTPHONE", "R7", 2026, 9, 37, None, 16.0),
+        ("TELCEL CAC", "SAMSUNG", "Telcel", "SAMSUNG A17 128GB 4G", "SMARTPHONE", "R7", 2026, 9, 37, None, 184.0),
+        ("TELCEL RETAIL", "HONOR", "Telcel", "HONOR X6C 256GB 4G", "SMARTPHONE", "R1", 2026, 9, 38, None, 4.0),
     ],
     "vw_ETL_Liverpool": [
-        ("Liverpool Offline", "HONOR", "Open Market", "HONOR 400 512GB 5G", "SMARTPHONE", "R5", 2026, 9, 38, 10.0),
+        ("Liverpool Offline", "HONOR", "Open Market", "HONOR 400 512GB 5G", "SMARTPHONE", "R5", 2026, 9, 38, None, 10.0),
     ],
 }
 
@@ -104,3 +104,31 @@ def test_al_arrancar_se_borra_tambien(tmp_path, monkeypatch):
     detener.set()  # que el hilo no construya nada
     rl.mantener_al_dia(lambda: None, base_, detener).join(2)
     assert not con_modelo.exists()
+
+
+class TestElReporteDetallado:
+    """Medido el 5/11/2026: todas las marcas por modelo y mes de las siete
+    cadenas, 6.5 min de servidor; el top por cadena y mes, 12 min."""
+
+    def test_sin_tienda_ni_dia_sale_de_aqui(self, archivo):
+        import reporte_detallado as rd
+
+        def servidor(sql, de_que):
+            raise AssertionError(f"fue al servidor: {de_que}")
+
+        r = rd.generar(servidor, ["TELCEL", "LIVERPOOL"], ["canal", "marca", "modelo"], (2026, 9), (2026, 9),
+                       leer_del_resumen=lambda sql: rl.leer_con_modelo(sql, archivo))
+        assert {p.cadena: p.unidades for p in r.partes} == {"TELCEL": 204.0, "LIVERPOOL": 10.0}
+        assert r.partes[0].tabla.columns.tolist() == ["Canal", "Año", "Mes", "Marca", "Modelo", "Unidades"]
+
+    def test_por_tienda_por_dia_o_con_el_ponderado_va_al_servidor(self, archivo):
+        import reporte_detallado as rd
+
+        for columnas, precio in ((["tienda", "modelo"], False), (["modelo", "dia"], False), (["modelo"], True)):
+            servidor = []
+            rd.generar(lambda sql, de_que: servidor.append(de_que), ["SEARS"], columnas, (2026, 9), (2026, 9),
+                       precio=precio, leer_del_resumen=lambda sql: rl.leer_con_modelo(sql, archivo))
+            assert "SEARS" in servidor, columnas
+
+    def test_si_no_esta_al_dia_va_al_servidor(self, tmp_path):
+        assert rl.leer_con_modelo("SELECT 1", tmp_path / "no_existe.sqlite") is None

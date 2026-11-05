@@ -121,7 +121,10 @@ ARCHIVO_CON_MODELO = ARCHIVO.with_name("resumen_con_modelo.sqlite")
 HORAS_ENTRE_CON_MODELO = float(os.getenv("RESUMEN_CON_MODELO_CADA_HORAS", "12"))
 MAX_HORAS_DE_ATRASO_CON_MODELO = HORAS_ENTRE_CON_MODELO * 2
 _TEXTO_CON_MODELO = ("Retail", "Brand", "Carrier", "Modelo", "Clasificacion", "Region")
-COLUMNAS_CON_MODELO = _TEXTO_CON_MODELO + _NUMERO + ("QTY",)
+# Para el reporte detallado (ver reporte_detallado.va_del_resumen): el texto
+# de la cadena de lo que no esta en UNICOS$, y la cadena de cada fila.
+_DESCRIPCION_CON_MODELO = "CASE WHEN [Modelo] IS NULL THEN RTRIM([Material_Description]) END"
+COLUMNAS_CON_MODELO = _TEXTO_CON_MODELO + _NUMERO + ("Descripcion", "QTY", "Cadena")
 # Lo que esa tabla no tiene: la tienda, la descripcion y el dia.
 _COLUMNA_QUE_NO_ESTA_CON_MODELO = re.compile(
     r"(?<![\w\[])\[?(Store|Date|Day|Key\s+prices|Material_Description)\]?(?![\w])", re.IGNORECASE
@@ -604,6 +607,29 @@ def construir(engine, archivo: Path | None = None) -> dict:
     return meta
 
 
+def con_modelo_al_dia(archivo: Path | None = None) -> bool:
+    archivo = Path(archivo or ARCHIVO_CON_MODELO)
+    if not archivo.exists():
+        return False
+    horas = _horas_desde_la_ultima(archivo)
+    return horas is not None and horas <= MAX_HORAS_DE_ATRASO_CON_MODELO
+
+
+def leer_con_modelo(sql: str, archivo: Path | None = None) -> pd.DataFrame | None:
+    """Una consulta, ya en SQLite, a la venta con modelo (la del reporte
+    detallado). None si el resumen no esta al dia o no pudo: va al servidor."""
+    archivo = Path(archivo or ARCHIVO_CON_MODELO)
+    if not con_modelo_al_dia(archivo):
+        return None
+    try:
+        with closing(_abrir(archivo)) as conexion:
+            return pd.read_sql_query(sql, conexion)
+    except Exception:  # noqa: BLE001 - el servidor la contesta igual
+        logger.warning("El resumen local no pudo con el reporte; va al servidor: %s",
+                       " ".join(sql.split())[:300], exc_info=True)
+        return None
+
+
 def construir_con_modelo(engine, archivo: Path | None = None) -> dict:
     """Arma el archivo de la venta con modelo y region; lo reemplaza al
     terminar, como el resumen de siempre."""
@@ -631,13 +657,15 @@ def _con_modelo(engine, destino: sqlite3.Connection) -> int:
     """La vista con modelo y region, agrupada, una cadena a la vez (con el
     mismo cruce con UNICOS$ y CustomerStores que usa el servidor)."""
     columnas_sql = ", ".join(
-        [f"RTRIM([{c}])" for c in _TEXTO_CON_MODELO] + [f"[{c}]" for c in _NUMERO] + ["SUM([QTY])"]
+        [f"RTRIM([{c}])" for c in _TEXTO_CON_MODELO] + [f"[{c}]" for c in _NUMERO]
+        + [_DESCRIPCION_CON_MODELO, "SUM([QTY])"]
     )
-    grupo = ", ".join(f"[{c}]" for c in _TEXTO_CON_MODELO + _NUMERO)
+    grupo = ", ".join([f"[{c}]" for c in _TEXTO_CON_MODELO + _NUMERO] + [_DESCRIPCION_CON_MODELO])
     destino.execute(
         f"CREATE TABLE [{CON_MODELO}] ("
         + ", ".join([f"[{c}] TEXT COLLATE NOCASE" for c in _TEXTO_CON_MODELO]
-                    + [f"[{c}] INTEGER" for c in _NUMERO] + ["[QTY] REAL"])
+                    + [f"[{c}] INTEGER" for c in _NUMERO]
+                    + ["[Descripcion] TEXT", "[QTY] REAL", "[Cadena] TEXT"])
         + ")"
     )
     total = 0
@@ -656,7 +684,7 @@ def _con_modelo(engine, destino: sqlite3.Connection) -> int:
                     break
                 destino.executemany(
                     f"INSERT INTO [{CON_MODELO}] VALUES ({', '.join('?' * len(COLUMNAS_CON_MODELO))})",
-                    [tuple(f) for f in lote],
+                    [(*f, cadena) for f in lote],
                 )
                 filas += len(lote)
         finally:
