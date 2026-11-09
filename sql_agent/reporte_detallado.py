@@ -586,6 +586,15 @@ class Reporte:
     columnas: list[str] = field(default_factory=list)
     precio: bool = False
     modo: str = "ponderado"
+    # Los filtros, para decirlos. Visto el 6/11/2026: sin ellos, el revisor
+    # leyo "LIVERPOOL: 12,843" y corrigio el mensaje de "solo Liverpool
+    # Online" a que no se sabia cuanto era de Liverpool Online.
+    marca: str = ""
+    canales: tuple[str, ...] = ()
+
+    @property
+    def filtros(self) -> list[str]:
+        return [f for f in (self.marca, *self.canales) if f]
 
     @property
     def unidades(self) -> float:
@@ -756,7 +765,8 @@ def generar(ejecutar: Callable[[str, str], pd.DataFrame | None], cadenas: Iterab
     finally:
         if apartado is not None:
             apartado.shutdown(wait=True)
-    reporte = Reporte(desde=desde, hasta=hasta, columnas=columnas, precio=precio, modo=modo)
+    reporte = Reporte(desde=desde, hasta=hasta, columnas=columnas, precio=precio, modo=modo,
+                      marca=marca, canales=tuple(canales))
     reporte.partes = [p for p in resultados if p is not None]
     return reporte
 
@@ -817,6 +827,7 @@ def como_texto(r: Reporte, sin_datos: list[str], archivos: int) -> str:
         f"Reporte detallado de venta, {periodo(r.desde, r.hasta)}, con: "
         f"año, mes, {', '.join(r.columnas)}, unidades"
         + (f", {_nombre_del_precio(r).lower()}" if r.precio else "") + ".",
+        *([f"Solo: {', '.join(r.filtros)} (todo el reporte y sus totales son solo de eso)."] if r.filtros else []),
         f"Total: {r.unidades:,.0f} unidades.",
         "Por cadena:",
     ]
@@ -934,6 +945,7 @@ _TEXTOS = {
         "precio_maximo": ", con el precio más alto de cada mes",
         "precio_desglosado": ", con cada precio en su fila y lo que se vendió a ese precio",
         "precio_dia": ", con el precio de cada día",
+        "solo": "Solo {que}.",
         "archivos": "Va en {n} archivos, uno por cadena.",
         "archivo": "Va en un archivo.",
         "total": "Total: {total} unidades.",
@@ -960,6 +972,7 @@ _TEXTOS = {
         "precio_maximo": ", with the highest price of each month",
         "precio_desglosado": ", with each price on its own row and the units sold at it",
         "precio_dia": ", with each day's price",
+        "solo": "Only {que}.",
         "archivos": "It comes in {n} files, one per retailer.",
         "archivo": "It comes in one file.",
         "total": "Total: {total} units.",
@@ -985,6 +998,7 @@ _TEXTOS = {
         "precio_maximo": "，价格为每月最高价",
         "precio_desglosado": "，每个价格单独一行，附该价格的销量",
         "precio_dia": "，价格为每天的价格",
+        "solo": "仅限 {que}。",
         "archivos": "共 {n} 个文件，每个渠道一个。",
         "archivo": "共一个文件。",
         "total": "合计：{total} 台。",
@@ -1022,6 +1036,7 @@ def para_el_usuario(r: Reporte, archivos: int, sin_venta: list[str], fallas: lis
         t["listo"].format(periodo=periodo(r.desde, r.hasta), columnas=_lista(
                               [t["columnas"].get(c, c) for c in r.columnas], t["y"]),
                           precio=t["precio_" + ("dia" if "dia" in r.columnas else r.modo)] if r.precio else ""),
+        *([t["solo"].format(que=", ".join(r.filtros))] if r.filtros else []),
         t["archivos"].format(n=archivos) if archivos > 1 else t["archivo"],
         "",
         t["total"].format(total=f"{r.unidades:,.0f}"),

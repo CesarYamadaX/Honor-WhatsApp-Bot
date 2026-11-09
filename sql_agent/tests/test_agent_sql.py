@@ -2416,3 +2416,16 @@ def test_todas_las_marcas_lleva_la_columna_de_la_marca():
     assert modulo_agente.pidio_marcas("sales by brand and model")
     assert not modulo_agente.pidio_marcas("venta de Honor por modelo")
     assert not modulo_agente.pidio_marcas("venta por marcador")
+
+
+def test_sin_precio_el_reporte_no_carga_el_catalogo(monkeypatch):
+    # Visto el 6/11/2026: leido del resumen en 0.4 s, espero 131 s al catalogo.
+    def no(*a, **k):
+        raise AssertionError("cargo el catalogo")
+
+    monkeypatch.setattr(modulo_agente.homologacion, "catalogo", no)
+    monkeypatch.setattr(modulo_agente.detallado, "generar", lambda *a, **k: detallado.Reporte())
+    monkeypatch.setattr(modulo_agente, "_anotar_tiempos", lambda *a: None)
+    armado = modulo_agente._armar_reporte_detallado(None, None, ["SEARS"], ["modelo"], (2026, 9), (2026, 9),
+                                                    "", False, True, 60)
+    assert armado.reporte.partes == []

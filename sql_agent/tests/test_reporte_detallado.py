@@ -487,3 +487,27 @@ class TestPorDia:
             assert tabla["Unidades"].tolist() == [4.0, 30.0], modo
             assert tabla[rd.PRECIO_DEL_DIA].tolist() == [5000.0, 4000.0], modo
             assert list(tabla.columns)[:7] == ["Canal", "Año", "Mes", "Tienda", "Modelo", "Día", "Unidades"]
+
+
+class TestLosFiltrosSeDicen:
+    """Visto el 6/11/2026: "ahora solo Liverpool Online" salio bien filtrado,
+    pero el texto no lo decia y el revisor corrigio el mensaje."""
+
+    def _reporte(self):
+        consultas = []
+        r = rd.generar(lambda sql, de_que: consultas.append(sql) or _venta(("Liverpool Online", 2026, 9, "T1", X6C, None, 5)),
+                       ["LIVERPOOL"], ["tienda", "modelo"], (2026, 9), (2026, 9), marca="HONOR",
+                       canales=["Liverpool Online"])
+        return r
+
+    def test_en_lo_que_lee_el_modelo(self):
+        texto = rd.como_texto(self._reporte(), [], 1)
+        assert "Solo: HONOR, Liverpool Online" in texto
+
+    def test_en_el_mensaje_al_usuario(self):
+        assert "Solo HONOR, Liverpool Online." in rd.para_el_usuario(self._reporte(), 1, [], [])
+        assert "Only HONOR, Liverpool Online." in rd.para_el_usuario(self._reporte(), 1, [], [], "en")
+
+    def test_sin_filtros_no_dice_nada(self):
+        r = rd.Reporte(desde=(2026, 9), hasta=(2026, 9), columnas=["modelo"])
+        assert "Solo" not in rd.como_texto(r, [], 1) and "Solo" not in rd.para_el_usuario(r, 1, [], [])

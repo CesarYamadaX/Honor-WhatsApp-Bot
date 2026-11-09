@@ -2333,7 +2333,9 @@ def _armar_reporte_detallado(engine, cancelacion, pedidas: list[str], lista: lis
             escritos[parte.cadena] = ruta
         tiempos[parte.cadena] = time.monotonic() - comenzo
 
-    catalogo_de_modelos = homologacion.catalogo()
+    # Solo para cruzar el precio. Visto el 6/11/2026: un reporte sin precio,
+    # leido del resumen en 0.4 s, espero 131 s a que cargara el catalogo.
+    catalogo_de_modelos = homologacion.catalogo() if con_precio else None
     reporte = detallado.generar(
         ejecutar, pedidas, lista, inicio, fin, marca=marca,
         precio=con_precio, modo=modo,
