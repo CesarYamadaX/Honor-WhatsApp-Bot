@@ -300,6 +300,20 @@ class TestPromotoriaYConsolidadaRota:
         assert hojas == {}
         assert not any("Consolidado" in sql or "vw_ETL" in sql for sql, _ in motor.consultas)
 
+    def test_un_reporte_de_inventario_no_lleva_ventas(self):
+        # Visto el 9/11/2026: el inventario de Honor por tienda en Coppel
+        # salio con PIVOT, Datos y Raw_Data de la VENTA de Coppel.
+        motor = _MotorDeCatalogos()
+        hojas = contexto_del_resultado(
+            pd.DataFrame({"Tienda": ["1256 • PERLA DEL SUR"], "Inventario Honor": [141.0],
+                          "Fecha": pd.to_datetime(["2026-09-27"])}),
+            motor,
+            "SELECT v.[Store Name], SUM(v.[Inventario Total]) FROM [GTM_BI_INVENTORIES].dbo.[VW_INVENTORIES] v "
+            "WHERE v.[Retail] LIKE '%COPPEL%' AND v.[Marca] = 'HONOR' GROUP BY v.[Store Name]",
+        )
+        assert hojas == {}
+        assert not any("Consolidado" in sql or "vw_ETL" in sql or "B2B" in sql for sql, _ in motor.consultas)
+
     def test_con_la_consolidada_rota_la_hoja_sale_de_sus_vistas(self, monkeypatch):
         monkeypatch.setattr(contexto, "consolidada_trae_basura", lambda engine: True)
         motor = _MotorDeCatalogos()

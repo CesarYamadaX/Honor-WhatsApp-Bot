@@ -59,6 +59,7 @@ logger = logging.getLogger("sql_agent.contexto")
 GTM = "[GTM BI Database].dbo"
 VENTAS = "[RAW_DATA_B2B].dbo.[ETL_Consolidado_B2B]"
 _DE_PROMOTORIA = re.compile(r"(?<!\w)(V_)?HCReport", re.IGNORECASE)
+_DE_INVENTARIO = re.compile(r"GTM_BI_INVENTORIES|(?<!\w)(VW_INVENTORIES|INV_Retail)(?!\w)", re.IGNORECASE)
 UNICOS = f"{GTM}.[UNICOS$]"
 
 # Cada entrada: hoja, tabla, y las columnas por las que se intenta casar los
@@ -1375,8 +1376,9 @@ def contexto_del_resultado(
     # Un reporte de promotoria no lleva ventas pegadas. Visto el 1 de octubre
     # de 2026: "como se veia el ano pasado" (promotores de Sears por semana)
     # salio con el detalle de ventas de Sears de todo 2025, que nadie pidio,
-    # y tardo 11 segundos mas en armar el pivot.
-    if _DE_PROMOTORIA.search(query or ""):
+    # y tardo 11 segundos mas en armar el pivot. Ni uno de inventario: visto
+    # el 9/11/2026, el de Honor por tienda en Coppel llevo la venta de Coppel.
+    if _DE_PROMOTORIA.search(query or "") or _DE_INVENTARIO.search(query or ""):
         return hojas
 
     # El desglose por tienda va despues: es lo que se pidio ver, y lo unico
