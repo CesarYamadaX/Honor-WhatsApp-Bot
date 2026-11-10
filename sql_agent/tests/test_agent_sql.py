@@ -1068,6 +1068,7 @@ class TestToolkitDelAgente:
             "pronosticar_ventas",
             "precio_en_internet",
             "semanas_de_inventario",
+            "inventario_por_cadena",
             "promotoria_contra_ventas",
             "reporte_detallado",
         }

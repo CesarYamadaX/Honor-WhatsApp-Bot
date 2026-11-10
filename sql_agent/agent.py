@@ -62,6 +62,7 @@ from excel_exporter import MAX_FILAS_POR_HOJA_DE_EXCEL, ExcelExporter
 from grafica import grafica_del_resultado, pidio_grafica
 import bitacora
 import inventario
+import inventario_cadenas
 import resumen_local
 import revisor
 import ventas_con_modelo
@@ -1147,6 +1148,23 @@ def _inventario_telcel_a_mano(query: str, pregunta: str) -> str:
     )
 
 
+_FUENTE_MALA_DE_INVENTARIO = re.compile(r"(?<!\w)(VW_INVENTORIES|LIVERPOOL_INV_B2B)(?!\w)", re.IGNORECASE)
+
+
+def _inventario_de_fuente_mala(query: str) -> str:
+    """Las dos fuentes de inventario que dan otro numero, a la herramienta.
+
+    Medido el 9/11/2026: VW_INVENTORIES tarda 40-107 s por consulta y toma
+    el ultimo corte de todas las cadenas juntas; LIVERPOOL_INV_B2B trae
+    renglones de subtotal por tienda (suma el doble) y se quedo el 31/08.
+    """
+    if not _FUENTE_MALA_DE_INVENTARIO.search(query or ""):
+        return ""
+    return ("No la ejecute: esa fuente da otro numero. El inventario se contesta con "
+            "`inventario_por_cadena` (cadenas, marca, modelo, por tienda o modelo, y cortes "
+            "para ver como cambio).")
+
+
 # Una tienda del catalogo comparada tal cual con la tienda de las ventas.
 _NOMBRE_DE_TIENDA = r"(?:[\w$]+\s*\.\s*)?\[?(?:Coppel Name|HONOR NAME)\]?"
 _TIENDA_DE_VENTA = r"(?:[\w$]+\s*\.\s*)?\[?(?:Store|STORE|Tienda|Store Name|Nombre Tienda)\]?"
@@ -2168,8 +2186,9 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
 
     `modelo` es lo que dijo el usuario ("X6C", "MAGIC 8 LITE"); vacio para
     toda la marca. `marca` es la marca en mayusculas ("HONOR", "SAMSUNG");
-    si nombran un modelo de otra marca, pasala. Solo existe para Telcel: de
-    las demas cadenas no hay inventario en la base.
+    si nombran un modelo de otra marca, pasala. Las semanas solo existen
+    para Telcel; cuanto hay en las demas cadenas, por tienda o como ha
+    cambiado es de `inventario_por_cadena`.
     """
     bitacora.paso(
         f"calculando semanas de inventario en Telcel ({marca} {modelo})".strip(),
@@ -2202,6 +2221,105 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     # respuesta correcta del X6c porque los datos no decian de que modelo eran.
     pedido = " ".join(x for x in ((marca or "").strip(), (modelo or "").strip()) if x) or "todos los modelos"
     ctx.vistos.append(f"Semanas de inventario de Telcel, pedido: {pedido}:\n{texto}")
+    return texto
+
+
+def _homologar_inventario(texto: str, cadena: str) -> str | None:
+    """El modelo de UNICOS$ de un texto de inventario: con la regla de la venta
+    de su cadena y, si no, como el precio (ver reporte_detallado.modelo_del_precio)."""
+    catalogo_de_modelos = homologacion.catalogo()
+    if catalogo_de_modelos is None:
+        return None
+    global _INDICE_DE_INVENTARIO
+    if _INDICE_DE_INVENTARIO is None or _INDICE_DE_INVENTARIO[0] is not catalogo_de_modelos:
+        _INDICE_DE_INVENTARIO = (catalogo_de_modelos, detallado.IndiceDeModelos.de(catalogo_de_modelos.modelos()))
+    return (catalogo_de_modelos.buscar_como_la_venta(texto, cadena)
+            or detallado.modelo_del_precio(texto, catalogo_de_modelos.buscar, "", _INDICE_DE_INVENTARIO[1]))
+
+
+_INDICE_DE_INVENTARIO = None
+
+
+@tool
+def inventario_por_cadena(
+    cadenas: str = "todas",
+    marca: str = "HONOR",
+    modelo: str = "",
+    por: str = "",
+    cortes: int = 1,
+) -> str:
+    """El inventario de Coppel, Elektra, Liverpool y Telcel: cuanto hay, de
+    que modelos, en que tiendas y como ha cambiado, cada cadena con su ultimo
+    corte.
+
+    Usala SIEMPRE que pregunten cuanto inventario o stock hay (de una o
+    varias cadenas, de una marca o un modelo, por modelo o por tienda, o como
+    ha cambiado), en cualquier forma o idioma. No lo armes con
+    `consultar_sql`: visto el 9/11/2026, a mano se mezclaban dos fuentes con
+    numeros distintos y se tomaba el ultimo corte de otra cadena. Las semanas
+    de inventario o la cobertura de Telcel son de `semanas_de_inventario`.
+
+    El inventario es lo que esta en la tienda mas lo que va en transito a la
+    tienda; la bodega (CEDIS, CD) no cuenta. Sears y Movistar no tienen
+    inventario en la base. Por tienda dice tambien cuales no tienen nada.
+
+    Las semanas de inventario o la cobertura POR TIENDA de Coppel, Elektra o
+    Liverpool no estan aqui: ahi si arma la consulta, con esta misma fuente
+    y cuenta, y el ultimo corte de esa cadena:
+      Coppel: [RAW_INV_B2B].dbo.[Coppel_INV], [ExisTda] + [TransitoATda]
+      Elektra: [RAW_INV_B2B].dbo.[ELEKTRA_INV_B2B], [INV_TOTAL_RUCE] + [ENV_CD_TRANS]
+      Liverpool: [GTM_BI_INVENTORIES].dbo.[INV_Retail] con [Retail] =
+        'Liverpool Offline' y [Store Name] LIKE 'L %', [Inventario Total]
+
+    `cadenas`: separadas por comas, o "todas". `marca`: "HONOR", varias
+    separadas por comas para compararlas ("HONOR, SAMSUNG"), o "todas".
+    `modelo`: el que dijo el usuario ("Magic 8 Lite", "X6c"); vacio, todos.
+    `por`: el desglose, de marca, tienda, modelo ("tienda, modelo"); vacio,
+    solo el total de cada cadena. `cortes`: cuantos cortes, del mas nuevo
+    hacia atras; 1 para "cuanto hay", 6 a 8 para "como ha cambiado" (Telcel,
+    Elektra y Coppel tienen uno por semana; Liverpool uno al mes).
+    """
+    ctx = _contexto_actual()
+    try:
+        pedidas = inventario_cadenas.cadenas_pedidas(cadenas)
+        lista = inventario_cadenas.dimensiones_pedidas(por)
+        marcas = inventario_cadenas.marcas_pedidas(marca)
+    except ValueError as error:
+        return str(error)
+    if ctx.cadenas:
+        fuera = [c for c in pedidas if c not in ctx.cadenas]
+        pedidas = [c for c in pedidas if c in ctx.cadenas]
+        if fuera:
+            ctx.negadas.update(fuera)
+        if not pedidas:
+            return _sin_permiso(ctx, acceso.Acotada("", fuera=fuera))
+    pedido = ", ".join(x for x in (", ".join(marcas) or "todas las marcas", (modelo or "").strip(),
+                                   f"por {', '.join(lista)}" if lista else "",
+                                   f"{cortes} cortes" if (cortes or 1) > 1 else "") if x)
+    bitacora.paso(f"inventario de {', '.join(pedidas)}: {pedido}", bitacora.NOTA)
+    try:
+        resultado = inventario_cadenas.calcular(
+            ctx.engine, pedidas, _homologar_inventario, marcas, lista, (modelo or "").strip(), cortes,
+            plazo=_plazo_de_herramienta(ctx),
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Fallo el inventario de las cadenas")
+        return f"No pude leer el inventario: {error}"
+    if resultado.tabla.empty:
+        return (f"No hay inventario que coincida con {pedido} en "
+                f"{', '.join(acceso.NOMBRES.get(c, c) for c in pedidas)}. Revisa el modelo con "
+                "`buscar_modelos` o pregunta al usuario.")
+    ctx.hubo_datos = True
+    texto = inventario_cadenas.como_texto(resultado, pedido)
+    # Visto el 9/11/2026: la llamo dos veces igual y llegaron dos Excel.
+    if texto in ctx.vistos:
+        return texto + "\n(Esto ya lo tenias: el archivo ya va adjunto. No la vuelvas a llamar.)"
+    if len(resultado.tabla) > 1:
+        try:
+            ctx.archivos.append(ExcelExporter.export_to_excel(resultado.tabla))
+        except Exception:  # noqa: BLE001 - el texto ya trae los totales
+            logger.exception("No se pudo armar el Excel del inventario")
+    ctx.vistos.append(texto)
     return texto
 
 
@@ -2654,6 +2772,7 @@ def consultar_sql(query: str, entregar_archivo: bool = False) -> str:
     ctx = _contexto_actual()
     a_la_herramienta = (
         _inventario_telcel_a_mano(query, ctx.pregunta)
+        or _inventario_de_fuente_mala(query)
         or _capa_de_una_marca(query, ctx.pregunta)
     )
     if a_la_herramienta:
@@ -3372,6 +3491,11 @@ class SQLAgent:
            Cualquier pregunta del inventario de Telcel (cuanto hay, como
            esta, semanas, cobertura, "para cuanto le alcanza"), en cualquier
            idioma: `semanas_de_inventario`, nunca un SELECT propio.
+           El inventario de Coppel, Elektra o Liverpool, de varias cadenas,
+           por tienda, comparando marcas o como ha cambiado:
+           `inventario_por_cadena`, nunca un SELECT propio. Solo las semanas
+           o la cobertura por tienda de esas cadenas van con `consultar_sql`,
+           con la fuente que dice la descripcion de `inventario_por_cadena`.
            Si preguntan si las tiendas con promotor venden mas (el efecto o
            el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
            cruce propio de HCReport con la venta.
@@ -3544,6 +3668,7 @@ class SQLAgent:
             pronosticar_ventas,
             precio_en_internet,
             semanas_de_inventario,
+            inventario_por_cadena,
             promotoria_contra_ventas,
             reporte_detallado,
         ]
