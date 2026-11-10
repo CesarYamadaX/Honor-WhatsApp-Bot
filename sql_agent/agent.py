@@ -2178,7 +2178,8 @@ def semanas_de_inventario(modelo: str = "", marca: str = "HONOR") -> str:
     Usala SIEMPRE que pregunten por el inventario o el stock de Telcel, en
     cualquier forma o idioma: "como esta el inventario", "cuanto hay",
     "what's the inventory", "库存", semanas de inventario, cobertura, "para
-    cuanto le alcanza", "cuanto le dura el stock" o sell-through.
+    cuanto le alcanza" o "cuanto le dura el stock". Solo Telcel: no la
+    llames para otra cadena.
     No lo calcules con `consultar_sql`: la cuenta ya esta definida por el
     negocio (stock de la foto mas reciente / venta semanal promedio de las
     ultimas 4 semanas, de todos los canales de Telcel) y aqui sale siempre
@@ -3496,6 +3497,15 @@ class SQLAgent:
            `inventario_por_cadena`, nunca un SELECT propio. Solo las semanas
            o la cobertura por tienda de esas cadenas van con `consultar_sql`,
            con la fuente que dice la descripcion de `inventario_por_cadena`.
+           Venta e inventario son cosas distintas y nunca se suman ni se
+           cambian de nombre. Sell out = lo que la cadena le vendio al
+           cliente final: es la venta de siempre. Sell in = lo que Honor le
+           vendio o embarco a la cadena: NO esta en las bases que puedes
+           leer; dilo asi y ofrece el sell out, nunca le digas sell in a la
+           venta (visto el 10/11/2026: se contesto la venta de Coppel como
+           "sell-in"). Sell through: nunca la venta sola; da la venta del
+           periodo y el inventario de esa cadena (`inventario_por_cadena`)
+           con la fecha de su corte.
            Si preguntan si las tiendas con promotor venden mas (el efecto o
            el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
            cruce propio de HCReport con la venta.

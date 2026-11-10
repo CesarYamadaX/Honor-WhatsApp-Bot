@@ -1151,8 +1151,8 @@ EVITAR = {
         "Mezcla venta e inventario en la misma columna [QTY] (las separa "
         "[DataType]: 'SO' e 'INV'): sumarla da Coppel agosto 2026 = 120 874 "
         "cuando la venta fue ~49 000. Y solo trae Coppel, Liverpool Offline y "
-        "Telcel CAC. " + _VENTA + " Para inventario, INV_Retail o el "
-        "inventario de la cadena."
+        "Telcel CAC. " + _VENTA + " Para inventario, la herramienta "
+        "`inventario_por_cadena`."
     ),
     # Se quedaron viejas.
     "TBL_DB_FOR_DOS": "Se quedo el 24/03/2026 y solo trae tres cadenas. " + _VENTA,

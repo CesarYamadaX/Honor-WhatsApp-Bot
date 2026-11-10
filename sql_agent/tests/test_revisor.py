@@ -152,3 +152,11 @@ class TestLasDevolucionesDeLaTablaCruda:
     def test_sin_sumar_no_aplica(self):
         from agent import _crudo_con_devoluciones as f
         assert f("SELECT TOP 10 * FROM [RAW_DATA_B2B].dbo.[EKT_B2B]") == ""
+
+
+def test_el_revisor_sabe_que_la_venta_es_sell_out(modelo):
+    # Visto el 10/11/2026: el revisor cambio "venta de Coppel" por "sell-in".
+    enviados = modelo(json.dumps({"ok": True}))
+    revisor.revisar_respuesta("sell in de Coppel", TestLaRespuesta.DATOS, "El sell in no esta disponible.")
+    sistema = enviados[0]["messages"][0]["content"]
+    assert "SELL OUT" in sistema and "SELL IN" in sistema
