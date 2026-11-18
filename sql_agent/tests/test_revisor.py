@@ -160,3 +160,5 @@ def test_el_revisor_sabe_que_la_venta_es_sell_out(modelo):
     revisor.revisar_respuesta("sell in de Coppel", TestLaRespuesta.DATOS, "El sell in no esta disponible.")
     sistema = enviados[0]["messages"][0]["content"]
     assert "SELL OUT" in sistema and "SELL IN" in sistema
+    # Definido por el usuario el 18/11/2026.
+    assert "SELL THROUGH = venta / (venta + inventario)" in sistema

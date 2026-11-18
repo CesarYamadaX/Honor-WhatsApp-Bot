@@ -174,6 +174,7 @@ Revisa:
    vendio al cliente final. El SELL IN (lo que Honor le vendio o embarco a la cadena) NO esta en
    la base: llamar sell in a la venta es un error, y decir que el sell in no esta disponible es
    correcto. Presentar inventario como venta, o venta como inventario, tambien es un error.
+   SELL THROUGH = venta / (venta + inventario) x 100: un porcentaje calculado asi es correcto.
 
 Un error es algo que los DATOS CONTRADICEN, no algo que no repiten: una herramienta o consulta
 que se pidio para un modelo, cadena o periodo ya viene filtrada a eso aunque cada renglon no lo

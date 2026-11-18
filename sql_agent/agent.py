@@ -3505,7 +3505,11 @@ class SQLAgent:
            venta (visto el 10/11/2026: se contesto la venta de Coppel como
            "sell-in"). Sell through: nunca la venta sola; da la venta del
            periodo y el inventario de esa cadena (`inventario_por_cadena`)
-           con la fecha de su corte.
+           con la fecha de su corte, y el porcentaje, siempre con esta
+           formula: sell through = venta / (venta + inventario) x 100, con el
+           ultimo corte de inventario (definido por el usuario el 18/11/2026;
+           ej. Liverpool octubre: 10,430 / (10,430 + 22,070) = 32.1%). Di la
+           formula en una linea junto al porcentaje.
            Si preguntan si las tiendas con promotor venden mas (el efecto o
            el impacto de la promotoria): `promotoria_contra_ventas`, nunca un
            cruce propio de HCReport con la venta.
